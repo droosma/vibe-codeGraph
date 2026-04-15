@@ -1,0 +1,43 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\CodeGraph.Core\CodeGraph.Core.csproj" />
+    <ProjectReference Include="..\CodeGraph.Query\CodeGraph.Query.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodeGraph.Indexer.Tests" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!-- .NET global tool packaging -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>codegraph</ToolCommandName>
+    <PackageId>CodeGraph</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>CodeGraph Contributors</Authors>
+    <Description>Roslyn-powered CLI that builds a semantic graph of C# codebases — queryable by LLM agents. Replaces grep with structured code intelligence.</Description>
+    <PackageTags>roslyn;csharp;code-analysis;semantic-graph;llm;ai;cli;dotnet-tool;code-intelligence</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/droosma/vibe-codeGraph</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/droosma/vibe-codeGraph</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>CS1591;CS9057</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

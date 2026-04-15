@@ -1,0 +1,32 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\CodeGraph.Core\CodeGraph.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!-- NuGet package metadata -->
+    <PackageId>CodeGraph.Query</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>CodeGraph Contributors</Authors>
+    <Description>Query engine for CodeGraph semantic code graphs. Pattern-match symbols, traverse dependencies, and format results for LLM agents.</Description>
+    <PackageTags>roslyn;csharp;code-analysis;semantic-graph;llm;ai;query;code-intelligence</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/droosma/vibe-codeGraph</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/droosma/vibe-codeGraph</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

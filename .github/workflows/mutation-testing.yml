@@ -1,0 +1,57 @@
+name: Mutation Testing
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutation-test:
+    name: Stryker Mutation Testing
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - test-project: tests/CodeGraph.Core.Tests
+            name: Core
+          - test-project: tests/CodeGraph.Indexer.Tests
+            name: Indexer
+          - test-project: tests/CodeGraph.Query.Tests
+            name: Query
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore tools
+        run: dotnet tool restore
+
+      - name: Restore dependencies
+        run: dotnet restore CodeGraph.sln
+
+      - name: Run Stryker (${{ matrix.name }})
+        run: dotnet stryker
+        working-directory: ${{ matrix.test-project }}
+
+      - name: Upload mutation report (${{ matrix.name }})
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stryker-report-${{ matrix.name }}
+          path: ${{ matrix.test-project }}/StrykerOutput/**/reports/
