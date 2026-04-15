@@ -1,0 +1,17 @@
+{
+  "stryker-config": {
+    "project": "CodeGraph.Core.csproj",
+    "solution": "../../CodeGraph.sln",
+    "reporters": ["progress", "html", "json"],
+    "verbosity": "info",
+    "thresholds": {
+      "high": 80,
+      "low": 60,
+      "break": 50
+    },
+    "mutate": [
+      "!**/obj/**",
+      "!**/bin/**"
+    ]
+  }
+}

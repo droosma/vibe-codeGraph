@@ -1,0 +1,46 @@
+{
+  "$schema": "https://raw.githubusercontent.com/your-org/codegraph/main/schemas/codegraph.schema.json",
+  "solution": "MyApp.sln",
+  "output": ".codegraph",
+  "splitBy": "project",
+
+  "index": {
+    "includeProjects": ["*"],
+    "excludeProjects": ["*.Benchmarks"],
+    "includeExternalPackages": ["MediatR", "FluentValidation"],
+    "excludeExternalPackages": ["Microsoft.*", "System.*"],
+    "maxDepthForExternals": 1,
+    "configuration": "Debug",
+    "preprocessorSymbols": []
+  },
+
+  "ioc": {
+    "enabled": true,
+    "entryPoints": ["src/MyApp.Api/Program.cs"],
+    "additionalEntryPoints": ["tests/MyApp.Tests/TestFixture.cs"],
+    "registrationMethodPatterns": ["Add*", "Register*", "Bind*", "Map*"],
+    "ignoreMethodPatterns": ["AddLogging", "AddOptions"],
+    "inferSingleImplementations": true,
+    "scanAssemblyRegistrations": true,
+    "followExtensionMethodDepth": 1
+  },
+
+  "tests": {
+    "enabled": true,
+    "testAttributePatterns": ["*Fact", "*Theory", "*Test", "*TestCase", "*TestMethod"],
+    "setupAttributePatterns": ["*SetUp", "*Initialize", "*ClassInitialize"],
+    "includeSetupMethods": true
+  },
+
+  "docs": {
+    "enabled": true,
+    "markdownDirs": ["docs/", "README.md"],
+    "includeXmlDocs": true
+  },
+
+  "query": {
+    "defaultDepth": 1,
+    "defaultFormat": "context",
+    "maxNodes": 50
+  }
+}

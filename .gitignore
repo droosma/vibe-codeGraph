@@ -1,0 +1,76 @@
+# Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# NuGet
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+project.assets.json
+project.lock.json
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+launchSettings.json
+
+# Rider
+.idea/
+*.sln.iml
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# OS files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Test results
+[Tt]est[Rr]esult*/
+*.trx
+coverage*/
+*.coveragexml
+
+# CodeGraph output (users should generate locally)
+.codegraph/
+
+# Dotnet tools (keep .config/dotnet-tools.json in repo for tool restore)
+# .config/dotnet-tools.json
+
+# BinaryLog
+*.binlog
+
+# Stryker mutation testing output
+**/StrykerOutput/
+
+# Local NuGet output
+nupkg/
+
+# Development planning artifacts
+codegraph-project-plan.md
+codegraph-session-log.md
+
+obj/
+bin/
