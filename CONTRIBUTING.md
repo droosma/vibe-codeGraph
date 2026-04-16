@@ -61,7 +61,7 @@ CodeGraph.sln
 │   ├── CodeGraph.Indexer.Tests/     # Pass logic, workspace parsing
 │   ├── CodeGraph.Query.Tests/       # Query engine, filters, formatters
 │   └── CodeGraph.Integration.Tests/ # End-to-end scenarios
-├── skills/                          # Agent skill files (Claude, Copilot, OpenCode, VS Code)
+├── nupkg/                           # Local NuGet package output
 ├── docs/                            # Documentation
 ├── codegraph.json.example           # Annotated config example
 └── global.json                      # SDK version pinning (8.0.420)

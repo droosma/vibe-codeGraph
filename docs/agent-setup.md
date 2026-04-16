@@ -1,6 +1,6 @@
 # Agent Setup Guide
 
-CodeGraph integrates with AI coding agents in two ways: **MCP** (recommended) and **skill files** (fallback).
+CodeGraph integrates with AI coding agents via **MCP** (Model Context Protocol), registering `codegraph_query` as a native tool.
 
 ## Prerequisites
 
@@ -27,7 +27,7 @@ CodeGraph integrates with AI coding agents in two ways: **MCP** (recommended) an
 
 ---
 
-## MCP Integration (Recommended)
+## MCP Integration
 
 MCP registers `codegraph_query` as a **native tool** in the agent's tool list — alongside grep, read_file, etc. The agent uses it naturally without any prompt engineering.
 
@@ -35,7 +35,7 @@ MCP registers `codegraph_query` as a **native tool** in the agent's tool list �
 
 | Agent | Config File | Format |
 |-------|------------|--------|
-| VS Code Copilot | `.vscode/mcp.json` | `{ "servers": { "codegraph": { "command": "dotnet", "args": ["codegraph", "mcp"] } } }` |
+| VS Code Copilot | `.vscode/mcp.json` | `{ "servers": { "codegraph": { "type": "stdio", "command": "dotnet", "args": ["codegraph", "mcp"], "cwd": "${workspaceFolder}" } } }` |
 | Cursor | `.vscode/mcp.json` | Same as VS Code |
 | Claude Code | `.mcp.json` | `{ "mcpServers": { "codegraph": { "command": "dotnet", "args": ["codegraph", "mcp"] } } }` |
 
@@ -54,77 +54,13 @@ For **Claude Code**: the server is auto-discovered from `.mcp.json`. No restart 
 
 ---
 
-## Skill Files (Fallback)
-
-For agents that don't support MCP, skill files teach the agent to run `codegraph query` via shell commands. These are text instructions that the agent reads as context.
-
-### Quick Install
-
-```bash
-bash skills/_shared/install.sh /path/to/your/repo
-```
-
-Select which agent(s) to configure when prompted. The installer adds `.codegraph/` to `.gitignore`.
-
-### Per-Agent Setup
-
-#### Claude Code
-
-| File | Location |
-|------|----------|
-| `SKILL.md` | `.claude/skills/codegraph/SKILL.md` |
-| `query-wrapper.sh` | `skills/claude/query-wrapper.sh` |
-
-```bash
-mkdir -p .claude/skills/codegraph
-cp skills/claude/SKILL.md .claude/skills/codegraph/SKILL.md
-```
-
-#### OpenCode
-
-| File | Location |
-|------|----------|
-| `AGENTS.md` | `AGENTS.md` (repo root) |
-| `query-wrapper.sh` | `skills/opencode/query-wrapper.sh` |
-
-```bash
-cp skills/opencode/AGENTS.md AGENTS.md
-```
-
-#### GitHub Copilot CLI / VS Code Copilot
-
-| File | Location |
-|------|----------|
-| `skill.md` | `.github/skills/codegraph/skill.md` |
-| `query-wrapper.sh` | `skills/copilot-cli/query-wrapper.sh` |
-
-```bash
-mkdir -p .github/skills/codegraph
-cp skills/copilot-cli/.github/skills/codegraph/skill.md .github/skills/codegraph/skill.md
-```
-
-> **Note:** Use `.github/skills/codegraph/skill.md` — not `.github/copilot-instructions.md`. Skill files are scoped and avoid polluting the global instruction context.
-
-### Commit Skill Files
-
-```bash
-git add .github/skills/ .claude/ AGENTS.md
-git commit -m "Add CodeGraph agent skill files"
-```
-
-> Commit the skill files, but **not** `.codegraph/` data — it should be regenerated per-machine.
-
----
-
 ## Verifying It Works
 
 After setup, ask your agent a structural question:
 
 > "What calls the PlaceOrder method?"
 
-**With MCP:** The agent should invoke the `codegraph_query` tool directly.
-
-**With skill files:** The agent should run `codegraph query PlaceOrder --kind calls-to` instead of `grep -r "PlaceOrder"`.
+The agent should invoke the `codegraph_query` tool directly — you'll see a tool call in the agent's output, not a shell command.
 
 ---
 
@@ -161,19 +97,12 @@ The graph was built from a different commit than your current HEAD. Re-index:
 codegraph index --solution YourApp.sln
 ```
 
-### Agent doesn't use CodeGraph (MCP)
+### Agent doesn't use CodeGraph
 
 1. Check that `.vscode/mcp.json` (or `.mcp.json`) exists and is valid JSON.
 2. Restart VS Code / reload window — MCP servers are discovered at startup.
 3. In VS Code, open Chat → **Configure Tools** and verify `codegraph_query` is listed.
 4. If the tool is listed but not used, try prompting explicitly: *"Use the codegraph_query tool to look up OrderService"*.
-
-### Agent doesn't use CodeGraph (Skill Files)
-
-1. Verify the skill file is in the correct location (see tables above).
-2. Check that the file is committed and on the current branch.
-3. Try prompting the agent explicitly: *"Use codegraph query to look up OrderService"*.
-4. For Claude, ensure the `.claude/` directory is not in `.gitignore`.
 
 ### Build failures during indexing
 

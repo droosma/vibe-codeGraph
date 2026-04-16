@@ -82,7 +82,7 @@ codegraph query IOrderRepository --kind resolves-to
 codegraph query "Order*" --format json --depth 2
 ```
 
-After `codegraph init`, AI agents that support MCP (VS Code Copilot, Claude Code, Cursor) will auto-discover `codegraph_query` as a tool — no skill files needed.
+After `codegraph init`, AI agents that support MCP (VS Code Copilot, Claude Code, Cursor) will auto-discover `codegraph_query` as a tool — no configuration needed.
 
 ### Output
 
@@ -191,8 +191,10 @@ The server exposes one tool — `codegraph_query` — with a typed JSON schema. 
 {
   "servers": {
     "codegraph": {
+      "type": "stdio",
       "command": "dotnet",
-      "args": ["codegraph", "mcp"]
+      "args": ["codegraph", "mcp"],
+      "cwd": "${workspaceFolder}"
     }
   }
 }
@@ -214,26 +216,13 @@ The server exposes one tool — `codegraph_query` — with a typed JSON schema. 
 
 ## Agent Integration
 
-### MCP (Recommended)
-
-The fastest way to integrate — `codegraph init` generates the config files automatically. The agent sees `codegraph_query` as a native tool.
+`codegraph init` generates the MCP config files automatically. The agent sees `codegraph_query` as a native tool.
 
 | Agent | Config File | Auto-generated |
 |-------|------------|----------------|
 | VS Code Copilot | `.vscode/mcp.json` | ✅ by `codegraph init` |
 | Cursor | `.vscode/mcp.json` | ✅ by `codegraph init` |
 | Claude Code | `.mcp.json` | ✅ by `codegraph init` |
-
-### Skill Files (Fallback)
-
-For agents that don't support MCP, CodeGraph ships skill files that teach the agent to run `codegraph query` via shell.
-
-| Agent | Instruction File | Setup |
-|-------|-----------------|-------|
-| Claude Code | `.claude/skills/codegraph/SKILL.md` | `skills/_shared/install.sh` |
-| OpenCode | `AGENTS.md` | `skills/_shared/install.sh` |
-| GitHub Copilot CLI | `.github/skills/codegraph/skill.md` | `skills/_shared/install.sh` |
-| VS Code Copilot | `.github/skills/codegraph/skill.md` | `skills/_shared/install.sh` |
 
 See [docs/agent-setup.md](docs/agent-setup.md) for detailed per-agent instructions.
 
