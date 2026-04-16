@@ -514,8 +514,10 @@ static async Task<int> RunInitAsync(string[] args)
         {
           "servers": {
             "codegraph": {
+              "type": "stdio",
               "command": "dotnet",
-              "args": ["codegraph", "mcp"]
+              "args": ["codegraph", "mcp"],
+              "cwd": "${workspaceFolder}"
             }
           }
         }

@@ -29,21 +29,98 @@ internal sealed class McpServer
         using var reader = new StreamReader(stdin, Encoding.UTF8);
         using var writer = new StreamWriter(stdout, new UTF8Encoding(false)) { AutoFlush = true };
 
+        // Detect framing by reading the first line
+        var firstLine = await reader.ReadLineAsync();
+        if (firstLine is null)
+            return 0;
+
+        var useFraming = firstLine.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase);
+
+        // Process first message
+        JsonNode? firstMessage;
+        if (useFraming)
+        {
+            var contentLength = int.Parse(firstLine["Content-Length:".Length..].Trim());
+            await reader.ReadLineAsync(); // blank separator
+            var buffer = new char[contentLength];
+            var totalRead = 0;
+            while (totalRead < contentLength)
+            {
+                var read = await reader.ReadAsync(buffer, totalRead, contentLength - totalRead);
+                if (read == 0) return 0;
+                totalRead += read;
+            }
+            firstMessage = JsonNode.Parse(new string(buffer));
+        }
+        else
+        {
+            firstMessage = JsonNode.Parse(firstLine);
+        }
+
+        if (firstMessage is not null)
+        {
+            var response = await HandleMessageAsync(firstMessage);
+            if (response is not null)
+            {
+                if (useFraming)
+                    await WriteFramedMessageAsync(writer, response);
+                else
+                    await WriteJsonMessageAsync(writer, response);
+            }
+        }
+
+        // Continue reading messages
         while (true)
         {
-            var message = await ReadMessageAsync(reader);
+            JsonNode? message;
+            if (useFraming)
+                message = await ReadFramedMessageAsync(reader);
+            else
+                message = await ReadJsonLineMessageAsync(reader);
+
             if (message is null)
                 break;
 
             var response = await HandleMessageAsync(message);
             if (response is not null)
-                await WriteMessageAsync(writer, response);
+            {
+                if (useFraming)
+                    await WriteFramedMessageAsync(writer, response);
+                else
+                    await WriteJsonMessageAsync(writer, response);
+            }
         }
 
         return 0;
     }
 
-    private static async Task<JsonNode?> ReadMessageAsync(StreamReader reader)
+    /// <summary>
+    /// Reads a single JSON-RPC message as one line (newline-delimited JSON).
+    /// </summary>
+    private static async Task<JsonNode?> ReadJsonLineMessageAsync(StreamReader reader)
+    {
+        while (true)
+        {
+            var line = await reader.ReadLineAsync();
+            if (line is null) return null;
+            line = line.Trim();
+            if (line.Length == 0) continue;
+            try { return JsonNode.Parse(line); }
+            catch { continue; }
+        }
+    }
+
+    private static async Task WriteJsonMessageAsync(StreamWriter writer, JsonNode message)
+    {
+        var json = message.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
+        await writer.WriteLineAsync(json);
+        await writer.FlushAsync();
+    }
+
+    /// <summary>
+    /// Reads a Content-Length framed message (LSP-style).
+    /// </summary>
+    private static async Task<JsonNode?> ReadFramedMessageAsync(StreamReader reader)
     {
         int contentLength = -1;
 
@@ -80,7 +157,7 @@ internal sealed class McpServer
         return JsonNode.Parse(new string(buffer));
     }
 
-    private static async Task WriteMessageAsync(StreamWriter writer, JsonNode message)
+    private static async Task WriteFramedMessageAsync(StreamWriter writer, JsonNode message)
     {
         var json = message.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
         var bytes = Encoding.UTF8.GetByteCount(json);
@@ -96,7 +173,7 @@ internal sealed class McpServer
 
         return method switch
         {
-            "initialize" => HandleInitialize(id),
+            "initialize" => HandleInitialize(id, message["params"]),
             "notifications/initialized" => null,
             "tools/list" => HandleToolsList(id),
             "tools/call" => await HandleToolsCallAsync(id, message["params"]),
@@ -105,11 +182,14 @@ internal sealed class McpServer
         };
     }
 
-    private static JsonNode HandleInitialize(JsonNode? id)
+    private static JsonNode HandleInitialize(JsonNode? id, JsonNode? parameters)
     {
+        // Echo back the client's protocol version for compatibility
+        var clientVersion = parameters?["protocolVersion"]?.GetValue<string>() ?? "2024-11-05";
+
         var result = new JsonObject
         {
-            ["protocolVersion"] = "2024-11-05",
+            ["protocolVersion"] = clientVersion,
             ["capabilities"] = new JsonObject
             {
                 ["tools"] = new JsonObject()
