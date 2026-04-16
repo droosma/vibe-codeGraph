@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using CodeGraph.Core.Models;
 using CodeGraph.Query;
 using CodeGraph.Query.Filters;
@@ -20,15 +22,25 @@ static async Task<int> RunAsync(string[] args)
     if (argList.Count > 0 && argList[0].Equals("query", StringComparison.OrdinalIgnoreCase))
         argList.RemoveAt(0);
 
-    if (argList.Count == 0)
+    // Parse chaining options before consuming pattern
+    var thenSteps = GetRepeatableOption(argList, "--then");
+    var fromStdin = HasFlag(argList, "--from-stdin");
+    var setOp = GetOption(argList, "--set-op", (string?)null);
+
+    // Pattern is optional when --from-stdin is used without --set-op
+    string? pattern = null;
+    if (argList.Count > 0 && !argList[0].StartsWith("--"))
+    {
+        pattern = argList[0];
+        argList.RemoveAt(0);
+    }
+
+    if (pattern is null && !fromStdin)
     {
         Console.Error.WriteLine("Error: symbol pattern is required.");
         PrintUsage();
         return 1;
     }
-
-    var pattern = argList[0];
-    argList.RemoveAt(0);
 
     var depth = GetOption(argList, "--depth", 1);
     var kind = GetOption(argList, "--kind", (string?)null);
@@ -59,6 +71,21 @@ static async Task<int> RunAsync(string[] args)
         return 1;
     }
 
+    // Parse --then edge types upfront
+    var thenEdgeTypes = new List<EdgeType?>();
+    foreach (var step in thenSteps)
+    {
+        try
+        {
+            thenEdgeTypes.Add(EdgeTypeFilter.Parse(step));
+        }
+        catch (ArgumentException ex)
+        {
+            Console.Error.WriteLine($"Error in --then: {ex.Message}");
+            return 1;
+        }
+    }
+
     // Load graph
     QueryEngine engine;
     try
@@ -80,29 +107,115 @@ static async Task<int> RunAsync(string[] args)
     // Staleness check
     CheckStaleness(graphDir);
 
-    var options = new QueryOptions
-    {
-        Pattern = pattern,
-        Depth = depth,
-        EdgeTypeFilter = edgeTypeFilter,
-        NamespaceFilter = ns,
-        ProjectFilter = project,
-        MaxNodes = maxNodes,
-        IncludeExternal = includeExternal,
-        Rank = rank,
-        Format = outputFormat
-    };
+    QueryResult result;
 
-    var result = engine.Query(options);
-
-    if (result.MatchedNodes.Count == 0)
+    if (fromStdin)
     {
-        Console.Error.WriteLine($"No nodes found matching '{pattern}'.");
+        // Read previous result from stdin
+        QueryResult stdinResult;
+        try
+        {
+            var json = await Console.In.ReadToEndAsync();
+            stdinResult = JsonSerializer.Deserialize<QueryResult>(json, GetStdinJsonOptions())
+                ?? throw new InvalidOperationException("Failed to deserialize stdin JSON.");
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            Console.Error.WriteLine($"Error reading from stdin: {ex.Message}");
+            return 1;
+        }
+
+        if (setOp is not null && pattern is not null)
+        {
+            // Run new query and combine with stdin result
+            var newResult = engine.Query(new QueryOptions
+            {
+                Pattern = pattern,
+                Depth = depth,
+                EdgeTypeFilter = edgeTypeFilter,
+                NamespaceFilter = ns,
+                ProjectFilter = project,
+                MaxNodes = maxNodes,
+                IncludeExternal = includeExternal,
+                Rank = rank,
+                Format = outputFormat
+            });
+
+            result = setOp.ToLowerInvariant() switch
+            {
+                "union" => QueryResult.Union(stdinResult, newResult),
+                "intersect" => QueryResult.Intersect(stdinResult, newResult),
+                "difference" => QueryResult.Difference(stdinResult, newResult),
+                _ => throw new ArgumentException($"Unknown set operation '{setOp}'. Valid values: union, intersect, difference")
+            };
+        }
+        else
+        {
+            // Use stdin result nodes as seeds for follow-up query
+            var seedIds = stdinResult.Nodes.Keys.ToList();
+            result = engine.QueryFromResult(seedIds, new QueryOptions
+            {
+                Depth = depth,
+                EdgeTypeFilter = edgeTypeFilter,
+                NamespaceFilter = ns,
+                ProjectFilter = project,
+                MaxNodes = maxNodes,
+                IncludeExternal = includeExternal,
+                Rank = rank,
+                Format = outputFormat
+            });
+        }
+    }
+    else
+    {
+        var options = new QueryOptions
+        {
+            Pattern = pattern!,
+            Depth = depth,
+            EdgeTypeFilter = edgeTypeFilter,
+            NamespaceFilter = ns,
+            ProjectFilter = project,
+            MaxNodes = maxNodes,
+            IncludeExternal = includeExternal,
+            Rank = rank,
+            Format = outputFormat
+        };
+
+        result = engine.Query(options);
+    }
+
+    if (result.MatchedNodes.Count == 0 && result.Nodes.Count == 0)
+    {
+        Console.Error.WriteLine(pattern is not null
+            ? $"No nodes found matching '{pattern}'."
+            : "No nodes found from input.");
         return 1;
     }
 
+    // Apply --then chaining steps (graph already loaded, reused across steps)
+    foreach (var thenEdgeType in thenEdgeTypes)
+    {
+        var seedIds = result.Nodes.Keys.ToList();
+        result = engine.QueryFromResult(seedIds, new QueryOptions
+        {
+            Depth = 1,
+            EdgeTypeFilter = thenEdgeType,
+            NamespaceFilter = ns,
+            ProjectFilter = project,
+            MaxNodes = maxNodes,
+            IncludeExternal = includeExternal,
+            Rank = rank,
+            Format = outputFormat
+        });
+    }
+
     // Format output
-    var queryDesc = $"{pattern} --depth {depth} --kind {kind ?? "all"}";
+    var queryDesc = $"{pattern ?? "from-stdin"} --depth {depth} --kind {kind ?? "all"}";
+    if (thenSteps.Count > 0)
+        queryDesc += " --then " + string.Join(" --then ", thenSteps);
+    if (setOp is not null)
+        queryDesc += $" --set-op {setOp}";
+
     var output = outputFormat switch
     {
         OutputFormat.Json => JsonFormatter.Format(result),
@@ -170,6 +283,16 @@ static void PrintUsage()
           --include-external   Include external dependency nodes (default: false)
           --no-rank            Disable result ranking
           --graph-dir <path>   Graph directory (default: .codegraph)
+
+        Chaining:
+          --then <kind>        Chain: use previous results as seeds, filter by edge kind (repeatable)
+          --from-stdin         Read previous QueryResult JSON from stdin as seeds
+          --set-op <op>        Combine stdin result with new query: union, intersect, difference
+
+        Examples:
+          codegraph query OrderService --then calls-to --then resolves-to
+          codegraph query OrderService --format json | codegraph query --from-stdin --kind calls-to
+          codegraph query A --format json | codegraph query B --from-stdin --set-op union
         """);
 }
 
@@ -197,3 +320,23 @@ static bool HasFlag(List<string> args, string name)
     args.RemoveAt(idx);
     return true;
 }
+
+static List<string> GetRepeatableOption(List<string> args, string name)
+{
+    var values = new List<string>();
+    while (true)
+    {
+        var idx = args.IndexOf(name);
+        if (idx < 0 || idx + 1 >= args.Count) break;
+        values.Add(args[idx + 1]);
+        args.RemoveRange(idx, 2);
+    }
+    return values;
+}
+
+static JsonSerializerOptions GetStdinJsonOptions() => new()
+{
+    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    PropertyNameCaseInsensitive = true
+};

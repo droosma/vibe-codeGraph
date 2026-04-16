@@ -49,17 +49,31 @@ public class QueryEngine
 
     public QueryResult Query(QueryOptions options)
     {
-        // Step 1: Find matching nodes by pattern
         var matchedNodes = FindMatchingNodes(options.Pattern);
+        return ExecuteFromMatches(matchedNodes, options);
+    }
 
-        // Step 2: Apply namespace filter
+    public QueryResult QueryFromResult(IReadOnlyCollection<string> seedNodeIds, QueryOptions options)
+    {
+        var matchedNodes = new List<GraphNode>();
+        foreach (var id in seedNodeIds)
+        {
+            if (_nodes.TryGetValue(id, out var node))
+                matchedNodes.Add(node);
+        }
+        return ExecuteFromMatches(matchedNodes, options);
+    }
+
+    private QueryResult ExecuteFromMatches(List<GraphNode> matchedNodes, QueryOptions options)
+    {
+        // Apply namespace filter
         if (options.NamespaceFilter is not null)
         {
             var allowedIds = NamespaceFilter.Apply(_nodes, options.NamespaceFilter);
             matchedNodes = matchedNodes.Where(n => allowedIds.ContainsKey(n.Id)).ToList();
         }
 
-        // Step 3: Apply project filter
+        // Apply project filter
         if (options.ProjectFilter is not null)
         {
             matchedNodes = matchedNodes
@@ -71,7 +85,7 @@ public class QueryEngine
         var totalMatchCount = matchedNodes.Count;
         var targetNode = matchedNodes.Count == 1 ? matchedNodes[0] : null;
 
-        // Step 4: Depth traversal (BFS)
+        // Depth traversal (BFS)
         var seedIds = matchedNodes.Select(n => n.Id).ToList();
         var reachableIds = DepthFilter.Traverse(
             seedIds, _outgoing, _incoming, options.Depth, options.IncludeExternal);
@@ -81,7 +95,7 @@ public class QueryEngine
             ? DepthFilter.Traverse(seedIds, _outgoing, _incoming, 1, options.IncludeExternal)
             : new HashSet<string>(seedIds);
 
-        // Step 5: Build subgraph
+        // Build subgraph
         var subgraphNodes = new Dictionary<string, GraphNode>();
         foreach (var id in reachableIds)
         {
@@ -89,24 +103,24 @@ public class QueryEngine
                 subgraphNodes[id] = node;
         }
 
-        // Step 6: Collect edges within the subgraph
+        // Collect edges within the subgraph
         var subgraphEdges = _edges
             .Where(e => reachableIds.Contains(e.FromId) && reachableIds.Contains(e.ToId))
             .ToList();
 
-        // Step 7: Apply edge type filter
+        // Apply edge type filter
         if (options.EdgeTypeFilter is not null)
         {
             subgraphEdges = EdgeTypeFilter.Apply(subgraphEdges, options.EdgeTypeFilter);
         }
 
-        // Step 8: Filter out external if not requested
+        // Filter out external if not requested
         if (!options.IncludeExternal)
         {
             subgraphEdges = subgraphEdges.Where(e => !e.IsExternal).ToList();
         }
 
-        // Step 9: Rank and truncate
+        // Rank and truncate
         var wasTruncated = false;
         if (options.Rank && subgraphNodes.Count > options.MaxNodes)
         {
@@ -245,4 +259,94 @@ public record QueryResult
     public GraphMetadata Metadata { get; init; } = null!;
     public bool WasTruncated { get; init; }
     public int TotalMatchCount { get; init; }
+
+    public static QueryResult Union(QueryResult a, QueryResult b)
+    {
+        var nodes = new Dictionary<string, GraphNode>(a.Nodes);
+        foreach (var (key, value) in b.Nodes)
+            nodes.TryAdd(key, value);
+
+        var edgeKeys = new HashSet<(string, string, EdgeType)>(
+            a.Edges.Select(e => (e.FromId, e.ToId, e.Type)));
+        var edges = new List<GraphEdge>(a.Edges);
+        foreach (var e in b.Edges)
+        {
+            if (edgeKeys.Add((e.FromId, e.ToId, e.Type)))
+                edges.Add(e);
+        }
+
+        var matchedIds = new HashSet<string>();
+        var matchedNodes = new List<GraphNode>();
+        foreach (var n in a.MatchedNodes.Concat(b.MatchedNodes))
+        {
+            if (matchedIds.Add(n.Id))
+                matchedNodes.Add(n);
+        }
+
+        return new QueryResult
+        {
+            MatchedNodes = matchedNodes,
+            Nodes = nodes,
+            Edges = edges,
+            Metadata = a.Metadata,
+            WasTruncated = a.WasTruncated || b.WasTruncated,
+            TotalMatchCount = a.TotalMatchCount + b.TotalMatchCount
+        };
+    }
+
+    public static QueryResult Intersect(QueryResult a, QueryResult b)
+    {
+        var commonIds = new HashSet<string>(a.Nodes.Keys);
+        commonIds.IntersectWith(b.Nodes.Keys);
+
+        var nodes = a.Nodes
+            .Where(kvp => commonIds.Contains(kvp.Key))
+            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+
+        var edges = a.Edges
+            .Where(e => commonIds.Contains(e.FromId) && commonIds.Contains(e.ToId))
+            .ToList();
+
+        var matchedNodes = a.MatchedNodes
+            .Where(n => commonIds.Contains(n.Id))
+            .ToList();
+
+        return new QueryResult
+        {
+            MatchedNodes = matchedNodes,
+            Nodes = nodes,
+            Edges = edges,
+            Metadata = a.Metadata,
+            WasTruncated = false,
+            TotalMatchCount = matchedNodes.Count
+        };
+    }
+
+    public static QueryResult Difference(QueryResult a, QueryResult b)
+    {
+        var removeIds = new HashSet<string>(b.Nodes.Keys);
+
+        var nodes = a.Nodes
+            .Where(kvp => !removeIds.Contains(kvp.Key))
+            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+
+        var remainingIds = new HashSet<string>(nodes.Keys);
+        var edges = a.Edges
+            .Where(e => remainingIds.Contains(e.FromId) && remainingIds.Contains(e.ToId))
+            .ToList();
+
+        var matchedNodes = a.MatchedNodes
+            .Where(n => !removeIds.Contains(n.Id))
+            .ToList();
+
+        return new QueryResult
+        {
+            MatchedNodes = matchedNodes,
+            Nodes = nodes,
+            Edges = edges,
+            Metadata = a.Metadata,
+            WasTruncated = false,
+            TotalMatchCount = matchedNodes.Count
+        };
+    }
 }
