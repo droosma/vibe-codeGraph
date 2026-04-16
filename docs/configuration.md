@@ -16,7 +16,7 @@ The `ConfigLoader` searches for `codegraph.json` by walking up the directory tre
 |--------|------|---------|-------------|
 | `solution` | `string?` | `null` | Path to the `.sln` file. Can also be set via `--solution` CLI flag. |
 | `output` | `string` | `".codegraph"` | Output directory for graph JSON files. |
-| `splitBy` | `string` | `"project"` | How to split graph files: `"project"` (one file per project) or `"namespace"` (one file per root namespace). |
+| `splitBy` | `string` | `"project"` | How to split graph files: `"assembly"` or `"project"` (one file per assembly — the default behavior), or `"namespace"` (one file per root namespace). The values `"assembly"` and `"project"` both produce assembly-based splitting. |
 
 ---
 
