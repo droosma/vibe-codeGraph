@@ -24,14 +24,16 @@
     <ToolCommandName>codegraph</ToolCommandName>
     <PackageId>CodeGraph</PackageId>
     <Version>0.1.0</Version>
-    <Authors>CodeGraph Contributors</Authors>
-    <Description>Roslyn-powered CLI that builds a semantic graph of C# codebases — queryable by LLM agents. Replaces grep with structured code intelligence.</Description>
-    <PackageTags>roslyn;csharp;code-analysis;semantic-graph;llm;ai;cli;dotnet-tool;code-intelligence</PackageTags>
+    <Authors>Duncan Roosma</Authors>
+    <Copyright>Copyright (c) Duncan Roosma 2026</Copyright>
+    <Description>Roslyn-powered CLI that builds a semantic graph of C# codebases — queryable by LLM agents via MCP. Replaces grep with structured code intelligence: call chains, type hierarchies, DI wiring, and test coverage.</Description>
+    <PackageTags>roslyn;csharp;code-analysis;semantic-graph;llm;ai;cli;dotnet-tool;code-intelligence;mcp</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/droosma/vibe-codeGraph</PackageProjectUrl>
     <RepositoryUrl>https://github.com/droosma/vibe-codeGraph</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReleaseNotes>Initial release: Roslyn indexer, query engine, MCP stdio server with auto-detect framing (VS Code + Claude Code).</PackageReleaseNotes>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>CS1591;CS9057</NoWarn>
   </PropertyGroup>
