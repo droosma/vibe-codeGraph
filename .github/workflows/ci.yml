@@ -10,9 +10,28 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'src/**'
+              - 'tests/**'
+              - '*.sln'
+              - 'global.json'
+
   build-and-test:
     name: Build & Test
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
 
     steps:
       - uses: actions/checkout@v6
@@ -41,7 +60,8 @@ jobs:
   pack:
     name: Pack NuGet
     runs-on: ubuntu-latest
-    needs: build-and-test
+    needs: [changes, build-and-test]
+    if: needs.changes.outputs.code == 'true'
 
     steps:
       - uses: actions/checkout@v6
