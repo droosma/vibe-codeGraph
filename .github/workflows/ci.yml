@@ -52,10 +52,12 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Pack
-        run: dotnet pack CodeGraph.sln --configuration Release --output ./nupkg
+        run: dotnet pack src/CodeGraph.Indexer/CodeGraph.Indexer.csproj --configuration Release --output ./nupkg
 
       - name: Upload NuGet packages
         uses: actions/upload-artifact@v4
         with:
           name: nuget-packages
-          path: ./nupkg/*.nupkg
+          path: |
+            ./nupkg/*.nupkg
+            ./nupkg/*.snupkg
