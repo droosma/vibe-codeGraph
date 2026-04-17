@@ -1,5 +1,8 @@
 using System.Text.Json;
 using CodeGraph.Core.Models;
+#if NETSTANDARD2_0
+using CodeGraph.Core.Polyfills;
+#endif
 
 namespace CodeGraph.Core.IO;
 
@@ -12,7 +15,11 @@ public class GraphReader
         if (!File.Exists(metaPath))
             throw new FileNotFoundException("meta.json not found in graph directory.", metaPath);
 
+#if NETSTANDARD2_0
+        using var metaStream = File.OpenRead(metaPath);
+#else
         await using var metaStream = File.OpenRead(metaPath);
+#endif
         var metadata = await JsonSerializer.DeserializeAsync<GraphMetadata>(metaStream, GraphSerializationOptions.Default)
             ?? throw new InvalidOperationException("Failed to deserialize meta.json.");
 
@@ -26,13 +33,17 @@ public class GraphReader
 
         foreach (var file in jsonFiles)
         {
+#if NETSTANDARD2_0
+            using var stream = File.OpenRead(file);
+#else
             await using var stream = File.OpenRead(file);
+#endif
             var projectGraph = await JsonSerializer.DeserializeAsync<ProjectGraph>(stream, GraphSerializationOptions.Default);
             if (projectGraph is null) continue;
 
-            foreach (var (id, node) in projectGraph.Nodes)
+            foreach (var kvp in projectGraph.Nodes)
             {
-                allNodes[id] = node;
+                allNodes[kvp.Key] = kvp.Value;
             }
 
             allEdges.AddRange(projectGraph.Edges);

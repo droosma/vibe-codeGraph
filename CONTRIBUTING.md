@@ -6,7 +6,7 @@ Thanks for your interest in contributing! This guide covers everything you need 
 
 ### Prerequisites
 
-- [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (10.0.201 or later — see `global.json`)
+- [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (10.0.201 or later — see `global.json`). .NET 8.0 SDK is also needed for multi-target builds.
 - Git
 
 ### Clone and Build
