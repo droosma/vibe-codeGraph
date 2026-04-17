@@ -6,7 +6,7 @@
 [![CI](https://github.com/droosma/vibe-codeGraph/actions/workflows/ci.yml/badge.svg)](https://github.com/droosma/vibe-codeGraph/actions/workflows/ci.yml)
 [![NuGet](https://img.shields.io/nuget/v/CodeGraph.svg)](https://www.nuget.org/packages/CodeGraph)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![.NET 8+](https://img.shields.io/badge/.NET-8.0%2B-purple)
+![.NET 10+](https://img.shields.io/badge/.NET-10.0%2B-purple)
 
 CodeGraph is a Roslyn-powered CLI tool that builds a **semantic graph** of your C# codebase and writes it as JSON — queryable by LLM agents. Instead of dumping thousands of grep matches into a prompt, your AI assistant gets the actual dependency structure, call chains, and type hierarchy.
 
