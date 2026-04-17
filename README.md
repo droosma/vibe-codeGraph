@@ -236,7 +236,7 @@ CodeGraph is configured via a `codegraph.json` file in your repo root. Run `code
 |---------|----------|
 | `solution` | Path to `.sln` file |
 | `output` | Graph output directory (default: `.codegraph`) |
-| `splitBy` | File split strategy: `assembly` (default), `project`, or `namespace` |
+| `splitBy` | File split strategy: `project` (default) or `assembly` (both are assembly-based), or `namespace` |
 | `index` | Project filtering, build configuration, external packages |
 | `ioc` | IoC/DI container resolution settings |
 | `tests` | Test discovery patterns |

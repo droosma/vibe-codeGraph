@@ -9,6 +9,7 @@ CodeGraph writes its output as JSON files in the graph directory (default: `.cod
 ```
 .codegraph/
 ├── meta.json              # Index metadata
+├── _external.json         # External/NuGet dependency nodes (SBOM-like)
 ├── MyApp.Core.json        # Graph for MyApp.Core project
 ├── MyApp.Services.json    # Graph for MyApp.Services project
 └── MyApp.Api.json         # Graph for MyApp.Api project
@@ -141,6 +142,7 @@ Each project file contains a `ProjectGraph` object:
 | `containingTypeId` | `string?` | | ID of the parent type (for members). Null for top-level types. |
 | `containingNamespaceId` | `string?` | | ID of the containing namespace. |
 | `accessibility` | `Accessibility` | ✓ | Visibility level. |
+| `assemblyName` | `string` | ✓ | Assembly or project name this node belongs to. Used by the writer to determine which output file the node is written to. |
 | `metadata` | `object` | ✓ | Key-value pairs for additional info (e.g., `isAsync`, `isStatic`, `isAbstract`). |
 
 ---
@@ -186,7 +188,8 @@ Serialized as **camelCase strings** in JSON.
 | `implements` | Interface implementation. | `OrderService` → `IOrderService` |
 | `dependsOn` | Type dependency (parameters, return types, fields). | `PlaceOrder` → `OrderRequest` |
 | `resolvesTo` | IoC/DI container resolution. | `IOrderService` → `OrderService` |
-| `covers` | Test coverage link. | `OrderServiceTests.Place...` → `OrderService.PlaceOrder` |
+| `covers` | Test coverage link (test → production). | `OrderServiceTests.Place...` → `OrderService.PlaceOrder` |
+| `coveredBy` | Inverse test coverage link (production → test). | `OrderService.PlaceOrder` → `OrderServiceTests.Place...` |
 | `references` | General reference. | Any symbol reference not covered by other types. |
 | `overrides` | Method override. | `Derived.Foo()` → `Base.Foo()` |
 
