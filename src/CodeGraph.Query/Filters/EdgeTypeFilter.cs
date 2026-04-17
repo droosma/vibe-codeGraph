@@ -14,6 +14,7 @@ public static class EdgeTypeFilter
         ["depends-on"] = EdgeType.DependsOn,
         ["resolves-to"] = EdgeType.ResolvesTo,
         ["covers"] = EdgeType.Covers,
+        ["covered-by"] = EdgeType.CoveredBy,
         ["references"] = EdgeType.References,
         ["overrides"] = EdgeType.Overrides,
         ["contains"] = EdgeType.Contains,
