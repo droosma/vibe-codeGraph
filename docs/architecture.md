@@ -11,8 +11,12 @@ flowchart LR
     C --> D["SyntaxPass"]
     D --> E["Nodes + Contains edges"]
     E --> F["SemanticPass"]
-    F --> G["Semantic edges +\nexternal nodes"]
-    G --> H["GraphWriter"]
+    F --> G["Calls/Inherits/Implements/\nDependsOn/Overrides/References\n+ external nodes"]
+    G --> G2["DiPass"]
+    G2 --> G3["ResolvesTo edges"]
+    G3 --> G4["TestCoveragePass"]
+    G4 --> G5["Covers/CoveredBy edges"]
+    G5 --> H["GraphWriter"]
     H --> I[".codegraph/\nJSON files"]
     I --> J["GraphReader"]
     J --> K["QueryEngine"]
@@ -72,7 +76,7 @@ Each `ProjectCompilation` is a self-contained Roslyn compilation ready for analy
 
 ## Pass Architecture
 
-Indexing runs two sequential passes over each compilation. This separation keeps each pass focused and independently testable.
+Indexing runs four sequential passes over each compilation. This separation keeps each pass focused and independently testable.
 
 ### SyntaxPass
 
@@ -111,13 +115,37 @@ Uses the Roslyn **semantic model** to resolve relationships between symbols:
 | Interfaces | `Implements` | Type declaration interface list |
 | Parameter/return/field types | `DependsOn` | Symbol type analysis |
 | Method overrides | `Overrides` | Override keyword detection |
-| IoC registrations | `ResolvesTo` | DI registration pattern matching |
-| Test coverage | `Covers` | Test method → tested method heuristics |
+| General symbol reference | `References` | Any symbol reference not captured by other edge types |
 
 When a target symbol lives outside the solution (external assembly), the pass:
 1. Creates an **external node** (with `IsExternal = true`)
 2. Records the `PackageSource` (NuGet package name)
 3. Optionally records a `SourceLink` URL
+
+### DiPass
+
+**Location:** `src/CodeGraph.Indexer/Passes/DiPass.cs`
+
+Scans for dependency injection registrations to create `ResolvesTo` edges:
+
+| Relationship | EdgeType | How Detected |
+|-------------|----------|-------------|
+| IoC registrations | `ResolvesTo` | Calls to `AddScoped`/`AddTransient`/`AddSingleton` (and their `TryAdd*` variants) |
+
+`DiPass` uses the same symbol set produced by `SyntaxPass` and `SemanticPass` to correlate interfaces with their implementing types. When a registered type lives outside the solution, an external node is created.
+
+### TestCoveragePass
+
+**Location:** `src/CodeGraph.Indexer/Passes/TestCoveragePass.cs`
+
+Links test methods to the production code they exercise:
+
+| Relationship | EdgeType | How Detected |
+|-------------|----------|-------------|
+| Test → production | `Covers` | Test method (xUnit `[Fact]`/`[Theory]`, NUnit `[Test]`, MSTest `[TestMethod]`) heuristically matched to production symbol |
+| Production → test | `CoveredBy` | Inverse of `Covers`, emitted simultaneously |
+
+Both edges are emitted in a single pass so the graph stays consistent.
 
 ---
 
