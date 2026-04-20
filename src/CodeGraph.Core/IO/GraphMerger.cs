@@ -1,4 +1,7 @@
 using CodeGraph.Core.Models;
+#if NETSTANDARD2_0
+using CodeGraph.Core.Polyfills;
+#endif
 
 namespace CodeGraph.Core.IO;
 
@@ -24,11 +27,11 @@ public class GraphMerger
 
         // Collect IDs of nodes that belong to updated projects
         var nodeIdsToRemove = new HashSet<string>();
-        foreach (var (id, _) in mergedNodes)
+        foreach (var kvp in mergedNodes)
         {
-            var project = ExtractProject(id);
+            var project = ExtractProject(kvp.Key);
             if (projectKeys.Contains(project))
-                nodeIdsToRemove.Add(id);
+                nodeIdsToRemove.Add(kvp.Key);
         }
 
         foreach (var id in nodeIdsToRemove)
@@ -40,8 +43,8 @@ public class GraphMerger
         // Add nodes and edges from partial graphs
         foreach (var pg in partialProjects)
         {
-            foreach (var (id, node) in pg.Nodes)
-                mergedNodes[id] = node;
+            foreach (var kvp in pg.Nodes)
+                mergedNodes[kvp.Key] = kvp.Value;
 
             mergedEdges.AddRange(pg.Edges);
         }
@@ -52,6 +55,6 @@ public class GraphMerger
     private static string ExtractProject(string fullyQualifiedId)
     {
         var dotIndex = fullyQualifiedId.IndexOf('.');
-        return dotIndex > 0 ? fullyQualifiedId[..dotIndex] : fullyQualifiedId;
+        return dotIndex > 0 ? fullyQualifiedId.Substring(0, dotIndex) : fullyQualifiedId;
     }
 }

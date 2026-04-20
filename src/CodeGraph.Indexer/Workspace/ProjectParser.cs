@@ -122,7 +122,7 @@ public static class ProjectParser
             return tfm.Trim();
 
         if (string.IsNullOrWhiteSpace(tfms))
-            return "net8.0"; // sensible default
+            return "net10.0"; // sensible default
 
         var frameworks = tfms.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         // Sort descending by numeric version to pick highest

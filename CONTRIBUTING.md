@@ -6,7 +6,7 @@ Thanks for your interest in contributing! This guide covers everything you need 
 
 ### Prerequisites
 
-- [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) (8.0.420 or later — see `global.json`)
+- [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (10.0.201 or later — see `global.json`). .NET 8.0 SDK is also needed for multi-target builds.
 - Git
 
 ### Clone and Build
@@ -64,7 +64,7 @@ CodeGraph.sln
 ├── nupkg/                           # Local NuGet package output
 ├── docs/                            # Documentation
 ├── codegraph.json.example           # Annotated config example
-└── global.json                      # SDK version pinning (8.0.420)
+└── global.json                      # SDK version pinning (10.0.201)
 ```
 
 ### Key Design Decisions

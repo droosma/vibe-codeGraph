@@ -69,7 +69,7 @@ public class ProjectParserTests
     }
 
     [Fact]
-    public void ParseContent_NoFramework_DefaultsToNet80()
+    public void ParseContent_NoFramework_DefaultsToNet100()
     {
         const string xml = @"<Project Sdk=""Microsoft.NET.Sdk"">
   <PropertyGroup>
@@ -77,7 +77,7 @@ public class ProjectParserTests
   </PropertyGroup>
 </Project>";
         var info = ProjectParser.ParseContent(xml, "NoTfm.csproj", Directory.GetCurrentDirectory());
-        Assert.Equal("net8.0", info.TargetFramework);
+        Assert.Equal("net10.0", info.TargetFramework);
     }
 
     #endregion
@@ -697,7 +697,7 @@ public class ProjectParserTests
   </PropertyGroup>
 </Project>";
         var info = ProjectParser.ParseContent(xml, "Empty.csproj", Directory.GetCurrentDirectory());
-        Assert.Equal("net8.0", info.TargetFramework);
+        Assert.Equal("net10.0", info.TargetFramework);
         Assert.Equal("Empty", info.AssemblyName);
         Assert.Equal("Empty", info.RootNamespace);
         Assert.Null(info.LangVersion);
@@ -1058,7 +1058,7 @@ public class ProjectParserTests
         // Verify defaults are NOT used (would indicate element name wasn't found)
         Assert.NotEqual("mapped", info.AssemblyName);
         Assert.NotEqual("mapped", info.RootNamespace);
-        Assert.NotEqual("net8.0", info.TargetFramework);
+        Assert.NotEqual("net10.0", info.TargetFramework);
     }
 
     [Fact]
@@ -1731,7 +1731,7 @@ public class ProjectParserTests
     public void ParseContent_ExactTargetFramework_NotDefault()
     {
         // If "TargetFramework" string constant is mutated, the value won't be found
-        // and we'll get the default "net8.0" — but we're using a DIFFERENT value here.
+        // and we'll get the default "net10.0" — but we're using a DIFFERENT value here.
         const string xml = @"<Project Sdk=""Microsoft.NET.Sdk"">
   <PropertyGroup>
     <TargetFramework>net7.0</TargetFramework>

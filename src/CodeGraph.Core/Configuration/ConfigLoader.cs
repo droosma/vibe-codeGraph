@@ -44,7 +44,12 @@ public static class ConfigLoader
             Directory.CreateDirectory(directory);
 
         var json = JsonSerializer.Serialize(config, GraphSerializationOptions.Default);
+#if NETSTANDARD2_0
+        File.WriteAllText(path, json);
+        await Task.CompletedTask;
+#else
         await File.WriteAllTextAsync(path, json);
+#endif
     }
 
     private static CodeGraphConfig DeserializeFile(string path)

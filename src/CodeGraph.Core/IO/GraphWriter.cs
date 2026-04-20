@@ -1,5 +1,8 @@
 using System.Text.Json;
 using CodeGraph.Core.Models;
+#if NETSTANDARD2_0
+using CodeGraph.Core.Polyfills;
+#endif
 
 namespace CodeGraph.Core.IO;
 
@@ -25,17 +28,25 @@ public class GraphWriter
 
         var projectGraphs = GroupByStrategy(nodeList, edgeList);
 
-        foreach (var (key, graph) in projectGraphs)
+        foreach (var kvp in projectGraphs)
         {
-            var fileName = SanitizeFileName(key) + ".json";
+            var fileName = SanitizeFileName(kvp.Key) + ".json";
             var filePath = Path.Combine(outputDirectory, fileName);
+#if NETSTANDARD2_0
+            using var stream = File.Create(filePath);
+#else
             await using var stream = File.Create(filePath);
-            await JsonSerializer.SerializeAsync(stream, graph, GraphSerializationOptions.Default);
+#endif
+            await JsonSerializer.SerializeAsync(stream, kvp.Value, GraphSerializationOptions.Default);
         }
 
         // Write meta.json
         var metaPath = Path.Combine(outputDirectory, "meta.json");
+#if NETSTANDARD2_0
+        using var metaStream = File.Create(metaPath);
+#else
         await using var metaStream = File.Create(metaPath);
+#endif
         await JsonSerializer.SerializeAsync(metaStream, metadata, GraphSerializationOptions.Default);
     }
 
@@ -119,7 +130,7 @@ public class GraphWriter
     private static string ExtractProject(string fullyQualifiedId)
     {
         var dotIndex = fullyQualifiedId.IndexOf('.');
-        return dotIndex > 0 ? fullyQualifiedId[..dotIndex] : fullyQualifiedId;
+        return dotIndex > 0 ? fullyQualifiedId.Substring(0, dotIndex) : fullyQualifiedId;
     }
 
     /// <summary>
@@ -129,15 +140,15 @@ public class GraphWriter
     private static string ExtractNamespace(string fullyQualifiedId)
     {
         var lastDot = fullyQualifiedId.LastIndexOf('.');
-        return lastDot > 0 ? fullyQualifiedId[..lastDot] : fullyQualifiedId;
+        return lastDot > 0 ? fullyQualifiedId.Substring(0, lastDot) : fullyQualifiedId;
     }
 
     private static string SanitizeFileName(string name)
     {
         // Use a fixed set of invalid chars so output is consistent across OS
-        var invalid = Path.GetInvalidFileNameChars()
-            .Union(new[] { '<', '>', ':', '"', '|', '?', '*' })
-            .ToHashSet();
+        var invalid = new HashSet<char>(
+            Path.GetInvalidFileNameChars()
+                .Union(new[] { '<', '>', ':', '"', '|', '?', '*' }));
         return string.Concat(name.Select(c => invalid.Contains(c) ? '_' : c));
     }
 }
