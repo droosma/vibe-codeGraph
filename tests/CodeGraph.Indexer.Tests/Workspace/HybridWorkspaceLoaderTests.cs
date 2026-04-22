@@ -339,6 +339,62 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
         Assert.Contains("Missing.csproj", stderr);
     }
 
+    [Fact]
+    public async Task LoadAsync_BuildFailure_EmitsWarningAndContinues()
+    {
+        var root = CreateTempDir();
+        CreateMinimalProject(root, "BadBuild", "BadBuild");
+
+        // Add a non-existent NuGet package to force dotnet build to fail
+        var csprojPath = Path.Combine(root, "BadBuild", "BadBuild.csproj");
+        var csproj = File.ReadAllText(csprojPath).Replace(
+            "</Project>",
+            """
+              <ItemGroup>
+                <PackageReference Include="NonExistent.Package.ZZZZZ" Version="99.99.99" />
+              </ItemGroup>
+            </Project>
+            """);
+        File.WriteAllText(csprojPath, csproj);
+
+        // Create a proper solution file that dotnet build can understand
+        var slnPath = Path.Combine(root, "Test.sln");
+        var sep = Path.DirectorySeparatorChar;
+        var slnContent = "Microsoft Visual Studio Solution File, Format Version 12.00\n"
+            + $"Project(\"{{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}}\") = \"BadBuild\", \"BadBuild{sep}BadBuild.csproj\", \"{{00000001-0000-0000-0000-000000000000}}\"\n"
+            + "EndProject\n"
+            + "Global\n"
+            + "\tGlobalSection(SolutionConfigurationPlatforms) = preSolution\n"
+            + "\t\tDebug|Any CPU = Debug|Any CPU\n"
+            + "\tEndGlobalSection\n"
+            + "\tGlobalSection(ProjectConfigurationPlatforms) = postSolution\n"
+            + "\t\t{00000001-0000-0000-0000-000000000000}.Debug|Any CPU.ActiveCfg = Debug|Any CPU\n"
+            + "\t\t{00000001-0000-0000-0000-000000000000}.Debug|Any CPU.Build.0 = Debug|Any CPU\n"
+            + "\tEndGlobalSection\n"
+            + "EndGlobal\n";
+        File.WriteAllText(slnPath, slnContent);
+
+        var originalErr = Console.Error;
+        var sw = new StringWriter();
+        Console.SetError(sw);
+        try
+        {
+            var loader = new HybridWorkspaceLoader();
+            // skipBuild: false — the real dotnet build will fail
+            var results = await loader.LoadAsync(slnPath, skipBuild: false);
+
+            // Should still return results (best-effort Roslyn compilation)
+            Assert.Single(results);
+        }
+        finally
+        {
+            Console.SetError(originalErr);
+        }
+
+        var stderr = sw.ToString();
+        Assert.Contains("Warning: dotnet build failed", stderr);
+    }
+
     public void Dispose()
     {
         foreach (var dir in _tempDirs)
