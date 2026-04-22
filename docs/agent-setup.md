@@ -106,13 +106,17 @@ codegraph index --solution YourApp.sln
 
 ### Build failures during indexing
 
-CodeGraph runs `dotnet build` before indexing. If your solution doesn't build:
+CodeGraph runs `dotnet build` before indexing. If the build fails, CodeGraph emits a warning to stderr and continues indexing in **best-effort mode** — you still get a graph, but type resolution may be incomplete for projects that failed to compile.
+
+To see the build error details, run the build manually:
 
 ```bash
-# Fix build errors first
 dotnet build YourApp.sln
+```
 
-# Or skip the build if you've already built
+To skip the build step entirely (e.g., in CI after you've already built, or when you know NuGet restore will fail in a locked environment):
+
+```bash
 codegraph index --solution YourApp.sln --skip-build
 ```
 
