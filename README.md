@@ -130,6 +130,7 @@ codegraph index --solution <path.sln> [options]
 | `--config <path>` | Path to `codegraph.json` config | Auto-detected |
 | `--configuration <name>` | Build configuration | `Debug` |
 | `--skip-build` | Skip `dotnet build` step | `false` |
+| `--changed-only` | Incremental re-index; only re-index projects with changes since last indexed commit | `false` |
 | `--verbose` | Enable verbose output | `false` |
 
 ### `codegraph query`

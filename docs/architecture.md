@@ -12,11 +12,15 @@ flowchart LR
     D --> E["Nodes + Contains edges"]
     E --> F["SemanticPass"]
     F --> G["Semantic edges +\nexternal nodes"]
-    G --> H["GraphWriter"]
-    H --> I[".codegraph/\nJSON files"]
-    I --> J["GraphReader"]
-    J --> K["QueryEngine"]
-    K --> L["Formatted output\n(context / json / text)"]
+    G --> H["DiPass"]
+    H --> I["ResolvesTo edges"]
+    I --> J["TestCoveragePass"]
+    J --> K["Covers / CoveredBy edges"]
+    K --> L["GraphWriter"]
+    L --> M[".codegraph/\nJSON files"]
+    M --> N["GraphReader"]
+    N --> O["QueryEngine"]
+    O --> P["Formatted output\n(context / json / text)"]
 ```
 
 ## Hybrid Workspace Loader
@@ -72,7 +76,7 @@ Each `ProjectCompilation` is a self-contained Roslyn compilation ready for analy
 
 ## Pass Architecture
 
-Indexing runs two sequential passes over each compilation. This separation keeps each pass focused and independently testable.
+Indexing runs four sequential passes over each compilation. This separation keeps each pass focused and independently testable.
 
 ### SyntaxPass
 
@@ -111,13 +115,32 @@ Uses the Roslyn **semantic model** to resolve relationships between symbols:
 | Interfaces | `Implements` | Type declaration interface list |
 | Parameter/return/field types | `DependsOn` | Symbol type analysis |
 | Method overrides | `Overrides` | Override keyword detection |
-| IoC registrations | `ResolvesTo` | DI registration pattern matching |
-| Test coverage | `Covers` | Test method → tested method heuristics |
 
 When a target symbol lives outside the solution (external assembly), the pass:
 1. Creates an **external node** (with `IsExternal = true`)
 2. Records the `PackageSource` (NuGet package name)
 3. Optionally records a `SourceLink` URL
+
+### DiPass
+
+**Location:** `src/CodeGraph.Indexer/Passes/DiPass.cs`
+
+Detects IoC/DI container registrations (`AddScoped`, `AddTransient`, `AddSingleton`) and emits `ResolvesTo` edges linking service interfaces to their concrete implementations, with lifetime metadata.
+
+| Relationship | EdgeType | How Detected |
+|-------------|----------|-------------|
+| IoC registrations | `ResolvesTo` | DI registration pattern matching (`AddScoped<TService, TImpl>()`, etc.) |
+
+### TestCoveragePass
+
+**Location:** `src/CodeGraph.Indexer/Passes/TestCoveragePass.cs`
+
+Detects test methods (xUnit, NUnit, MSTest) and links them to the production code they test, emitting bidirectional coverage edges.
+
+| Relationship | EdgeType | How Detected |
+|-------------|----------|-------------|
+| Test coverage | `Covers` | Test method → tested method heuristics |
+| Inverse coverage | `CoveredBy` | Tested method → test method (inverse of `Covers`) |
 
 ---
 
@@ -138,7 +161,8 @@ GraphMetadata  — Index metadata (git info, stats, schema version)
 
 The `GraphWriter` splits the graph into multiple JSON files using the configured `splitBy` strategy:
 
-- **`project`** (default) — One `.json` file per project (e.g., `MyApp.Core.json`)
+- **`assembly`** (default) — One `.json` file per assembly (e.g., `MyApp.Core.json`). External/NuGet nodes go to `_external.json`.
+- **`project`** — Also groups by assembly name (functionally equivalent to `assembly`)
 - **`namespace`** — One `.json` file per root namespace
 
 Plus a `meta.json` containing `GraphMetadata`.
