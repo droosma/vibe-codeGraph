@@ -125,8 +125,8 @@ public class HybridWorkspaceLoader
         if (process.ExitCode != 0)
         {
             var output = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
-            throw new InvalidOperationException(
-                $"dotnet build failed with exit code {process.ExitCode}:\n{output}");
+            Console.Error.WriteLine(
+                $"Warning: dotnet build failed with exit code {process.ExitCode}. Continuing with best-effort indexing.\n{output}");
         }
     }
 }
