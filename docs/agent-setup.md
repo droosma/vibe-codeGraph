@@ -98,10 +98,10 @@ CodeGraph ships with APM primitives in the `.apm/` directory:
 | **Instruction** | `.apm/instructions/codegraph.instructions.md` | Teaches agents when and how to use CodeGraph |
 | **Skill** | `.apm/skills/code-explorer/SKILL.md` | Explore C# codebase structure via the semantic graph |
 
-To install CodeGraph's agent primitives from its repository:
+To install CodeGraph's agent primitives from the repository:
 
 ```bash
-apm install droosma/vibe-codeGraph
+apm install <owner>/<repo>
 ```
 
 ---

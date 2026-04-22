@@ -564,8 +564,11 @@ static async Task<int> RunInitAsync(string[] args)
     var apmPath = Path.Combine(currentDir, "apm.yml");
     if (!File.Exists(apmPath))
     {
+        var packageName = Regex.Replace(
+            Path.GetFileNameWithoutExtension(selectedSln).ToLowerInvariant(),
+            @"[^a-z0-9._-]", "-");
         var apmContent = $"""
-            name: {Path.GetFileNameWithoutExtension(selectedSln).ToLowerInvariant()}
+            name: {packageName}
             version: 1.0.0
             description: Agent configuration for {Path.GetFileNameWithoutExtension(selectedSln)}
 
