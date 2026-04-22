@@ -560,6 +560,32 @@ static async Task<int> RunInitAsync(string[] args)
         Console.WriteLine(".mcp.json already exists — skipped");
     }
 
+    // apm.yml — Microsoft APM (Agent Package Manager)
+    var apmPath = Path.Combine(currentDir, "apm.yml");
+    if (!File.Exists(apmPath))
+    {
+        var apmContent = $"""
+            name: {Path.GetFileNameWithoutExtension(selectedSln).ToLowerInvariant()}
+            version: 1.0.0
+            description: Agent configuration for {Path.GetFileNameWithoutExtension(selectedSln)}
+
+            dependencies:
+              apm: []
+              mcp:
+                - name: codegraph
+                  registry: false
+                  transport: stdio
+                  command: dotnet
+                  args: ["codegraph", "mcp"]
+            """;
+        await File.WriteAllTextAsync(apmPath, apmContent);
+        Console.WriteLine("Created apm.yml");
+    }
+    else
+    {
+        Console.WriteLine("apm.yml already exists — skipped");
+    }
+
     Console.WriteLine();
     Console.WriteLine("Next steps:");
     Console.WriteLine("  1. Review codegraph.json and adjust settings");
