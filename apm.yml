@@ -1,0 +1,16 @@
+name: codegraph
+version: 1.0.0
+description: >
+  Give your AI coding agents structural code understanding instead of grep.
+  Roslyn-powered semantic graph of C# codebases, queryable via MCP.
+author: CodeGraph Contributors
+license: MIT
+
+dependencies:
+  apm: []
+  mcp:
+    - name: codegraph
+      registry: false
+      transport: stdio
+      command: dotnet
+      args: ["codegraph", "mcp"]
