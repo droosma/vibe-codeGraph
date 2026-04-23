@@ -171,6 +171,22 @@ codegraph query <symbol-pattern> [options]
 | `contains` | Contains |
 | `all` | No filter |
 
+### `codegraph diff`
+
+Compare two graph snapshots and report structural changes.
+
+```
+codegraph diff [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--base <dir>` | Base graph snapshot directory | `.codegraph-prev` |
+| `--head <dir>` | Head graph snapshot directory | `.codegraph` |
+| `--ref <git-ref>` | Use `.codegraph-<ref>` as base snapshot | (none) |
+| `--only <types>` | Comma-separated: `added`, `removed`, `signature-changed`, `added-nodes`, `removed-nodes`, `added-edges`, `removed-edges` | All change types |
+| `--format <fmt>` | Output format: `json`, `text`, `context` | `context` |
+
 ### `codegraph mcp`
 
 Start an MCP (Model Context Protocol) stdio server. This is how AI agents discover and use CodeGraph as a native tool.
