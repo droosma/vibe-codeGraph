@@ -9,18 +9,14 @@ flowchart LR
     A[".sln file"] --> B["Hybrid Workspace Loader"]
     B --> C["CSharpCompilation\n(per project)"]
     C --> D["SyntaxPass"]
-    D --> E["Nodes + Contains edges"]
-    E --> F["SemanticPass"]
-    F --> G["Semantic edges +\nexternal nodes"]
-    G --> H["DiPass"]
-    H --> I["ResolvesTo edges"]
-    I --> J["TestCoveragePass"]
-    J --> K["Covers / CoveredBy edges"]
-    K --> L["GraphWriter"]
-    L --> M[".codegraph/\nJSON files"]
-    M --> N["GraphReader"]
-    N --> O["QueryEngine"]
-    O --> P["Formatted output\n(context / json / text)"]
+    D --> E["SemanticPass"]
+    E --> F["DiPass"]
+    F --> G["TestCoveragePass"]
+    G --> H["GraphWriter"]
+    H --> I[".codegraph/\nJSON files"]
+    I --> J["GraphReader"]
+    J --> K["QueryEngine"]
+    K --> L["Formatted output\n(context / json / text)"]
 ```
 
 ## Hybrid Workspace Loader
@@ -115,6 +111,7 @@ Uses the Roslyn **semantic model** to resolve relationships between symbols:
 | Interfaces | `Implements` | Type declaration interface list |
 | Parameter/return/field types | `DependsOn` | Symbol type analysis |
 | Method overrides | `Overrides` | Override keyword detection |
+| Symbol references | `References` | `IdentifierNameSyntax` resolved to referenced symbol |
 
 When a target symbol lives outside the solution (external assembly), the pass:
 1. Creates an **external node** (with `IsExternal = true`)
@@ -125,22 +122,36 @@ When a target symbol lives outside the solution (external assembly), the pass:
 
 **Location:** `src/CodeGraph.Indexer/Passes/DiPass.cs`
 
-Detects IoC/DI container registrations (`AddScoped`, `AddTransient`, `AddSingleton`) and emits `ResolvesTo` edges linking service interfaces to their concrete implementations, with lifetime metadata.
+Detects .NET dependency injection registrations and emits `ResolvesTo` edges from the service interface to the implementation type.
 
-| Relationship | EdgeType | How Detected |
-|-------------|----------|-------------|
-| IoC registrations | `ResolvesTo` | DI registration pattern matching (`AddScoped<TService, TImpl>()`, etc.) |
+| Registration Method | Edge Created |
+|---------------------|-------------|
+| `AddScoped<TService, TImpl>()` | `TService` → `TImpl` (`ResolvesTo`) |
+| `AddTransient<TService, TImpl>()` | `TService` → `TImpl` (`ResolvesTo`) |
+| `AddSingleton<TService, TImpl>()` | `TService` → `TImpl` (`ResolvesTo`) |
+| `TryAddScoped<TService, TImpl>()` | `TService` → `TImpl` (`ResolvesTo`) |
+| `TryAddTransient<TService, TImpl>()` | `TService` → `TImpl` (`ResolvesTo`) |
+| `TryAddSingleton<TService, TImpl>()` | `TService` → `TImpl` (`ResolvesTo`) |
+
+Both generic overloads (`AddScoped<IFoo, Foo>()`) and `typeof` overloads (`AddScoped(typeof(IFoo), typeof(Foo))`) are supported.
 
 ### TestCoveragePass
 
 **Location:** `src/CodeGraph.Indexer/Passes/TestCoveragePass.cs`
 
-Detects test methods (xUnit, NUnit, MSTest) and links them to the production code they test, emitting bidirectional coverage edges.
+Links test methods to the production methods they call, emitting bidirectional `Covers` / `CoveredBy` edges.
 
-| Relationship | EdgeType | How Detected |
-|-------------|----------|-------------|
-| Test coverage | `Covers` | Test method → tested method heuristics |
-| Inverse coverage | `CoveredBy` | Tested method → test method (inverse of `Covers`) |
+**Test framework detection** — A method is considered a test if it has any of the following attributes:
+
+| Framework | Attributes |
+|-----------|-----------|
+| xUnit | `[Fact]`, `[Theory]` |
+| NUnit | `[Test]`, `[TestCase]` |
+| MSTest | `[TestMethod]` |
+
+For each test method, the pass walks invocations within the method body and resolves them to target symbols. For each resolved target:
+- `Covers` edge: test method → target method
+- `CoveredBy` edge: target method → test method
 
 ---
 
