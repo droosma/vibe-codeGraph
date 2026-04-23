@@ -575,6 +575,38 @@ static async Task<int> RunInitAsync(string[] args)
         Console.WriteLine(".mcp.json already exists — skipped");
     }
 
+    // apm.yml — Microsoft APM (Agent Package Manager)
+    if (selectedSln is not null)
+    {
+        var apmPath = Path.Combine(currentDir, "apm.yml");
+        if (!File.Exists(apmPath))
+        {
+            var packageName = Regex.Replace(
+                Path.GetFileNameWithoutExtension(selectedSln).ToLowerInvariant(),
+                @"[^a-z0-9._-]", "-");
+            var apmContent = $"""
+                name: {packageName}
+                version: 1.0.0
+                description: Agent configuration for {Path.GetFileNameWithoutExtension(selectedSln)}
+
+                dependencies:
+                  apm: []
+                  mcp:
+                    - name: codegraph
+                      registry: false
+                      transport: stdio
+                      command: dotnet
+                      args: ["codegraph", "mcp"]
+                """;
+            await File.WriteAllTextAsync(apmPath, apmContent);
+            Console.WriteLine("Created apm.yml");
+        }
+        else
+        {
+            Console.WriteLine("apm.yml already exists — skipped");
+        }
+    }
+
     // --- Step 1: Detect / select agents ---
     Console.WriteLine();
     Console.WriteLine("CodeGraph Agent Setup");

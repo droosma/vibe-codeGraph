@@ -16,6 +16,8 @@ permissions: read-all
 network: defaults
 
 safe-outputs:
+  noop:
+    report-as-issue: false
   create-pull-request:
     draft: true
     protected-files: fallback-to-issue

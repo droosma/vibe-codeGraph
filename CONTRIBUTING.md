@@ -23,7 +23,7 @@ dotnet build CodeGraph.sln
 dotnet test CodeGraph.sln
 ```
 
-All 95+ tests should pass. If they don't, check that you have the correct .NET SDK version.
+All 461+ tests should pass (922 total runs across net8.0 and net10.0). If they don't, check that you have the correct .NET SDK version.
 
 ### Mutation Testing
 
@@ -50,7 +50,7 @@ CodeGraph.sln
 │   │   ├── IO/                      # GraphWriter, GraphReader, GraphMerger
 │   │   └── Configuration/           # CodeGraphConfig, ConfigLoader
 │   ├── CodeGraph.Indexer/           # CLI: codegraph index
-│   │   ├── Passes/                  # SyntaxPass, SemanticPass
+│   │   ├── Passes/                  # SyntaxPass, SemanticPass, DiPass, TestCoveragePass
 │   │   └── Workspace/               # HybridWorkspaceLoader, parsers, resolvers
 │   └── CodeGraph.Query/             # CLI: codegraph query
 │       ├── QueryEngine.cs           # Subgraph extraction + pattern matching
@@ -70,7 +70,7 @@ CodeGraph.sln
 ### Key Design Decisions
 
 - **No MSBuildWorkspace** — The indexer uses a hybrid approach: `dotnet build` for compilation, then manual assembly of Roslyn `CSharpCompilation` objects via `HybridWorkspaceLoader`. This avoids MSBuildWorkspace reliability issues.
-- **Two-pass indexing** — `SyntaxPass` extracts structure, `SemanticPass` resolves relationships, `DiPass` maps DI registrations, `TestCoveragePass` links tests to production code. Each pass is focused and independently testable.
+- **Four-pass indexing** — `SyntaxPass` extracts structure, `SemanticPass` resolves relationships, `DiPass` maps DI registrations, `TestCoveragePass` links tests to production code. Each pass is focused and independently testable.
 - **Records everywhere** — `GraphNode`, `GraphEdge`, `ProjectGraph`, `GraphMetadata`, `QueryResult` are all immutable records.
 - **Split output** — Graph files are split by assembly (one per project), external dependencies go to `_external.json` as an SBOM-like graph. Designed for LLM context window consumption.
 - **Minimal dependencies** — Only `Microsoft.CodeAnalysis.CSharp` in the indexer. Core and Query have no external NuGet dependencies.

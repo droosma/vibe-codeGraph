@@ -9,9 +9,9 @@ flowchart LR
     A[".sln file"] --> B["Hybrid Workspace Loader"]
     B --> C["CSharpCompilation\n(per project)"]
     C --> D["SyntaxPass"]
-    D --> E["Nodes + Contains edges"]
-    E --> F["SemanticPass"]
-    F --> G["Semantic edges +\nexternal nodes"]
+    D --> E["SemanticPass"]
+    E --> F["DiPass"]
+    F --> G["TestCoveragePass"]
     G --> H["GraphWriter"]
     H --> I[".codegraph/\nJSON files"]
     I --> J["GraphReader"]
@@ -72,7 +72,7 @@ Each `ProjectCompilation` is a self-contained Roslyn compilation ready for analy
 
 ## Pass Architecture
 
-Indexing runs two sequential passes over each compilation. This separation keeps each pass focused and independently testable.
+Indexing runs four sequential passes over each compilation. This separation keeps each pass focused and independently testable.
 
 ### SyntaxPass
 
@@ -111,13 +111,47 @@ Uses the Roslyn **semantic model** to resolve relationships between symbols:
 | Interfaces | `Implements` | Type declaration interface list |
 | Parameter/return/field types | `DependsOn` | Symbol type analysis |
 | Method overrides | `Overrides` | Override keyword detection |
-| IoC registrations | `ResolvesTo` | DI registration pattern matching |
-| Test coverage | `Covers` | Test method → tested method heuristics |
+| Symbol references | `References` | `IdentifierNameSyntax` resolved to referenced symbol |
 
 When a target symbol lives outside the solution (external assembly), the pass:
 1. Creates an **external node** (with `IsExternal = true`)
 2. Records the `PackageSource` (NuGet package name)
 3. Optionally records a `SourceLink` URL
+
+### DiPass
+
+**Location:** `src/CodeGraph.Indexer/Passes/DiPass.cs`
+
+Detects .NET dependency injection registrations and emits `ResolvesTo` edges from the service interface to the implementation type.
+
+| Registration Method | Edge Created |
+|---------------------|-------------|
+| `AddScoped<TService, TImpl>()` | `TService` → `TImpl` (`ResolvesTo`) |
+| `AddTransient<TService, TImpl>()` | `TService` → `TImpl` (`ResolvesTo`) |
+| `AddSingleton<TService, TImpl>()` | `TService` → `TImpl` (`ResolvesTo`) |
+| `TryAddScoped<TService, TImpl>()` | `TService` → `TImpl` (`ResolvesTo`) |
+| `TryAddTransient<TService, TImpl>()` | `TService` → `TImpl` (`ResolvesTo`) |
+| `TryAddSingleton<TService, TImpl>()` | `TService` → `TImpl` (`ResolvesTo`) |
+
+Both generic overloads (`AddScoped<IFoo, Foo>()`) and `typeof` overloads (`AddScoped(typeof(IFoo), typeof(Foo))`) are supported.
+
+### TestCoveragePass
+
+**Location:** `src/CodeGraph.Indexer/Passes/TestCoveragePass.cs`
+
+Links test methods to the production methods they call, emitting bidirectional `Covers` / `CoveredBy` edges.
+
+**Test framework detection** — A method is considered a test if it has any of the following attributes:
+
+| Framework | Attributes |
+|-----------|-----------|
+| xUnit | `[Fact]`, `[Theory]` |
+| NUnit | `[Test]`, `[TestCase]` |
+| MSTest | `[TestMethod]` |
+
+For each test method, the pass walks invocations within the method body and resolves them to target symbols. For each resolved target:
+- `Covers` edge: test method → target method
+- `CoveredBy` edge: target method → test method
 
 ---
 
