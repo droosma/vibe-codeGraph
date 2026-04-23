@@ -60,7 +60,10 @@ public static class GraphDiffContextFormatter
         {
             if (!string.IsNullOrWhiteSpace(node.FilePath))
             {
-                sb.AppendLine($"- {node.Id} ({node.Kind}) — {node.FilePath}:{node.StartLine}-{node.EndLine}");
+                if (node.StartLine > 0 && node.EndLine > 0)
+                    sb.AppendLine($"- {node.Id} ({node.Kind}) — {node.FilePath}:{node.StartLine}-{node.EndLine}");
+                else
+                    sb.AppendLine($"- {node.Id} ({node.Kind}) — {node.FilePath}");
             }
             else
             {

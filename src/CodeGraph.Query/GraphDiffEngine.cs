@@ -60,14 +60,14 @@ public static class GraphDiffEngine
             .ToList();
 
         var baseEdgeMap = baseEdges
-            .GroupBy(GetEdgeKey, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            .GroupBy(GetEdgeKey)
+            .ToDictionary(group => group.Key, group => group.First());
         var headEdgeMap = headEdges
-            .GroupBy(GetEdgeKey, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            .GroupBy(GetEdgeKey)
+            .ToDictionary(group => group.Key, group => group.First());
 
         var addedEdges = headEdgeMap.Keys
-            .Except(baseEdgeMap.Keys, StringComparer.Ordinal)
+            .Except(baseEdgeMap.Keys)
             .Select(key => headEdgeMap[key])
             .OrderBy(edge => edge.FromId, StringComparer.Ordinal)
             .ThenBy(edge => edge.ToId, StringComparer.Ordinal)
@@ -75,7 +75,7 @@ public static class GraphDiffEngine
             .ToList();
 
         var removedEdges = baseEdgeMap.Keys
-            .Except(headEdgeMap.Keys, StringComparer.Ordinal)
+            .Except(headEdgeMap.Keys)
             .Select(key => baseEdgeMap[key])
             .OrderBy(edge => edge.FromId, StringComparer.Ordinal)
             .ThenBy(edge => edge.ToId, StringComparer.Ordinal)
@@ -94,8 +94,20 @@ public static class GraphDiffEngine
         };
     }
 
-    private static string GetEdgeKey(GraphEdge edge)
+    private static EdgeKey GetEdgeKey(GraphEdge edge)
     {
-        return $"{edge.FromId}|{edge.ToId}|{edge.Type}|{edge.IsExternal}|{edge.Resolution ?? string.Empty}";
+        return new EdgeKey(
+            edge.FromId,
+            edge.ToId,
+            edge.Type,
+            edge.IsExternal,
+            edge.Resolution ?? string.Empty);
     }
+
+    private readonly record struct EdgeKey(
+        string FromId,
+        string ToId,
+        EdgeType Type,
+        bool IsExternal,
+        string Resolution);
 }
