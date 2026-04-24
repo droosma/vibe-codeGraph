@@ -2,6 +2,10 @@ using CodeGraph.Indexer.Workspace;
 
 namespace CodeGraph.Indexer.Tests.Workspace;
 
+[CollectionDefinition("FrameworkRefResolver", DisableParallelization = true)]
+public class FrameworkRefResolverCollection { }
+
+[Collection("FrameworkRefResolver")]
 public class FrameworkRefResolverTests
 {
     [Fact]
@@ -45,6 +49,7 @@ public class FrameworkRefResolverTests
 /// Tests using a synthetic SDK directory structure via DOTNET_ROOT to exercise
 /// private methods (FindBestVersionDir, GetDotnetRoots) through Resolve.
 /// </summary>
+[Collection("FrameworkRefResolver")]
 public class FrameworkRefResolverSyntheticTests : IDisposable
 {
     private readonly string _tempRoot;
@@ -54,11 +59,13 @@ public class FrameworkRefResolverSyntheticTests : IDisposable
     {
         _tempRoot = Path.Combine(Path.GetTempPath(), $"CodeGraphTest_{Guid.NewGuid():N}");
         _originalDotnetRoot = Environment.GetEnvironmentVariable("DOTNET_ROOT");
+        FrameworkRefResolver.ClearCache();
     }
 
     public void Dispose()
     {
         Environment.SetEnvironmentVariable("DOTNET_ROOT", _originalDotnetRoot);
+        FrameworkRefResolver.ClearCache();
         try { Directory.Delete(_tempRoot, recursive: true); } catch { }
     }
 

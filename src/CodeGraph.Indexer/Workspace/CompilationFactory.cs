@@ -11,7 +11,8 @@ public static class CompilationFactory
         IEnumerable<string> referenceDllPaths,
         string? langVersion = null,
         bool nullableEnabled = true,
-        string[]? preprocessorSymbols = null)
+        string[]? preprocessorSymbols = null,
+        MetadataReferenceCache? referenceCache = null)
     {
         var parseOptions = new CSharpParseOptions(
             languageVersion: ParseLangVersion(langVersion),
@@ -45,7 +46,14 @@ public static class CompilationFactory
 
             try
             {
-                references.Add(MetadataReference.CreateFromFile(dllPath));
+                if (referenceCache != null)
+                {
+                    references.Add(referenceCache.GetOrCreate(dllPath));
+                }
+                else
+                {
+                    references.Add(MetadataReference.CreateFromFile(dllPath));
+                }
             }
             catch (Exception ex)
             {

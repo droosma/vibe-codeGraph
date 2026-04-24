@@ -78,6 +78,7 @@ Each project file contains a `ProjectGraph` object:
       "containingTypeId": null,
       "containingNamespaceId": "MyApp.Services",
       "accessibility": "public",
+      "assemblyName": "MyApp.Services",
       "metadata": {
         "isAbstract": "false",
         "isSealed": "false"
@@ -95,6 +96,7 @@ Each project file contains a `ProjectGraph` object:
       "containingTypeId": "MyApp.Services.OrderService",
       "containingNamespaceId": "MyApp.Services",
       "accessibility": "public",
+      "assemblyName": "MyApp.Services",
       "metadata": {
         "isAsync": "true"
       }

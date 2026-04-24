@@ -45,7 +45,7 @@ Controls which projects are indexed and how.
 | `includeExternalPackages` | `string[]` | `[]` | NuGet package names to track as external nodes (e.g., `"MediatR"`). |
 | `excludeExternalPackages` | `string[]` | `["Microsoft.*", "System.*"]` | NuGet package patterns to ignore. |
 | `maxDepthForExternals` | `int` | `1` | How many levels deep to traverse into external types. |
-| `configuration` | `string` | `"Debug"` | Build configuration passed to `dotnet build`. |
+| `configuration` | `string` | `"Debug"` | Build configuration for Roslyn compilation. |
 | `preprocessorSymbols` | `string[]` | `[]` | Additional preprocessor symbols for compilation. |
 
 ---
@@ -208,7 +208,8 @@ CLI flags take precedence over config file values:
 | `--configuration` | `index.configuration` |
 | `--projects` | `index.includeProjects` |
 | `--config <path>` | Config file location |
-| `--skip-build` | *(no config equivalent)* — skip the `dotnet build` step |
+| `--skip-restore` | *(no config equivalent)* — skip the `dotnet restore` step |
+| `--skip-build` | Hidden alias for `--skip-restore` |
 | `--changed-only` | *(no config equivalent)* — incremental re-index only changed projects |
 | `--verbose` | *(no config equivalent)* — enable verbose output |
 
@@ -217,6 +218,6 @@ CLI flags take precedence over config file values:
 ## Tips
 
 - **Minimal config**: You only need `solution` — everything else has sensible defaults.
-- **CI override**: Use `--configuration Release --skip-build` in CI if you've already built.
+- **CI override**: Use `--configuration Release --skip-restore` in CI if you've already restored.
 - **Large repos**: Increase `maxNodes` or use `--namespace` / `--project` filters to scope queries.
 - **External packages**: Add frequently-used libraries to `includeExternalPackages` to see cross-assembly call chains.

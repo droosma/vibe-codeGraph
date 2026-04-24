@@ -14,7 +14,7 @@ public class HybridWorkspaceLoaderTests
         var fakePath = Path.Combine(Path.GetTempPath(), "nonexistent_" + Guid.NewGuid() + ".sln");
 
         var ex = await Assert.ThrowsAsync<FileNotFoundException>(
-            () => loader.LoadAsync(fakePath, skipBuild: true));
+            () => loader.LoadAsync(fakePath, skipRestore: true));
         Assert.Contains(fakePath, ex.Message);
     }
 
@@ -82,7 +82,7 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
         var slnPath = CreateMinimalSolution(root, ("TestProj", @"TestProj\TestProj.csproj"));
 
         var loader = new HybridWorkspaceLoader();
-        var results = await loader.LoadAsync(slnPath, skipBuild: true);
+        var results = await loader.LoadAsync(slnPath, skipRestore: true);
 
         Assert.Single(results);
         var pc = results[0];
@@ -103,7 +103,7 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
             ("ProjB", @"ProjB\ProjB.csproj"));
 
         var loader = new HybridWorkspaceLoader();
-        var results = await loader.LoadAsync(slnPath, skipBuild: true);
+        var results = await loader.LoadAsync(slnPath, skipRestore: true);
 
         Assert.Equal(2, results.Count);
         Assert.Contains(results, r => r.ProjectName == "ProjA");
@@ -121,7 +121,7 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
             ("Missing", @"Missing\Missing.csproj"));
 
         var loader = new HybridWorkspaceLoader();
-        var results = await loader.LoadAsync(slnPath, skipBuild: true);
+        var results = await loader.LoadAsync(slnPath, skipRestore: true);
 
         Assert.Single(results);
         Assert.Equal("Good", results[0].ProjectName);
@@ -144,7 +144,7 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
         var slnPath = CreateMinimalSolution(root, ("TestProj", @"TestProj\TestProj.csproj"));
 
         var loader = new HybridWorkspaceLoader();
-        var results = await loader.LoadAsync(slnPath, skipBuild: true, configuration: "Debug");
+        var results = await loader.LoadAsync(slnPath, skipRestore: true, configuration: "Debug");
 
         var compilation = results[0].Compilation;
         var typeNames = compilation.SyntaxTrees
@@ -175,7 +175,7 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
         var slnPath = CreateMinimalSolution(root, ("TestProj", @"TestProj\TestProj.csproj"));
 
         var loader = new HybridWorkspaceLoader();
-        var results = await loader.LoadAsync(slnPath, skipBuild: true, configuration: "Release");
+        var results = await loader.LoadAsync(slnPath, skipRestore: true, configuration: "Release");
 
         var compilation = results[0].Compilation;
         var typeNames = compilation.SyntaxTrees
@@ -203,7 +203,7 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
         var slnPath = CreateMinimalSolution(root, ("TestProj", @"TestProj\TestProj.csproj"));
 
         var loader = new HybridWorkspaceLoader();
-        var results = await loader.LoadAsync(slnPath, skipBuild: true,
+        var results = await loader.LoadAsync(slnPath, skipRestore: true,
             preprocessorSymbols: new[] { "MY_DEFINE" });
 
         var typeNames = results[0].Compilation.SyntaxTrees
@@ -226,8 +226,8 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
         cts.Cancel();
 
         var loader = new HybridWorkspaceLoader();
-        await Assert.ThrowsAsync<OperationCanceledException>(
-            () => loader.LoadAsync(slnPath, skipBuild: true, cancellationToken: cts.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => loader.LoadAsync(slnPath, skipRestore: true, cancellationToken: cts.Token));
     }
 
     [Fact]
@@ -238,7 +238,7 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
         var slnPath = CreateMinimalSolution(root, ("TestProj", @"TestProj\TestProj.csproj"));
 
         var loader = new HybridWorkspaceLoader();
-        var results = await loader.LoadAsync(slnPath, skipBuild: true);
+        var results = await loader.LoadAsync(slnPath, skipRestore: true);
 
         Assert.NotEmpty(results[0].Compilation.SyntaxTrees);
     }
@@ -251,7 +251,7 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
         var slnPath = CreateMinimalSolution(root, ("TestProj", @"TestProj\TestProj.csproj"));
 
         var loader = new HybridWorkspaceLoader();
-        var results = await loader.LoadAsync(slnPath, skipBuild: true);
+        var results = await loader.LoadAsync(slnPath, skipRestore: true);
 
         Assert.EndsWith("TestProj.csproj", results[0].ProjectPath);
     }
@@ -272,7 +272,7 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
         try
         {
             var loader = new HybridWorkspaceLoader();
-            await loader.LoadAsync(slnPath, skipBuild: true);
+            await loader.LoadAsync(slnPath, skipRestore: true);
         }
         finally
         {
@@ -300,7 +300,7 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
         try
         {
             var loader = new HybridWorkspaceLoader();
-            await loader.LoadAsync(slnPath, skipBuild: true);
+            await loader.LoadAsync(slnPath, skipRestore: true);
         }
         finally
         {
@@ -327,7 +327,7 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
         try
         {
             var loader = new HybridWorkspaceLoader();
-            await loader.LoadAsync(slnPath, skipBuild: true);
+            await loader.LoadAsync(slnPath, skipRestore: true);
         }
         finally
         {
@@ -345,7 +345,7 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
         var root = CreateTempDir();
         CreateMinimalProject(root, "BadBuild", "BadBuild");
 
-        // Add a non-existent NuGet package to force dotnet build to fail
+        // Add a non-existent NuGet package to force dotnet restore to fail
         var csprojPath = Path.Combine(root, "BadBuild", "BadBuild.csproj");
         var csproj = File.ReadAllText(csprojPath).Replace(
             "</Project>",
@@ -357,7 +357,7 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
             """);
         File.WriteAllText(csprojPath, csproj);
 
-        // Create a proper solution file that dotnet build can understand
+        // Create a proper solution file that dotnet restore can understand
         var slnPath = Path.Combine(root, "Test.sln");
         var sep = Path.DirectorySeparatorChar;
         var slnContent = "Microsoft Visual Studio Solution File, Format Version 12.00\n"
@@ -380,8 +380,8 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
         try
         {
             var loader = new HybridWorkspaceLoader();
-            // skipBuild: false — the real dotnet build will fail
-            var results = await loader.LoadAsync(slnPath, skipBuild: false);
+            // skipRestore: false — the real dotnet restore will fail
+            var results = await loader.LoadAsync(slnPath, skipRestore: false);
 
             // Should still return results (best-effort Roslyn compilation)
             Assert.Single(results);
@@ -392,7 +392,7 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
         }
 
         var stderr = sw.ToString();
-        Assert.Contains("Warning: dotnet build failed", stderr);
+        Assert.Contains("Warning: dotnet restore failed", stderr);
     }
 
     public void Dispose()

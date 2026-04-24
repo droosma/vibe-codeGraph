@@ -145,7 +145,8 @@ codegraph index --solution <path.sln|path.slnx> [options]
 | `--projects <filter>` | Wildcard filter for project names | All projects |
 | `--config <path>` | Path to `codegraph.json` config | Auto-detected |
 | `--configuration <name>` | Build configuration | `Debug` |
-| `--skip-build` | Skip `dotnet build` step | `false` |
+| `--skip-restore` | Skip `dotnet restore` step | `false` |
+| `--skip-build` | Hidden alias for `--skip-restore` | `false` |
 | `--changed-only` | Incremental re-index; only re-index projects with changes since last indexed commit | `false` |
 | `--verbose` | Enable verbose output | `false` |
 
@@ -313,9 +314,9 @@ See [codegraph.json.example](codegraph.json.example) for a fully annotated examp
 
 ```
 ┌─────────────┐     ┌──────────────┐     ┌──────────────┐     ┌───────────┐
-│ dotnet build │────▸│ Syntax Pass  │────▸│ Semantic Pass │────▸│ JSON Graph│
-│ + Hybrid     │     │ (structure)  │     │ (relations)  │     │ (per-asm) │
-│ Workspace    │     └──────────────┘     └──────────────┘     └───────────┘
+│ dotnet       │────▸│ Syntax Pass  │────▸│ Semantic Pass │────▸│ JSON Graph│
+│ restore +    │     │ (structure)  │     │ (relations)  │     │ (per-asm) │
+│ Hybrid       │     └──────────────┘     └──────────────┘     └───────────┘
 └─────────────┘           │                     │                    │
                           │              ┌──────────────┐            ▼
                           │              │   DI Pass    │     ┌─────────────┐
@@ -330,7 +331,7 @@ See [codegraph.json.example](codegraph.json.example) for a fully annotated examp
                                                               └─────────────┘
 ```
 
-1. **Hybrid Workspace Loader** — Runs `dotnet build`, then parses `.sln` / `.slnx` / `.csproj` / `project.assets.json` to assemble Roslyn `CSharpCompilation` objects directly (no MSBuildWorkspace). If the build fails, a warning is emitted to stderr and indexing continues with best-effort compilation.
+1. **Hybrid Workspace Loader** — Runs `dotnet restore`, then parses `.sln` / `.slnx` / `.csproj` / `project.assets.json` to assemble Roslyn `CSharpCompilation` objects directly (no MSBuildWorkspace). If the restore fails, a warning is emitted to stderr and indexing continues with best-effort compilation.
 2. **Syntax Pass** — Walks syntax trees to extract namespaces, types, methods, properties, fields, constructors, and events. Creates structural `Contains` edges. Enriches nodes with metadata (`isAbstract`, `isStatic`, `isAsync`, `returnType`, etc.).
 3. **Semantic Pass** — Uses the Roslyn semantic model to resolve calls, inheritance, interface implementations, type dependencies, references, and overrides. Creates external nodes for cross-assembly references.
 4. **DI Pass** — Detects `AddScoped/AddTransient/AddSingleton` patterns to emit `ResolvesTo` edges with lifetime metadata.
