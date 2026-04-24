@@ -36,7 +36,7 @@ Use this skill when:
 
 ## How It Works
 
-1. CodeGraph runs `dotnet build` on your solution
+1. CodeGraph runs `dotnet restore` on your solution to generate `project.assets.json` files
 2. It walks the Roslyn syntax trees to extract structure (types, methods, properties)
 3. It uses the semantic model to resolve relationships (calls, inheritance, DI, tests)
 4. It writes JSON graph files to `.codegraph/` — one per assembly, plus externals and metadata
@@ -85,12 +85,12 @@ Index only specific projects:
 codegraph index --solution YourApp.sln --projects "MyApp.Orders.*"
 ```
 
-### Skip Build
+### Skip Restore
 
-If you've already built the solution:
+If you've already restored the solution:
 
 ```bash
-codegraph index --solution YourApp.sln --skip-build
+codegraph index --solution YourApp.sln --skip-restore
 ```
 
 ## CLI Reference
@@ -106,7 +106,8 @@ codegraph index --solution <path.sln> [options]
 | `--projects <filter>` | Wildcard filter for project names | All projects |
 | `--config <path>` | Path to `codegraph.json` config | Auto-detected |
 | `--configuration <name>` | Build configuration | `Debug` |
-| `--skip-build` | Skip `dotnet build` step | `false` |
+| `--skip-restore` | Skip `dotnet restore` step | `false` |
+| `--skip-build` | Hidden alias for `--skip-restore` | `false` |
 | `--changed-only` | Incremental: only re-index changed projects | `false` |
 | `--verbose` | Enable verbose output | `false` |
 
@@ -135,9 +136,9 @@ codegraph query "*" --depth 0 --max-nodes 5
 
 ## Fallback Behavior
 
-1. **Build fails** → Fix compilation errors first, then re-index
+1. **Restore fails** → Fix package resolution errors first, then re-index
 2. **Solution not found** → Provide explicit `--solution` path
-3. **Large solutions are slow** → Use `--projects` to filter, or `--skip-build` if already built
+3. **Large solutions are slow** → Use `--projects` to filter, or `--skip-restore` if already restored
 4. **Out of memory** → Index subsets with `--projects` filter
 5. **CodeGraph not installed** → Run `dotnet tool install -g CodeGraph`
 
@@ -146,5 +147,5 @@ codegraph query "*" --depth 0 --max-nodes 5
 1. **Index in CI** — add `codegraph index --solution YourApp.sln --changed-only` to your CI pipeline to keep the graph fresh
 2. **Commit `.codegraph/` selectively** — graph files can be large; consider `.gitignore`-ing them and regenerating in CI
 3. **Use `--changed-only`** — for incremental updates, it's much faster than a full re-index
-4. **Use `--skip-build`** — if your CI already builds the solution, skip the redundant build step
+4. **Use `--skip-restore`** — if your CI already restored packages, skip the redundant restore step
 5. **Filter large solutions** — use `--projects` to index only the projects you care about
