@@ -9,10 +9,11 @@ CodeGraph integrates with AI coding agents via **MCP** (Model Context Protocol),
    dotnet tool install -g CodeGraph
    ```
 
-2. **Initialize config + MCP registration**:
+2. **Initialize config, MCP registration, and agent skill files**:
    ```bash
    codegraph init
    # → Creates codegraph.json, .vscode/mcp.json, .mcp.json, apm.yml
+   # → Auto-detects your AI agents and writes skill files for each
    ```
 
 3. **Index your codebase**:
@@ -54,6 +55,67 @@ For **VS Code Copilot**: restart VS Code (or reload window). You may need to tru
 For **Claude Code**: the server is auto-discovered from `.mcp.json`. No restart needed.
 
 For **APM**: run `apm install` to wire the MCP server into all detected clients.
+
+---
+
+## Agent Skill Scaffolding
+
+`codegraph init` goes beyond MCP config files — it also writes **agent skill files** that teach each agent how to use CodeGraph effectively. Skill files are plain Markdown (or shell scripts) committed to your repo so every developer and every agent instance gets the same instructions automatically.
+
+### Auto-Detection
+
+When you run `codegraph init` without `--agent`, it scans the repo root for known agent configuration markers:
+
+| Agent | Detected by |
+|-------|-------------|
+| Claude Code | `.claude/` directory or `CLAUDE.md` |
+| GitHub Copilot | `.github/copilot-instructions.md` |
+| OpenCode / Codex | `AGENTS.md` |
+| Cursor | `.cursorrules` or `.cursor/rules/` directory |
+
+For each detected agent, the matching skill files are written. The generic `.codegraph/INSTRUCTIONS.md` is **always** written regardless of what agents are detected.
+
+### Files Written Per Agent
+
+| Agent | File(s) | Behavior |
+|-------|---------|---------|
+| Claude Code | `.claude/skills/codegraph/SKILL.md` | Created (skipped if exists without `--force`) |
+| Claude Code | `.claude/skills/codegraph/scripts/query-wrapper.sh` | Created (skipped if exists without `--force`) |
+| GitHub Copilot | `.github/copilot-instructions.md` | CodeGraph section appended (idempotent via marker) |
+| OpenCode / Codex | `AGENTS.md` | CodeGraph section appended (idempotent via marker) |
+| Cursor | `.cursor/rules/codegraph.md` | Created (skipped if exists without `--force`) |
+| *(all agents)* | `.codegraph/INSTRUCTIONS.md` | Created (skipped if exists without `--force`) |
+
+### Explicit Agent Selection
+
+Skip auto-detection and install for a specific agent with `--agent`:
+
+```bash
+codegraph init --agent claude        # Claude Code only
+codegraph init --agent copilot       # GitHub Copilot only
+codegraph init --agent opencode      # OpenCode / Codex only
+codegraph init --agent cursor        # Cursor only
+codegraph init --agent all           # All supported agents
+```
+
+### Updating Skill Files
+
+Skill files are versioned with the CLI binary. To update them after a CodeGraph upgrade:
+
+```bash
+codegraph init --force
+```
+
+`--force` overwrites existing skill files (except appended sections, which are skipped if the marker is already present).
+
+### Committing Skill Files
+
+Commit the generated skill files so everyone on the team and every CI agent gets them automatically:
+
+```bash
+git add .claude/ .github/copilot-instructions.md AGENTS.md .cursor/ .codegraph/INSTRUCTIONS.md
+git commit -m "Add CodeGraph agent skills"
+```
 
 ---
 
