@@ -375,6 +375,7 @@ Stryker generates HTML reports in `StrykerOutput/` with mutation scores per proj
 - [Graph Schema Reference](docs/graph-schema.md)
 - [Configuration Reference](docs/configuration.md)
 - [Agent Setup Guide](docs/agent-setup.md)
+- [Graph Diff How-to Guide](docs/diff.md)
 
 ---
 
