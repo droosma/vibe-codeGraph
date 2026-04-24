@@ -749,7 +749,9 @@ static async Task<int> RunInitAsync(string[] args)
         Console.WriteLine($"Created {ConfigLoader.DefaultFileName} with {entries.Count} solutions");
     }
 
-    // Determine a primary solution name for agent config files
+    // Determine a primary solution name for agent config files (APM).
+    // In multi-solution setups, the first discovered solution is used for the package name.
+    // This only affects the APM config name — MCP federation queries all solutions regardless.
     string? selectedSln = solutionFlag
         ?? (slnFiles.Length > 0 ? Path.GetFileName(slnFiles[0]) : null);
 
