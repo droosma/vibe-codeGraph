@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 
 namespace CodeGraph.Indexer.Workspace;
@@ -6,7 +7,17 @@ public record ResolvedPackage(string PackageId, string Version, string DllPath);
 
 public static class AssetsFileResolver
 {
+    private static readonly ConcurrentDictionary<(string Directory, string Framework), IReadOnlyList<ResolvedPackage>> s_cache = new();
+
     public static IReadOnlyList<ResolvedPackage> Resolve(string projectDirectory, string targetFramework)
+    {
+        var key = (projectDirectory, targetFramework);
+        return s_cache.GetOrAdd(key, static k => ResolveCore(k.Directory, k.Framework));
+    }
+
+    internal static void ClearCache() => s_cache.Clear();
+
+    private static IReadOnlyList<ResolvedPackage> ResolveCore(string projectDirectory, string targetFramework)
     {
         var assetsPath = Path.Combine(projectDirectory, "obj", "project.assets.json");
         if (!File.Exists(assetsPath))

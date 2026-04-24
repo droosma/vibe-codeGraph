@@ -249,7 +249,7 @@ The `--ref` flag looks for `.codegraph-<ref>` and `.codegraph-<short-sha>` in th
 The graph is deterministic for the same source, but staleness can cause phantom diffs. Verify both snapshots were built from clean builds:
 
 ```bash
-codegraph index --solution MyApp.sln --skip-build  # only if assemblies are up to date
+codegraph index --solution MyApp.sln --skip-restore  # only if packages are already restored
 ```
 
 **Empty diff despite code changes**
