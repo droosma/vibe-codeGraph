@@ -208,6 +208,9 @@ CLI flags take precedence over config file values:
 | `--configuration` | `index.configuration` |
 | `--projects` | `index.includeProjects` |
 | `--config <path>` | Config file location |
+| `--skip-build` | *(no config equivalent)* — skip the `dotnet build` step |
+| `--changed-only` | *(no config equivalent)* — incremental re-index only changed projects |
+| `--verbose` | *(no config equivalent)* — enable verbose output |
 
 ---
 
