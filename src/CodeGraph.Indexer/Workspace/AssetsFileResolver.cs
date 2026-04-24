@@ -7,12 +7,12 @@ public record ResolvedPackage(string PackageId, string Version, string DllPath);
 
 public static class AssetsFileResolver
 {
-    private static readonly ConcurrentDictionary<string, IReadOnlyList<ResolvedPackage>> s_cache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<(string Directory, string Framework), IReadOnlyList<ResolvedPackage>> s_cache = new();
 
     public static IReadOnlyList<ResolvedPackage> Resolve(string projectDirectory, string targetFramework)
     {
-        var key = $"{projectDirectory}|{targetFramework}";
-        return s_cache.GetOrAdd(key, _ => ResolveCore(projectDirectory, targetFramework));
+        var key = (projectDirectory, targetFramework);
+        return s_cache.GetOrAdd(key, static k => ResolveCore(k.Directory, k.Framework));
     }
 
     internal static void ClearCache() => s_cache.Clear();

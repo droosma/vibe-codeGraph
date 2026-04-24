@@ -64,7 +64,7 @@ public class HybridWorkspaceLoader
                 MaxDegreeOfParallelism = Environment.ProcessorCount,
                 CancellationToken = cancellationToken,
             },
-            async (item, ct) =>
+            (item, ct) =>
             {
                 var (info, index) = item;
                 var count = Interlocked.Increment(ref compiledCount);
@@ -107,7 +107,7 @@ public class HybridWorkspaceLoader
                     info.TargetFramework,
                     compilation)));
 
-                await Task.CompletedTask;
+                return ValueTask.CompletedTask;
             });
 
         Console.Error.WriteLine();

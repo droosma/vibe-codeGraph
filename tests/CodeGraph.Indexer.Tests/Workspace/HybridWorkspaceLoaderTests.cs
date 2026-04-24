@@ -226,9 +226,8 @@ public class HybridWorkspaceLoaderIntegrationTests : IDisposable
         cts.Cancel();
 
         var loader = new HybridWorkspaceLoader();
-        var ex = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => loader.LoadAsync(slnPath, skipRestore: true, cancellationToken: cts.Token));
-        Assert.True(ex is OperationCanceledException);
     }
 
     [Fact]
