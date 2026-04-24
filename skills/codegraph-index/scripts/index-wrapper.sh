@@ -22,12 +22,12 @@ fi
 
 # Auto-detect solution if not provided
 SOLUTION="${1:-}"
-if [ -n "$SOLUTION" ] && [[ "$SOLUTION" == *.sln ]]; then
+if [ -n "$SOLUTION" ] && [[ "$SOLUTION" == *.sln || "$SOLUTION" == *.slnx ]]; then
   shift
 else
-  SOLUTION=$(find . -maxdepth 2 -name "*.sln" -print -quit 2>/dev/null)
+  SOLUTION=$(find . -maxdepth 2 \( -name "*.sln" -o -name "*.slnx" \) -print -quit 2>/dev/null)
   if [ -z "$SOLUTION" ]; then
-    echo "Error: No .sln file found. Provide the path: index-wrapper.sh <path.sln>" >&2
+    echo "Error: No .sln or .slnx file found. Provide the path: index-wrapper.sh <path.sln>" >&2
     exit 1
   fi
   echo "Auto-detected solution: $SOLUTION" >&2
