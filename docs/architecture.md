@@ -6,7 +6,7 @@ CodeGraph builds a semantic graph of C# codebases using Roslyn. This document de
 
 ```mermaid
 flowchart LR
-    A[".sln file"] --> B["Hybrid Workspace Loader"]
+    A[".sln / .slnx file"] --> B["Hybrid Workspace Loader"]
     B --> C["CSharpCompilation\n(per project)"]
     C --> D["SyntaxPass"]
     D --> E["SemanticPass"]
@@ -29,7 +29,7 @@ CodeGraph deliberately avoids `MSBuildWorkspace` due to its well-known reliabili
 
 1. **Build** — Runs `dotnet build <sln> -c <config> --no-incremental -v quiet` to produce assemblies and restore packages. If the build fails, a warning is emitted to stderr and indexing **continues in best-effort mode** — Roslyn can still analyze source files, though some cross-project references may be unresolved. Use `--skip-build` to bypass the build step entirely (e.g. in CI where the solution has already been built).
 
-2. **Discovery** — Parses the `.sln` file (`SolutionParser`) using regex to find all `.csproj` project references.
+2. **Discovery** — Parses the `.sln` file (`SolutionParser`) using regex, or the `.slnx` file using XML, to find all `.csproj` project references.
 
 3. **Project Parsing** — Parses each `.csproj` (`ProjectParser`) via XML to extract:
    - Assembly name and target framework
@@ -62,7 +62,7 @@ Each `ProjectCompilation` is a self-contained Roslyn compilation ready for analy
 
 | Component | Purpose |
 |-----------|---------|
-| `SolutionParser` | Regex-based `.sln` parser, extracts project paths |
+| `SolutionParser` | Parses `.sln` (regex) and `.slnx` (XML) files, extracts project paths |
 | `ProjectParser` | XML `.csproj` parser (SDK-style), handles `Directory.Build.props` |
 | `AssetsFileResolver` | Reads `obj/project.assets.json` for NuGet DLL paths |
 | `FrameworkRefResolver` | Locates .NET SDK reference assemblies |

@@ -585,7 +585,9 @@ static async Task<int> RunInitAsync(string[] args)
     var currentDir = Directory.GetCurrentDirectory();
 
     // --- Step 0: codegraph.json + MCP configs (existing behavior) ---
-    var slnFiles = Directory.GetFiles(currentDir, "*.sln");
+    var slnFiles = Directory.GetFiles(currentDir, "*.sln")
+        .Concat(Directory.GetFiles(currentDir, "*.slnx"))
+        .ToArray();
     string? selectedSln = solutionFlag;
 
     if (selectedSln is null && slnFiles.Length > 0)

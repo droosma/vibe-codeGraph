@@ -1,4 +1,6 @@
 using System.Text.RegularExpressions;
+using System.Xml;
+using System.Xml.Linq;
 
 namespace CodeGraph.Indexer.Workspace;
 
@@ -17,6 +19,10 @@ public static class SolutionParser
             throw new FileNotFoundException($"Solution file not found: {solutionPath}");
 
         var content = File.ReadAllText(solutionPath);
+
+        if (solutionPath.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
+            return ParseSlnxContent(content);
+
         return ParseContent(content);
     }
 
@@ -37,6 +43,51 @@ public static class SolutionParser
             {
                 entries.Add(new SolutionProjectEntry(name, relativePath, guid));
             }
+        }
+
+        return entries;
+    }
+
+    public static IReadOnlyList<SolutionProjectEntry> ParseSlnxContent(string content)
+    {
+        var entries = new List<SolutionProjectEntry>();
+
+        XDocument doc;
+        try
+        {
+            doc = XDocument.Parse(content);
+        }
+        catch (XmlException)
+        {
+            return entries;
+        }
+
+        if (doc.Root is null)
+            return entries;
+
+        foreach (var project in doc.Root.Descendants("Project"))
+        {
+            var path = project.Attribute("Path")?.Value;
+            if (string.IsNullOrEmpty(path))
+                continue;
+
+            // Skip folders (Type="Folder" or no .csproj extension)
+            var type = project.Attribute("Type")?.Value;
+            if (string.Equals(type, "Folder", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var normalizedPath = path
+                .Replace('/', Path.DirectorySeparatorChar)
+                .Replace('\\', Path.DirectorySeparatorChar);
+
+            // Filter to C# projects only
+            if (!normalizedPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var name = project.Attribute("Name")?.Value
+                       ?? Path.GetFileNameWithoutExtension(normalizedPath);
+
+            entries.Add(new SolutionProjectEntry(name, normalizedPath, string.Empty));
         }
 
         return entries;

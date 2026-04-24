@@ -32,7 +32,7 @@ Use this skill when:
 
 2. **.NET SDK** must be installed (8.0 or later)
 
-3. **A C# solution** (`.sln` file) must exist in the repository
+3. **A C# solution** (`.sln` or `.slnx` file) must exist in the repository
 
 ## How It Works
 

@@ -200,4 +200,194 @@ EndProject
     }
 
     #endregion
+
+    #region Slnx format
+
+    private const string SampleSlnxContent = @"<Solution>
+  <Folder Name=""src"">
+    <Project Path=""src/MyApp.Core/MyApp.Core.csproj"" />
+    <Project Path=""src/MyApp.Services/MyApp.Services.csproj"" />
+  </Folder>
+</Solution>";
+
+    [Fact]
+    public void ParseSlnxContent_ExtractsCSharpProjects()
+    {
+        var entries = SolutionParser.ParseSlnxContent(SampleSlnxContent);
+
+        Assert.Equal(2, entries.Count);
+    }
+
+    [Fact]
+    public void ParseSlnxContent_ExtractsProjectNames()
+    {
+        var entries = SolutionParser.ParseSlnxContent(SampleSlnxContent);
+
+        Assert.Equal("MyApp.Core", entries[0].Name);
+        Assert.Equal("MyApp.Services", entries[1].Name);
+    }
+
+    [Fact]
+    public void ParseSlnxContent_ExtractsRelativePaths()
+    {
+        var entries = SolutionParser.ParseSlnxContent(SampleSlnxContent);
+
+        Assert.Contains("MyApp.Core.csproj", entries[0].RelativePath);
+        Assert.Contains("MyApp.Services.csproj", entries[1].RelativePath);
+    }
+
+    [Fact]
+    public void ParseSlnxContent_ProjectGuid_IsEmpty()
+    {
+        var entries = SolutionParser.ParseSlnxContent(SampleSlnxContent);
+
+        Assert.All(entries, e => Assert.Equal(string.Empty, e.ProjectGuid));
+    }
+
+    [Fact]
+    public void ParseSlnxContent_FiltersFolders()
+    {
+        var content = @"<Solution>
+  <Project Path=""Docs"" Type=""Folder"" />
+  <Project Path=""src/MyApp/MyApp.csproj"" />
+</Solution>";
+
+        var entries = SolutionParser.ParseSlnxContent(content);
+
+        Assert.Single(entries);
+        Assert.Equal("MyApp", entries[0].Name);
+    }
+
+    [Fact]
+    public void ParseSlnxContent_EmptyContent_ReturnsEmpty()
+    {
+        var entries = SolutionParser.ParseSlnxContent("<Solution />");
+
+        Assert.Empty(entries);
+    }
+
+    [Fact]
+    public void ParseSlnxContent_InvalidXml_ReturnsEmpty()
+    {
+        var entries = SolutionParser.ParseSlnxContent("this is not xml");
+
+        Assert.Empty(entries);
+    }
+
+    [Fact]
+    public void ParseSlnxContent_VbprojProjects_FilteredOut()
+    {
+        var content = @"<Solution>
+  <Project Path=""src/LegacyApp/LegacyApp.vbproj"" />
+  <Project Path=""src/ModernApp/ModernApp.csproj"" />
+</Solution>";
+
+        var entries = SolutionParser.ParseSlnxContent(content);
+
+        Assert.Single(entries);
+        Assert.Equal("ModernApp", entries[0].Name);
+    }
+
+    [Fact]
+    public void ParseSlnxContent_NormalizesPathSeparators()
+    {
+        var content = @"<Solution>
+  <Project Path=""src/MyLib/MyLib.csproj"" />
+</Solution>";
+
+        var entries = SolutionParser.ParseSlnxContent(content);
+
+        Assert.Single(entries);
+        var expected = $"src{Path.DirectorySeparatorChar}MyLib{Path.DirectorySeparatorChar}MyLib.csproj";
+        Assert.Equal(expected, entries[0].RelativePath);
+    }
+
+    [Fact]
+    public void ParseSlnxContent_ExplicitNameAttribute_UsesIt()
+    {
+        var content = @"<Solution>
+  <Project Path=""src/MyLib/MyLib.csproj"" Name=""CustomName"" />
+</Solution>";
+
+        var entries = SolutionParser.ParseSlnxContent(content);
+
+        Assert.Single(entries);
+        Assert.Equal("CustomName", entries[0].Name);
+    }
+
+    [Fact]
+    public void ParseSlnxContent_NoNameAttribute_DerivesFromPath()
+    {
+        var content = @"<Solution>
+  <Project Path=""src/MyLib/MyLib.csproj"" />
+</Solution>";
+
+        var entries = SolutionParser.ParseSlnxContent(content);
+
+        Assert.Single(entries);
+        Assert.Equal("MyLib", entries[0].Name);
+    }
+
+    [Fact]
+    public void ParseSlnxContent_NestedFolders_FindsProjects()
+    {
+        var content = @"<Solution>
+  <Folder Name=""src"">
+    <Folder Name=""Core"">
+      <Project Path=""src/Core/MyApp.Core/MyApp.Core.csproj"" />
+    </Folder>
+  </Folder>
+</Solution>";
+
+        var entries = SolutionParser.ParseSlnxContent(content);
+
+        Assert.Single(entries);
+        Assert.Equal("MyApp.Core", entries[0].Name);
+    }
+
+    [Fact]
+    public void ParseSlnxContent_ProjectWithEmptyPath_Skipped()
+    {
+        var content = @"<Solution>
+  <Project Path="""" />
+  <Project Path=""src/MyApp/MyApp.csproj"" />
+</Solution>";
+
+        var entries = SolutionParser.ParseSlnxContent(content);
+
+        Assert.Single(entries);
+    }
+
+    [Fact]
+    public void Parse_SlnxFile_ExtractsProjects()
+    {
+        var testDir = Path.Combine(Directory.GetCurrentDirectory(), "_test_slnx_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(testDir);
+        try
+        {
+            var slnxPath = Path.Combine(testDir, "Test.slnx");
+            File.WriteAllText(slnxPath, SampleSlnxContent);
+
+            var entries = SolutionParser.Parse(slnxPath);
+
+            Assert.Equal(2, entries.Count);
+            Assert.Equal("MyApp.Core", entries[0].Name);
+            Assert.Equal("MyApp.Services", entries[1].Name);
+        }
+        finally
+        {
+            Directory.Delete(testDir, true);
+        }
+    }
+
+    [Fact]
+    public void Parse_SlnxFile_NonExistent_ThrowsFileNotFoundException()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "nonexistent_" + Guid.NewGuid() + ".slnx");
+        var ex = Assert.Throws<FileNotFoundException>(() =>
+            SolutionParser.Parse(path));
+        Assert.Contains(path, ex.Message);
+    }
+
+    #endregion
 }
