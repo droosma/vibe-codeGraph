@@ -245,3 +245,115 @@ The query engine compares the graph's `commitHash` in `meta.json` against the cu
 | `context` | `ContextFormatter` | Default. Markdown-like, optimized for LLM prompts. Shows target node, outgoing/incoming edges grouped by type. |
 | `json` | `JsonFormatter` | Machine-readable. Serializes the full `QueryResult` (camelCase, enums as strings). |
 | `text` | `TextFormatter` | Human-readable tabular format with stats and edge summaries. |
+
+---
+
+## Graph Diff Engine
+
+**Location:** `src/CodeGraph.Query/GraphDiffEngine.cs`
+
+The diff engine compares two graph snapshots (base and head) and returns a structured `GraphDiffResult` describing what changed at the structural level.
+
+### Pipeline
+
+```mermaid
+flowchart LR
+    A["Base snapshot\n(.codegraph-prev)"] --> C["GraphDiffEngine.Compare()"]
+    B["Head snapshot\n(.codegraph)"] --> C
+    C --> D["GraphDiffResult"]
+    D --> E["Diff Formatter\n(context / json / text)"]
+```
+
+### What Is Compared
+
+| Change Category | How Detected |
+|-----------------|-------------|
+| Added nodes | Nodes in head not present in base (by fully-qualified ID) |
+| Removed nodes | Nodes in base not present in head (by fully-qualified ID) |
+| Signature-changed nodes | Nodes present in both snapshots where the `Signature` field differs (ordinal comparison) |
+| Added edges | Edges in head not present in base (keyed by `FromId`, `ToId`, `Type`, `IsExternal`, `Resolution`) |
+| Removed edges | Edges in base not present in head |
+
+All result lists are sorted deterministically (by ID / `FromId` then `ToId`) for stable output.
+
+### GraphDiffResult
+
+```csharp
+record GraphDiffResult
+{
+    GraphMetadata BaseMetadata     // meta.json from the base snapshot
+    GraphMetadata HeadMetadata     // meta.json from the head snapshot
+    List<GraphNode> AddedNodes
+    List<GraphNode> RemovedNodes
+    List<GraphSignatureChange> SignatureChangedNodes   // { Previous, Current }
+    List<GraphEdge> AddedEdges
+    List<GraphEdge> RemovedEdges
+}
+```
+
+### Filtering with `--only`
+
+The `--only` flag accepts a comma-separated list that maps to `GraphDiffChangeType` values:
+
+| Token | Expands to |
+|-------|-----------|
+| `added` | `added-nodes` + `added-edges` |
+| `removed` | `removed-nodes` + `removed-edges` |
+| `signature-changed` | `SignatureChangedNodes` |
+| `added-nodes` | `AddedNodes` only |
+| `removed-nodes` | `RemovedNodes` only |
+| `added-edges` | `AddedEdges` only |
+| `removed-edges` | `RemovedEdges` only |
+
+### Diff Output Formatters
+
+| Format | Class | Output |
+|--------|-------|--------|
+| `context` | `GraphDiffContextFormatter` | Markdown sections for each change category, one line per item. Includes file path and line range for nodes. Optimized for LLM prompts. |
+| `json` | `GraphDiffJsonFormatter` | Full `GraphDiffResult` serialized as camelCase JSON with indentation. |
+| `text` | `GraphDiffTextFormatter` | Compact summary: commit range header + five count lines. |
+
+#### `context` format example
+
+```markdown
+# Graph Diff: abc1234..def5678
+
+## Added Nodes (1)
+- MyApp.Services.ShippingService (type) — src/Services/ShippingService.cs:10-42
+
+## Removed Nodes (0)
+- None
+
+## Changed Signatures (1)
+- MyApp.Services.OrderService.PlaceOrder(OrderRequest)
+  - Was: public async Task<Order> PlaceOrder(OrderRequest request)
+  + Now: public async Task<Result<Order>> PlaceOrder(OrderRequest request)
+
+## New Edges (2)
+- MyApp.Services.OrderService.PlaceOrder(OrderRequest) → MyApp.Services.ShippingService.Ship(Order) (Calls)
+- MyApp.Services → MyApp.Services.ShippingService (Contains)
+
+## Removed Edges (0)
+- None
+```
+
+#### `text` format example
+
+```
+Graph Diff abc1234..def5678
+Added nodes: 1
+Removed nodes: 0
+Signature changes: 1
+Added edges: 2
+Removed edges: 0
+```
+
+### Snapshot Management
+
+Snapshots are plain graph directories (the same `.codegraph/` layout) stored under a different name. Typical conventions:
+
+- `.codegraph-prev` — previous snapshot (default base)
+- `.codegraph-<branch>` — branch-named snapshot
+- `.codegraph-<short-sha>` — commit-tagged snapshot (e.g., `.codegraph-abc1234`)
+
+The `--ref <git-ref>` flag resolves the ref to its short SHA and looks for `.codegraph-<ref>` or `.codegraph-<short-sha>` automatically. See [docs/diff.md](diff.md) for CI/CD patterns.
