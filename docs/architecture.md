@@ -27,7 +27,7 @@ CodeGraph deliberately avoids `MSBuildWorkspace` due to its well-known reliabili
 
 ### Phases
 
-1. **Build** — Runs `dotnet build <sln> -c <config> --no-incremental -v quiet` to produce assemblies and restore packages.
+1. **Build** — Runs `dotnet build <sln> -c <config> --no-incremental -v quiet` to produce assemblies and restore packages. If the build fails, a warning is emitted to stderr and indexing **continues in best-effort mode** — Roslyn can still analyze source files, though some cross-project references may be unresolved. Use `--skip-build` to bypass the build step entirely (e.g. in CI where the solution has already been built).
 
 2. **Discovery** — Parses the `.sln` file (`SolutionParser`) using regex to find all `.csproj` project references.
 
