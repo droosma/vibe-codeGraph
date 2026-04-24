@@ -168,7 +168,7 @@ codegraph query <symbol-pattern> [options]
 | `--format <fmt>` | Output format: `json`, `text`, `context` | `context` |
 | `--max-nodes <n>` | Maximum nodes in result | `50` |
 | `--include-external` | Include external assembly dependencies | `false` |
-| `--rank` | Enable relevance ranking | `true` |
+| `--no-rank` | Disable relevance ranking | — |
 | `--graph-dir <dir>` | Graph directory | `.codegraph` |
 
 **Edge kind aliases:**
