@@ -150,6 +150,24 @@ refactor: extract git helper methods from Program.cs
 
 ---
 
+## Agentic Workflows
+
+The repository uses [GitHub Agentic Workflows](https://github.github.com/gh-aw/introduction/overview/) defined in `.github/workflows/*.md`. Each workflow `.md` file has a corresponding `.lock.yml` file that is auto-generated.
+
+### Editing Workflow Files
+
+If you edit a workflow `.md` file (especially its YAML frontmatter), you **must** recompile the lock file before committing:
+
+```bash
+gh aw compile
+```
+
+Then commit both the `.md` and the updated `.lock.yml` file together. If the lock file is out of sync, the workflow CI will fail with an `ERR_CONFIG: Lock file '...' is outdated!` error.
+
+> **Note**: Changes to the markdown body (below the frontmatter) do not always require recompilation, but frontmatter changes always do.
+
+---
+
 ## Questions?
 
 Open an issue if you're unsure about an approach. We're happy to discuss before you invest time in a PR.
