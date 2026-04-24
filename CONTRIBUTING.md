@@ -162,7 +162,7 @@ If you edit a workflow `.md` file (especially its YAML frontmatter), you **must*
 gh aw compile
 ```
 
-Then commit both the `.md` and the updated `.lock.yml` file together. If the lock file is out of sync, the workflow CI will fail with a `ERR_CONFIG: Lock file is outdated` error.
+Then commit both the `.md` and the updated `.lock.yml` file together. If the lock file is out of sync, the workflow CI will fail with an `ERR_CONFIG: Lock file '...' is outdated!` error.
 
 > **Note**: Changes to the markdown body (below the frontmatter) do not always require recompilation, but frontmatter changes always do.
 
