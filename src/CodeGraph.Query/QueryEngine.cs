@@ -42,9 +42,80 @@ public class QueryEngine
 
     public static async Task<QueryEngine> LoadAsync(string graphDirectory)
     {
+        return await LoadAsync(graphDirectory, solutionFilter: null);
+    }
+
+    public static async Task<QueryEngine> LoadAsync(string graphDirectory, string? solutionFilter)
+    {
         var reader = new GraphReader();
-        var (metadata, nodes, edges) = await reader.ReadAsync(graphDirectory);
-        return new QueryEngine(nodes, edges, metadata);
+
+        // Check if this is a federated graph directory (has subdirectories with meta.json)
+        var subGraphDirs = Directory.Exists(graphDirectory)
+            ? Directory.GetDirectories(graphDirectory)
+                .Where(d => File.Exists(Path.Combine(d, "meta.json")))
+                .ToArray()
+            : Array.Empty<string>();
+
+        if (subGraphDirs.Length == 0)
+        {
+            // Single-solution graph (backward compatible)
+            var (metadata, nodes, edges) = await reader.ReadAsync(graphDirectory);
+            return new QueryEngine(nodes, edges, metadata);
+        }
+
+        // Federated: load all sub-graphs, deduplicate nodes, merge edges
+        var allNodes = new Dictionary<string, GraphNode>();
+        var allEdges = new List<GraphEdge>();
+        var solutionNames = new List<string>();
+        var allProjectsIndexed = new List<string>();
+        GraphMetadata? firstMetadata = null;
+
+        foreach (var subDir in subGraphDirs)
+        {
+            var solutionName = Path.GetFileName(subDir);
+
+            // Apply solution filter if provided
+            if (!string.IsNullOrEmpty(solutionFilter) &&
+                !solutionName.Equals(solutionFilter, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var (metadata, nodes, edges) = await reader.ReadAsync(subDir);
+            firstMetadata ??= metadata;
+            solutionNames.Add(solutionName);
+            allProjectsIndexed.AddRange(metadata.ProjectsIndexed);
+
+            // Deduplicate nodes by ID (first-seen wins)
+            foreach (var kvp in nodes)
+            {
+                allNodes.TryAdd(kvp.Key, kvp.Value);
+            }
+
+            allEdges.AddRange(edges);
+        }
+
+        if (firstMetadata is null)
+        {
+            throw new FileNotFoundException("meta.json not found in graph directory.",
+                Path.Combine(graphDirectory, "meta.json"));
+        }
+
+        // Deduplicate edges
+        var uniqueEdges = allEdges
+            .GroupBy(e => (e.FromId, e.ToId, e.Type))
+            .Select(g => g.First())
+            .ToList();
+
+        // Build a federated metadata record
+        var federatedMetadata = firstMetadata with
+        {
+            SolutionName = string.Join(", ", solutionNames),
+            Solution = string.Join(", ", solutionNames.Select(n => n + ".sln")),
+            ProjectsIndexed = allProjectsIndexed.Distinct().ToArray()
+        };
+
+        return new QueryEngine(allNodes, uniqueEdges, federatedMetadata);
     }
 
     public QueryResult Query(QueryOptions options)

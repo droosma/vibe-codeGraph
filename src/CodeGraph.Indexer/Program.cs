@@ -70,6 +70,7 @@ static async Task<int> RunQueryAsync(string[] args)
     var includeExternal = HasFlag(argList, "--include-external");
     var rank = !HasFlag(argList, "--no-rank");
     var graphDir = GetOption(argList, "--graph-dir", ".codegraph");
+    var fromSolution = GetOption(argList, "--from", (string?)null);
 
     var outputFormat = format?.ToLowerInvariant() switch
     {
@@ -93,7 +94,7 @@ static async Task<int> RunQueryAsync(string[] args)
     QueryEngine engine;
     try
     {
-        engine = await QueryEngine.LoadAsync(graphDir);
+        engine = await QueryEngine.LoadAsync(graphDir, fromSolution);
     }
     catch (FileNotFoundException ex)
     {
@@ -259,6 +260,7 @@ static async Task<int> RunIndexAsync(string[] args)
     bool skipBuild = false;
     bool skipRestore = false;
     bool changedOnly = false;
+    bool sequential = false;
 
     for (int i = 1; i < args.Length; i++)
     {
@@ -291,6 +293,9 @@ static async Task<int> RunIndexAsync(string[] args)
             case "--changed-only":
                 changedOnly = true;
                 break;
+            case "--sequential":
+                sequential = true;
+                break;
             default:
                 Console.Error.WriteLine($"Unknown argument: {args[i]}");
                 PrintUsage();
@@ -300,13 +305,89 @@ static async Task<int> RunIndexAsync(string[] args)
 
     // Load config, CLI args override
     var config = ConfigLoader.Load(configPath);
-    solutionPath ??= config.Solution;
     outputDir ??= config.Output;
     configuration ??= config.Index.Configuration;
 
+    // Check for multi-solution support
+    var effectiveSolutions = config.GetEffectiveSolutions();
+
+    if (solutionPath is not null)
+    {
+        // CLI --solution overrides: index just that one solution
+        return await RunSingleIndexAsync(solutionPath, outputDir, projectFilter, configuration,
+            verbose, skipBuild, skipRestore, changedOnly, config);
+    }
+
+    if (effectiveSolutions.Length > 1)
+    {
+        // Multi-solution indexing
+        return await RunMultiSolutionIndexAsync(effectiveSolutions, outputDir!, projectFilter,
+            configuration!, verbose, skipBuild, skipRestore, changedOnly, sequential, config);
+    }
+
+    if (effectiveSolutions.Length == 1)
+    {
+        solutionPath = effectiveSolutions[0].Path;
+        return await RunSingleIndexAsync(solutionPath, outputDir, projectFilter, configuration,
+            verbose, skipBuild, skipRestore, changedOnly, config);
+    }
+
+    Console.Error.WriteLine("Error: --solution is required (or set 'solution' or 'solutions' in codegraph.json).");
+    return 1;
+}
+
+static async Task<int> RunMultiSolutionIndexAsync(
+    SolutionEntry[] solutions, string outputDir, string? projectFilter,
+    string configuration, bool verbose, bool skipBuild, bool skipRestore,
+    bool changedOnly, bool sequential, CodeGraphConfig config)
+{
+    Console.WriteLine($"Multi-solution index: {solutions.Length} solutions");
+    var errors = new ConcurrentBag<string>();
+
+    async Task IndexSolution(SolutionEntry entry)
+    {
+        var slnName = Path.GetFileNameWithoutExtension(entry.Path);
+        var subOutputDir = Path.Combine(Path.GetFullPath(outputDir), slnName);
+
+        if (verbose) Console.WriteLine($"  Indexing solution: {entry.Path} → {subOutputDir}");
+
+        var result = await RunSingleIndexAsync(
+            entry.Path, subOutputDir, projectFilter, configuration,
+            verbose, skipBuild, skipRestore, changedOnly, config);
+
+        if (result != 0)
+            errors.Add(entry.Path);
+    }
+
+    if (sequential)
+    {
+        foreach (var entry in solutions)
+            await IndexSolution(entry);
+    }
+    else
+    {
+        var tasks = solutions.Select(IndexSolution).ToArray();
+        await Task.WhenAll(tasks);
+    }
+
+    if (errors.Count > 0)
+    {
+        Console.Error.WriteLine($"Errors indexing {errors.Count} solution(s): {string.Join(", ", errors)}");
+        return 1;
+    }
+
+    Console.WriteLine($"Multi-solution index complete: {solutions.Length} solutions indexed to {outputDir}");
+    return 0;
+}
+
+static async Task<int> RunSingleIndexAsync(
+    string solutionPath, string? outputDir, string? projectFilter,
+    string? configuration, bool verbose, bool skipBuild, bool skipRestore,
+    bool changedOnly, CodeGraphConfig config)
+{
     if (string.IsNullOrEmpty(solutionPath))
     {
-        Console.Error.WriteLine("Error: --solution is required (or set 'solution' in codegraph.json).");
+        Console.Error.WriteLine("Error: --solution is required (or set 'solution' or 'solutions' in codegraph.json).");
         return 1;
     }
 
@@ -506,6 +587,7 @@ static async Task<int> RunIndexAsync(string[] args)
             GeneratedAt = DateTimeOffset.UtcNow,
             IndexerVersion = version,
             Solution = Path.GetFileName(solutionPath),
+            SolutionName = Path.GetFileNameWithoutExtension(solutionPath),
             ProjectsIndexed = allProjectsIndexed,
             Stats = new Dictionary<string, int>
             {
@@ -535,6 +617,7 @@ static async Task<int> RunIndexAsync(string[] args)
         GeneratedAt = DateTimeOffset.UtcNow,
         IndexerVersion = version,
         Solution = Path.GetFileName(solutionPath),
+        SolutionName = Path.GetFileNameWithoutExtension(solutionPath),
         ProjectsIndexed = projects.Select(p => p.ProjectName).ToArray(),
         Stats = new Dictionary<string, int>
         {
@@ -601,34 +684,27 @@ static async Task<int> RunInitAsync(string[] args)
 
     var currentDir = Directory.GetCurrentDirectory();
 
-    // --- Step 0: codegraph.json + MCP configs (existing behavior) ---
-    var slnFiles = Directory.GetFiles(currentDir, "*.sln")
-        .Concat(Directory.GetFiles(currentDir, "*.slnx"))
+    // --- Step 0: codegraph.json + MCP configs ---
+    // Auto-discover .sln/.slnx files recursively (excluding common build/dependency directories)
+    var excludedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        { "bin", "obj", "node_modules", ".git", ".vs", ".idea", "packages", "artifacts" };
+
+    var slnFiles = Directory.GetFiles(currentDir, "*.sln", SearchOption.AllDirectories)
+        .Concat(Directory.GetFiles(currentDir, "*.slnx", SearchOption.AllDirectories))
+        .Where(f =>
+        {
+            var relativePath = Path.GetRelativePath(currentDir, f);
+            var parts = relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return !parts.Any(p => excludedDirs.Contains(p));
+        })
         .ToArray();
-    string? selectedSln = solutionFlag;
 
-    if (selectedSln is null && slnFiles.Length > 0)
+    if (solutionFlag is not null)
     {
-        if (slnFiles.Length == 1)
-        {
-            selectedSln = Path.GetFileName(slnFiles[0]);
-            Console.WriteLine($"Found solution: {selectedSln}");
-        }
-        else
-        {
-            Console.WriteLine("Multiple solutions found:");
-            foreach (var sln in slnFiles)
-                Console.WriteLine($"  {Path.GetFileName(sln)}");
-            selectedSln = Path.GetFileName(slnFiles[0]);
-            Console.WriteLine($"Using first: {selectedSln}");
-        }
-    }
-
-    if (selectedSln is not null)
-    {
+        // Single solution specified via flag — use singular format for backward compat
         var config = new CodeGraphConfig
         {
-            Solution = selectedSln,
+            Solution = solutionFlag,
             Output = outputDir ?? ".codegraph"
         };
 
@@ -636,6 +712,46 @@ static async Task<int> RunInitAsync(string[] args)
         await ConfigLoader.SaveAsync(config, configPath);
         Console.WriteLine($"Created {ConfigLoader.DefaultFileName}");
     }
+    else if (slnFiles.Length == 1)
+    {
+        var foundSln = Path.GetRelativePath(currentDir, slnFiles[0]);
+        Console.WriteLine($"Found solution: {foundSln}");
+
+        var config = new CodeGraphConfig
+        {
+            Solution = foundSln,
+            Output = outputDir ?? ".codegraph"
+        };
+
+        var configPath = Path.Combine(currentDir, ConfigLoader.DefaultFileName);
+        await ConfigLoader.SaveAsync(config, configPath);
+        Console.WriteLine($"Created {ConfigLoader.DefaultFileName}");
+    }
+    else if (slnFiles.Length > 1)
+    {
+        Console.WriteLine("Multiple solutions found:");
+        var entries = new List<SolutionEntry>();
+        foreach (var sln in slnFiles)
+        {
+            var relativePath = Path.GetRelativePath(currentDir, sln);
+            Console.WriteLine($"  {relativePath}");
+            entries.Add(new SolutionEntry { Path = relativePath });
+        }
+
+        var config = new CodeGraphConfig
+        {
+            Solutions = entries.ToArray(),
+            Output = outputDir ?? ".codegraph"
+        };
+
+        var configPath = Path.Combine(currentDir, ConfigLoader.DefaultFileName);
+        await ConfigLoader.SaveAsync(config, configPath);
+        Console.WriteLine($"Created {ConfigLoader.DefaultFileName} with {entries.Count} solutions");
+    }
+
+    // Determine a primary solution name for agent config files
+    string? selectedSln = solutionFlag
+        ?? (slnFiles.Length > 0 ? Path.GetFileName(slnFiles[0]) : null);
 
     // Generate MCP server configs for agent auto-discovery
     var mcpContent = """
@@ -965,6 +1081,7 @@ static void PrintQueryUsage()
           --include-external   Include external dependency nodes
           --no-rank            Disable result ranking
           --graph-dir <path>   Graph directory (default: .codegraph)
+          --from <solution>    Query only the specified solution sub-graph (multi-solution)
         """);
 }
 
