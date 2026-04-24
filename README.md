@@ -258,6 +258,24 @@ The server exposes one tool — `codegraph_query` — with a typed JSON schema. 
 | Claude Code | `.mcp.json` | ✅ by `codegraph init` |
 | APM | `apm.yml` | ✅ by `codegraph init` |
 
+### Agent Skills ([skills.sh](https://skills.sh))
+
+CodeGraph provides packaged agent skills compatible with the [skills.sh](https://skills.sh) ecosystem. Install all skills with:
+
+```bash
+npx skills add droosma/vibe-codeGraph
+```
+
+Or install individual skills:
+
+| Skill | Purpose | Install |
+|-------|---------|---------|
+| `codegraph-query` | Query the semantic graph for structural relationships | `npx skills add droosma/vibe-codeGraph@codegraph-query` |
+| `codegraph-index` | Index or re-index a C# codebase | `npx skills add droosma/vibe-codeGraph@codegraph-index` |
+| `codegraph-review` | Impact analysis for code review | `npx skills add droosma/vibe-codeGraph@codegraph-review` |
+
+Each skill includes a standalone `SKILL.md` with trigger phrases, CLI reference, examples, and best practices. See the [`skills/`](skills/) directory for details.
+
 ### APM (Agent Package Manager) Support
 
 CodeGraph supports [Microsoft APM](https://github.com/microsoft/apm) for managing agent configuration. If you use APM, run:
