@@ -99,21 +99,36 @@ The query command reads those files and returns a focused subgraph.
 
 ### `codegraph init`
 
-Auto-detect your solution and create config + MCP server registration files.
+Auto-detect your solution, create config + MCP server registration files, and scaffold agent skill files.
 
 ```
-codegraph init [--output <dir>]
+codegraph init [--agent <name>] [--solution <path.sln>] [--output <dir>] [--force]
 ```
 
-Creates:
+**Step 1 — Config + MCP files** (always):
 - `codegraph.json` — index/query configuration
 - `.vscode/mcp.json` — MCP server for VS Code Copilot / Cursor
 - `.mcp.json` — MCP server for Claude Code
 - `apm.yml` — MCP server for APM (Agent Package Manager)
 
+**Step 2 — Agent skill files** (auto-detected or explicit):
+
+Auto-detects which AI agents are configured in the repo (looks for `.claude/`, `CLAUDE.md`, `.github/copilot-instructions.md`, `AGENTS.md`, `.cursorrules`, `.cursor/rules/`), then writes agent-specific skill files so each agent understands how to use CodeGraph:
+
+| Agent | Detection | File(s) written |
+|-------|-----------|-----------------|
+| Claude Code | `.claude/` dir or `CLAUDE.md` | `.claude/skills/codegraph/SKILL.md`, `.claude/skills/codegraph/scripts/query-wrapper.sh` |
+| GitHub Copilot | `.github/copilot-instructions.md` | Appends CodeGraph section to `.github/copilot-instructions.md` |
+| OpenCode / Codex | `AGENTS.md` | Appends CodeGraph section to `AGENTS.md` |
+| Cursor | `.cursorrules` or `.cursor/rules/` | `.cursor/rules/codegraph.md` |
+| *(all agents)* | — | `.codegraph/INSTRUCTIONS.md` (generic instructions, always written) |
+
 | Flag | Description |
 |------|-------------|
-| `--output <dir>` | Directory to create `codegraph.json` in (default: current directory) |
+| `--agent <name>` | Skip auto-detection and install for a specific agent: `claude`, `copilot`, `opencode`, `cursor`, `all` |
+| `--solution <path>` | Combine init + index in one step |
+| `--output <dir>` | Output directory for graph data (default: `.codegraph`) |
+| `--force` | Overwrite existing skill files |
 
 ### `codegraph index`
 
