@@ -57,13 +57,43 @@ public static class ConfigLoader
         try
         {
             var json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<CodeGraphConfig>(json, GraphSerializationOptions.Default)
+            var config = JsonSerializer.Deserialize<CodeGraphConfig>(json, GraphSerializationOptions.Default)
                    ?? new CodeGraphConfig();
+
+            ValidateConfig(config, path);
+            return config;
         }
         catch (JsonException ex)
         {
             throw new InvalidOperationException(
                 $"Failed to parse configuration file '{path}': {ex.Message}", ex);
+        }
+    }
+
+    private static void ValidateConfig(CodeGraphConfig config, string path)
+    {
+        if (!string.IsNullOrEmpty(config.Solution) && config.Solutions.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"Configuration file '{path}' contains both 'solution' (singular) and 'solutions' (array). " +
+                "Please migrate to the new format by moving the single solution into the 'solutions' array. " +
+                "Example: {{ \"solutions\": [{{ \"path\": \"MyApp.sln\" }}] }}");
+        }
+
+        // Validate solution name uniqueness
+        if (config.Solutions.Length > 1)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in config.Solutions)
+            {
+                var name = System.IO.Path.GetFileNameWithoutExtension(entry.Path);
+                if (!names.Add(name))
+                {
+                    throw new InvalidOperationException(
+                        $"Configuration file '{path}' contains duplicate solution name '{name}'. " +
+                        "Solution names are derived from .sln filenames and must be unique.");
+                }
+            }
         }
     }
 }

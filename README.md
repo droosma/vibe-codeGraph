@@ -297,7 +297,8 @@ CodeGraph is configured via a `codegraph.json` file in your repo root. Run `code
 
 | Section | Controls |
 |---------|----------|
-| `solution` | Path to `.sln` or `.slnx` file |
+| `solution` | Path to a single `.sln` or `.slnx` file |
+| `solutions` | Array of solution entries for multi-solution mono-repos |
 | `output` | Graph output directory (default: `.codegraph`) |
 | `splitBy` | File split strategy: `project` (default) or `assembly` (both are assembly-based), or `namespace` |
 | `index` | Project filtering, build configuration, external packages |
@@ -306,7 +307,7 @@ CodeGraph is configured via a `codegraph.json` file in your repo root. Run `code
 | `docs` | Documentation extraction |
 | `query` | Default query parameters |
 
-See [codegraph.json.example](codegraph.json.example) for a fully annotated example.
+See [codegraph.json.example](codegraph.json.example) for a single-solution example, or [codegraph.multi-solution.json.example](codegraph.multi-solution.json.example) for a multi-solution example.
 
 ---
 

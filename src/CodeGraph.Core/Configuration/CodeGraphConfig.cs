@@ -3,6 +3,7 @@ namespace CodeGraph.Core.Configuration;
 public class CodeGraphConfig
 {
     public string? Solution { get; set; }
+    public SolutionEntry[] Solutions { get; set; } = Array.Empty<SolutionEntry>();
     public string Output { get; set; } = ".codegraph";
     public string SplitBy { get; set; } = "project";
 
@@ -11,6 +12,30 @@ public class CodeGraphConfig
     public TestConfig Tests { get; set; } = new();
     public DocConfig Docs { get; set; } = new();
     public QueryConfig Query { get; set; } = new();
+
+    /// <summary>
+    /// Returns the effective list of solutions. If <see cref="Solutions"/> is populated, returns those.
+    /// If only <see cref="Solution"/> is set, returns a single-element list wrapping it.
+    /// </summary>
+    public SolutionEntry[] GetEffectiveSolutions()
+    {
+        if (Solutions.Length > 0)
+            return Solutions;
+
+        if (!string.IsNullOrEmpty(Solution))
+            return new[] { new SolutionEntry { Path = Solution! } };
+
+        return Array.Empty<SolutionEntry>();
+    }
+}
+
+public class SolutionEntry
+{
+    public string Path { get; set; } = string.Empty;
+    public IocConfig? Ioc { get; set; }
+    public IndexConfig? Index { get; set; }
+    public TestConfig? Tests { get; set; }
+    public DocConfig? Docs { get; set; }
 }
 
 public class IndexConfig

@@ -8,6 +8,7 @@ public record GraphMetadata
     public DateTimeOffset GeneratedAt { get; init; }
     public string IndexerVersion { get; init; } = string.Empty;
     public string Solution { get; init; } = string.Empty;
+    public string SolutionName { get; init; } = string.Empty;
     public string[] ProjectsIndexed { get; init; } = Array.Empty<string>();
     public Dictionary<string, int> Stats { get; init; } = new();
 }
