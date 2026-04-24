@@ -27,7 +27,7 @@ CodeGraph deliberately avoids `MSBuildWorkspace` due to its well-known reliabili
 
 ### Phases
 
-1. **Build** — Runs `dotnet build <sln> -c <config> --no-incremental -v quiet` to produce assemblies and restore packages. If the build fails, a warning is emitted to stderr and indexing **continues in best-effort mode** — Roslyn can still analyze source files, though some cross-project references may be unresolved. Use `--skip-build` to bypass the build step entirely (e.g. in CI where the solution has already been built).
+1. **Restore** — Runs `dotnet restore <sln> -v quiet` to generate `project.assets.json` files for NuGet resolution. Unlike a full build, this only restores packages without compiling to disk — Roslyn compilations are created in-memory. If the restore fails, a warning is emitted to stderr and indexing **continues in best-effort mode** — Roslyn can still analyze source files, though some cross-project references may be unresolved. Use `--skip-restore` to bypass the restore step entirely (e.g. in CI where packages have already been restored).
 
 2. **Discovery** — Parses the `.sln` file (`SolutionParser`) using regex, or the `.slnx` file using XML, to find all `.csproj` project references.
 

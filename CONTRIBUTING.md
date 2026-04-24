@@ -69,7 +69,7 @@ CodeGraph.sln
 
 ### Key Design Decisions
 
-- **No MSBuildWorkspace** — The indexer uses a hybrid approach: `dotnet build` for compilation, then manual assembly of Roslyn `CSharpCompilation` objects via `HybridWorkspaceLoader`. This avoids MSBuildWorkspace reliability issues.
+- **No MSBuildWorkspace** — The indexer uses a hybrid approach: `dotnet restore` for NuGet resolution, then manual assembly of Roslyn `CSharpCompilation` objects via `HybridWorkspaceLoader`. This avoids MSBuildWorkspace reliability issues and skips unnecessary compilation to disk.
 - **Four-pass indexing** — `SyntaxPass` extracts structure, `SemanticPass` resolves relationships, `DiPass` maps DI registrations, `TestCoveragePass` links tests to production code. Each pass is focused and independently testable.
 - **Records everywhere** — `GraphNode`, `GraphEdge`, `ProjectGraph`, `GraphMetadata`, `QueryResult` are all immutable records.
 - **Split output** — Graph files are split by assembly (one per project), external dependencies go to `_external.json` as an SBOM-like graph. Designed for LLM context window consumption.

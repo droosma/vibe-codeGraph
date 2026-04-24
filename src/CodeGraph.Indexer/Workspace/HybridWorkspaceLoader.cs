@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.CodeAnalysis.CSharp;
 
@@ -14,7 +15,7 @@ public class HybridWorkspaceLoader
 {
     public async Task<IReadOnlyList<ProjectCompilation>> LoadAsync(
         string solutionPath,
-        bool skipBuild = false,
+        bool skipRestore = false,
         string configuration = "Debug",
         string[]? preprocessorSymbols = null,
         CancellationToken cancellationToken = default)
@@ -25,10 +26,10 @@ public class HybridWorkspaceLoader
 
         var solutionDir = Path.GetDirectoryName(solutionPath)!;
 
-        // 1. Build phase
-        if (!skipBuild)
+        // 1. Restore phase
+        if (!skipRestore)
         {
-            await BuildSolutionAsync(solutionPath, configuration, cancellationToken);
+            await RestoreSolutionAsync(solutionPath, cancellationToken);
         }
 
         // 2. Discovery phase
@@ -51,63 +52,75 @@ public class HybridWorkspaceLoader
         }
         Console.Error.WriteLine();
 
-        // 3. Resolution + 4. Compilation phase
-        var results = new List<ProjectCompilation>();
+        // 3. Resolution + 4. Compilation phase (parallelized)
+        var referenceCache = new MetadataReferenceCache();
+        var compiledCount = 0;
+        var results = new ConcurrentBag<(int Index, ProjectCompilation Compilation)>();
 
-        for (int pi = 0; pi < projectInfos.Count; pi++)
-        {
-            var info = projectInfos[pi];
-            cancellationToken.ThrowIfCancellationRequested();
-            Console.Error.WriteLine($"  Compiling {pi + 1}/{projectInfos.Count}: {Path.GetFileNameWithoutExtension(info.ProjectPath)} ({info.SourceFiles.Count} files)");
-
-            // Resolve package references
-            var packages = AssetsFileResolver.Resolve(info.ProjectDirectory, info.TargetFramework);
-            var packageDlls = packages.Select(p => p.DllPath).ToList();
-
-            // Resolve framework references
-            var frameworkDlls = FrameworkRefResolver.Resolve(info.TargetFramework);
-
-            // Combine all reference DLLs
-            var allRefs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var dll in frameworkDlls) allRefs.Add(dll);
-            foreach (var dll in packageDlls) allRefs.Add(dll);
-
-            // Build preprocessor symbols
-            var symbols = preprocessorSymbols?.ToList() ?? new List<string>();
-            if (configuration.Equals("Debug", StringComparison.OrdinalIgnoreCase))
+        await Parallel.ForEachAsync(
+            projectInfos.Select((info, index) => (info, index)),
+            new ParallelOptions
             {
-                if (!symbols.Contains("DEBUG")) symbols.Add("DEBUG");
-            }
-            if (!symbols.Contains("TRACE")) symbols.Add("TRACE");
+                MaxDegreeOfParallelism = Environment.ProcessorCount,
+                CancellationToken = cancellationToken,
+            },
+            async (item, ct) =>
+            {
+                var (info, index) = item;
+                var count = Interlocked.Increment(ref compiledCount);
+                Console.Error.WriteLine($"  Compiling {count}/{projectInfos.Count}: {Path.GetFileNameWithoutExtension(info.ProjectPath)} ({info.SourceFiles.Count} files)");
 
-            // Create compilation
-            var compilation = CompilationFactory.Create(
-                info.AssemblyName,
-                info.SourceFiles,
-                allRefs,
-                info.LangVersion,
-                info.NullableEnabled,
-                symbols.ToArray());
+                // Resolve package references
+                var packages = AssetsFileResolver.Resolve(info.ProjectDirectory, info.TargetFramework);
+                var packageDlls = packages.Select(p => p.DllPath).ToList();
 
-            results.Add(new ProjectCompilation(
-                Path.GetFileNameWithoutExtension(info.ProjectPath),
-                info.ProjectPath,
-                info.AssemblyName,
-                info.TargetFramework,
-                compilation));
-        }
+                // Resolve framework references
+                var frameworkDlls = FrameworkRefResolver.Resolve(info.TargetFramework);
+
+                // Combine all reference DLLs
+                var allRefs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var dll in frameworkDlls) allRefs.Add(dll);
+                foreach (var dll in packageDlls) allRefs.Add(dll);
+
+                // Build preprocessor symbols
+                var symbols = preprocessorSymbols?.ToList() ?? new List<string>();
+                if (configuration.Equals("Debug", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!symbols.Contains("DEBUG")) symbols.Add("DEBUG");
+                }
+                if (!symbols.Contains("TRACE")) symbols.Add("TRACE");
+
+                // Create compilation with shared reference cache
+                var compilation = CompilationFactory.Create(
+                    info.AssemblyName,
+                    info.SourceFiles,
+                    allRefs,
+                    info.LangVersion,
+                    info.NullableEnabled,
+                    symbols.ToArray(),
+                    referenceCache);
+
+                results.Add((index, new ProjectCompilation(
+                    Path.GetFileNameWithoutExtension(info.ProjectPath),
+                    info.ProjectPath,
+                    info.AssemblyName,
+                    info.TargetFramework,
+                    compilation)));
+
+                await Task.CompletedTask;
+            });
 
         Console.Error.WriteLine();
-        return results;
+        return results.OrderBy(r => r.Index).Select(r => r.Compilation).ToList();
     }
 
-    private static async Task BuildSolutionAsync(
-        string solutionPath, string configuration, CancellationToken cancellationToken)
+    private static async Task RestoreSolutionAsync(
+        string solutionPath, CancellationToken cancellationToken)
     {
         var psi = new ProcessStartInfo
         {
             FileName = "dotnet",
-            Arguments = $"build \"{solutionPath}\" --no-incremental -v quiet -c {configuration}",
+            Arguments = $"restore \"{solutionPath}\" -v quiet",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -115,7 +128,7 @@ public class HybridWorkspaceLoader
         };
 
         using var process = Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start dotnet build process.");
+            ?? throw new InvalidOperationException("Failed to start dotnet restore process.");
 
         var stdout = await process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderr = await process.StandardError.ReadToEndAsync(cancellationToken);
@@ -126,7 +139,7 @@ public class HybridWorkspaceLoader
         {
             var output = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
             Console.Error.WriteLine(
-                $"Warning: dotnet build failed with exit code {process.ExitCode}. Continuing with best-effort indexing.\n{output}");
+                $"Warning: dotnet restore failed with exit code {process.ExitCode}. Continuing with best-effort indexing.\n{output}");
         }
     }
 }

@@ -1,12 +1,22 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 
 namespace CodeGraph.Indexer.Workspace;
 
 public static class FrameworkRefResolver
 {
+    private static readonly ConcurrentDictionary<string, IReadOnlyList<string>> s_cache = new(StringComparer.OrdinalIgnoreCase);
+
     public static IReadOnlyList<string> Resolve(string targetFramework)
     {
         var tfm = targetFramework.Trim();
+        return s_cache.GetOrAdd(tfm, static key => ResolveCore(key));
+    }
+
+    internal static void ClearCache() => s_cache.Clear();
+
+    private static IReadOnlyList<string> ResolveCore(string tfm)
+    {
         var dotnetRoots = GetDotnetRoots();
 
         foreach (var root in dotnetRoots)

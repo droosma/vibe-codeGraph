@@ -218,24 +218,24 @@ codegraph index --solution YourApp.sln
 3. In VS Code, open Chat → **Configure Tools** and verify `codegraph_query` is listed.
 4. If the tool is listed but not used, try prompting explicitly: *"Use the codegraph_query tool to look up OrderService"*.
 
-### Build failures during indexing
+### Restore failures during indexing
 
-CodeGraph runs `dotnet build` before indexing. If the build fails, CodeGraph **does not crash** — it emits a warning to stderr and continues with best-effort Roslyn-based indexing. The resulting graph may be incomplete (missing type resolutions, unresolved references), but a partial graph is still produced.
+CodeGraph runs `dotnet restore` before indexing. If the restore fails, CodeGraph **does not crash** — it emits a warning to stderr and continues with best-effort Roslyn-based indexing. The resulting graph may be incomplete (missing type resolutions, unresolved references), but a partial graph is still produced.
 
-For the most accurate graph, fix the underlying build issue first:
+For the most accurate graph, fix the underlying restore issue first:
 
 ```bash
-# Diagnose and fix build errors
-dotnet build YourApp.sln
+# Diagnose and fix restore errors
+dotnet restore YourApp.sln
 
 # Then re-index
 codegraph index --solution YourApp.sln
 ```
 
-Or skip the build step if you've already built (e.g., in CI after a prior `dotnet build`):
+Or skip the restore step if you've already restored (e.g., in CI after a prior `dotnet restore`):
 
 ```bash
-codegraph index --solution YourApp.sln --skip-build
+codegraph index --solution YourApp.sln --skip-restore
 ```
 
 ### Large solutions are slow
@@ -245,4 +245,4 @@ codegraph index --solution YourApp.sln --skip-build
   codegraph index --solution YourApp.sln --projects "MyApp.*"
   ```
 - Add benchmarks or generated projects to `excludeProjects` in `codegraph.json`.
-- Use `--skip-build` if you've already built the solution.
+- Use `--skip-restore` if you've already restored packages.

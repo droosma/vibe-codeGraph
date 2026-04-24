@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using System.Text.RegularExpressions;
@@ -256,6 +257,7 @@ static async Task<int> RunIndexAsync(string[] args)
     string? configuration = null;
     bool verbose = false;
     bool skipBuild = false;
+    bool skipRestore = false;
     bool changedOnly = false;
 
     for (int i = 1; i < args.Length; i++)
@@ -279,6 +281,9 @@ static async Task<int> RunIndexAsync(string[] args)
                 break;
             case "--verbose":
                 verbose = true;
+                break;
+            case "--skip-restore":
+                skipRestore = true;
                 break;
             case "--skip-build":
                 skipBuild = true;
@@ -387,7 +392,7 @@ static async Task<int> RunIndexAsync(string[] args)
     var loader = new HybridWorkspaceLoader();
     var compilations = await loader.LoadAsync(
         solutionPath,
-        skipBuild: skipBuild,
+        skipRestore: skipBuild || skipRestore,
         configuration: configuration,
         preprocessorSymbols: config.Index.PreprocessorSymbols.Length > 0 ? config.Index.PreprocessorSymbols : null);
 
@@ -419,44 +424,56 @@ static async Task<int> RunIndexAsync(string[] args)
     var projects = filtered.ToList();
     if (verbose) Console.WriteLine($"Projects: {projects.Count}");
 
-    // Run passes
-    var allNodes = new List<GraphNode>();
-    var allEdges = new List<GraphEdge>();
+    // Run passes (parallelized per project)
+    var projectResults = new ConcurrentBag<(List<GraphNode> Nodes, List<GraphEdge> Edges)>();
     var syntaxPass = new SyntaxPass();
     var semanticPass = new SemanticPass();
     var diPass = new DiPass();
     var testCoveragePass = new TestCoveragePass();
 
-    foreach (var project in projects)
+    Parallel.ForEach(projects, project =>
     {
         if (verbose) Console.WriteLine($"  Indexing {project.ProjectName}...");
 
         try
         {
-            var (nodes, edges) = syntaxPass.Execute(project.Compilation, solutionRoot);
-            allNodes.AddRange(nodes);
-            allEdges.AddRange(edges);
+            var nodes = new List<GraphNode>();
+            var edges = new List<GraphEdge>();
 
-            var knownIds = new HashSet<string>(allNodes.Select(n => n.Id));
+            var (syntaxNodes, syntaxEdges) = syntaxPass.Execute(project.Compilation, solutionRoot);
+            nodes.AddRange(syntaxNodes);
+            edges.AddRange(syntaxEdges);
+
+            var knownIds = new HashSet<string>(nodes.Select(n => n.Id));
 
             var (externalNodes, semanticEdges) = semanticPass.Execute(project.Compilation, solutionRoot, knownIds);
-            allNodes.AddRange(externalNodes);
-            allEdges.AddRange(semanticEdges);
+            nodes.AddRange(externalNodes);
+            edges.AddRange(semanticEdges);
             foreach (var en in externalNodes) knownIds.Add(en.Id);
 
             var (diEdges, diExternalNodes) = diPass.Execute(project.Compilation, solutionRoot, knownIds);
-            allNodes.AddRange(diExternalNodes);
-            allEdges.AddRange(diEdges);
+            nodes.AddRange(diExternalNodes);
+            edges.AddRange(diEdges);
             foreach (var en in diExternalNodes) knownIds.Add(en.Id);
 
             var (testEdges, testExternalNodes) = testCoveragePass.Execute(project.Compilation, solutionRoot, knownIds);
-            allNodes.AddRange(testExternalNodes);
-            allEdges.AddRange(testEdges);
+            nodes.AddRange(testExternalNodes);
+            edges.AddRange(testEdges);
+
+            projectResults.Add((nodes, edges));
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"  Warning: Error indexing {project.ProjectName}: {ex.Message}");
         }
+    });
+
+    var allNodes = new List<GraphNode>();
+    var allEdges = new List<GraphEdge>();
+    foreach (var (nodes, edges) in projectResults)
+    {
+        allNodes.AddRange(nodes);
+        allEdges.AddRange(edges);
     }
 
     // Build metadata
