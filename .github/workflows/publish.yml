@@ -5,7 +5,7 @@ on:
     types: [published]
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -69,3 +69,18 @@ jobs:
 
       - name: Push to GitHub Packages
         run: dotnet nuget push ./nupkg/*.nupkg --api-key ${{ secrets.GITHUB_TOKEN }} --source https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json --skip-duplicate
+
+      - name: Package agent skills
+        run: |
+          for skill_dir in skills/codegraph-*/; do
+            skill_name=$(basename "$skill_dir")
+            (cd skills && zip -r "../${skill_name}.zip" "$skill_name/")
+          done
+
+      - name: Upload skill archives to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for zip in codegraph-*.zip; do
+            gh release upload "${{ github.event.release.tag_name }}" "$zip" --clobber
+          done

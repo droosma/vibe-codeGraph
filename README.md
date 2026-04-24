@@ -168,7 +168,7 @@ codegraph query <symbol-pattern> [options]
 | `--format <fmt>` | Output format: `json`, `text`, `context` | `context` |
 | `--max-nodes <n>` | Maximum nodes in result | `50` |
 | `--include-external` | Include external assembly dependencies | `false` |
-| `--no-rank` | Disable relevance ranking | — |
+| `--no-rank` | Disable relevance ranking | (ranking enabled by default) |
 | `--graph-dir <dir>` | Graph directory | `.codegraph` |
 
 **Edge kind aliases:**
@@ -258,6 +258,24 @@ The server exposes one tool — `codegraph_query` — with a typed JSON schema. 
 | Claude Code | `.mcp.json` | ✅ by `codegraph init` |
 | APM | `apm.yml` | ✅ by `codegraph init` |
 
+### Agent Skills ([skills.sh](https://skills.sh))
+
+CodeGraph provides packaged agent skills compatible with the [skills.sh](https://skills.sh) ecosystem. Install all skills with:
+
+```bash
+npx skills add droosma/vibe-codeGraph
+```
+
+Or install individual skills:
+
+| Skill | Purpose | Install |
+|-------|---------|---------|
+| `codegraph-query` | Query the semantic graph for structural relationships | `npx skills add droosma/vibe-codeGraph@codegraph-query` |
+| `codegraph-index` | Index or re-index a C# codebase | `npx skills add droosma/vibe-codeGraph@codegraph-index` |
+| `codegraph-review` | Impact analysis for code review | `npx skills add droosma/vibe-codeGraph@codegraph-review` |
+
+Each skill includes a standalone `SKILL.md` with trigger phrases, CLI reference, examples, and best practices. See the [`skills/`](skills/) directory for details.
+
 ### APM (Agent Package Manager) Support
 
 CodeGraph supports [Microsoft APM](https://github.com/microsoft/apm) for managing agent configuration. If you use APM, run:
@@ -312,7 +330,7 @@ See [codegraph.json.example](codegraph.json.example) for a fully annotated examp
                                                               └─────────────┘
 ```
 
-1. **Hybrid Workspace Loader** — Runs `dotnet build`, then parses `.sln` / `.csproj` / `project.assets.json` to assemble Roslyn `CSharpCompilation` objects directly (no MSBuildWorkspace).
+1. **Hybrid Workspace Loader** — Runs `dotnet build`, then parses `.sln` / `.csproj` / `project.assets.json` to assemble Roslyn `CSharpCompilation` objects directly (no MSBuildWorkspace). If the build fails, a warning is emitted to stderr and indexing continues with best-effort compilation.
 2. **Syntax Pass** — Walks syntax trees to extract namespaces, types, methods, properties, fields, constructors, and events. Creates structural `Contains` edges. Enriches nodes with metadata (`isAbstract`, `isStatic`, `isAsync`, `returnType`, etc.).
 3. **Semantic Pass** — Uses the Roslyn semantic model to resolve calls, inheritance, interface implementations, type dependencies, references, and overrides. Creates external nodes for cross-assembly references.
 4. **DI Pass** — Detects `AddScoped/AddTransient/AddSingleton` patterns to emit `ResolvesTo` edges with lifetime metadata.
@@ -375,6 +393,7 @@ Stryker generates HTML reports in `StrykerOutput/` with mutation scores per proj
 - [Graph Schema Reference](docs/graph-schema.md)
 - [Configuration Reference](docs/configuration.md)
 - [Agent Setup Guide](docs/agent-setup.md)
+- [Graph Diff How-to Guide](docs/diff.md)
 
 ---
 

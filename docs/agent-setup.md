@@ -220,15 +220,21 @@ codegraph index --solution YourApp.sln
 
 ### Build failures during indexing
 
-CodeGraph runs `dotnet build` before indexing. If `dotnet build` fails, CodeGraph emits a warning to stderr and **continues with best-effort indexing** rather than aborting — you still get a partial graph from whatever Roslyn can analyze without fully-resolved references.
+CodeGraph runs `dotnet build` before indexing. If the build fails, CodeGraph **does not crash** — it emits a warning to stderr and continues with best-effort Roslyn-based indexing. The resulting graph may be incomplete (missing type resolutions, unresolved references), but a partial graph is still produced.
 
-To address build failures:
+For the most accurate graph, fix the underlying build issue first:
 
 ```bash
-# Inspect the build errors
+# Diagnose and fix build errors
 dotnet build YourApp.sln
 
-# Or skip the build step entirely if you've already built
+# Then re-index
+codegraph index --solution YourApp.sln
+```
+
+Or skip the build step if you've already built (e.g., in CI after a prior `dotnet build`):
+
+```bash
 codegraph index --solution YourApp.sln --skip-build
 ```
 
