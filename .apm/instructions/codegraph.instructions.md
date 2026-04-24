@@ -20,7 +20,7 @@ The `codegraph_query` tool accepts these parameters:
 
 - `symbol` (required) — symbol name or pattern with wildcards (`Order*`, `*Service`, `type:OrderService`)
 - `depth` — BFS traversal depth (0 = node only, 1 = direct neighbors). Default: 1
-- `kind` — edge type filter: `calls-to`, `calls-from`, `inherits`, `implements`, `depends-on`, `resolves-to`, `covers`, `all`
+- `kind` — edge type filter: `calls-to`, `calls-from`, `inherits`, `implements`, `depends-on`, `resolves-to`, `covers`, `covered-by`, `references`, `overrides`, `contains`, `all`
 - `namespace` — namespace filter with wildcards
 - `project` — project/assembly filter
 - `format` — output format: `context` (default, markdown), `json`, `text`
