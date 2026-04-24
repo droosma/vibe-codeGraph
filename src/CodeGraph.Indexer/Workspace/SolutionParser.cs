@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Xml;
 using System.Xml.Linq;
 
 namespace CodeGraph.Indexer.Workspace;
@@ -56,7 +57,7 @@ public static class SolutionParser
         {
             doc = XDocument.Parse(content);
         }
-        catch (System.Xml.XmlException)
+        catch (XmlException)
         {
             return entries;
         }
