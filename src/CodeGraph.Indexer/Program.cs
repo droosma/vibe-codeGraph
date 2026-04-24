@@ -27,6 +27,7 @@ static async Task<int> RunAsync(string[] args)
         "index" => await RunIndexAsync(args),
         "init" => await RunInitAsync(args),
         "query" => await RunQueryAsync(args),
+        "diff" => await RunDiffAsync(args),
         "mcp" => await RunMcpAsync(args),
         "-h" or "--help" => ShowHelp(),
         _ => ShowUnknown(args[0])
@@ -152,6 +153,98 @@ static async Task<int> RunMcpAsync(string[] args)
 
     var server = new McpServer(graphDir);
     return await server.RunAsync();
+}
+
+static async Task<int> RunDiffAsync(string[] args)
+{
+    var argList = args.Skip(1).ToList();
+
+    if (argList.Count > 0 && argList[0] is "-h" or "--help")
+    {
+        PrintDiffUsage();
+        return 0;
+    }
+
+    var hasBaseFlag = argList.Contains("--base");
+    var baseGraphDir = GetOption(argList, "--base", ".codegraph-prev");
+    var headGraphDir = GetOption(argList, "--head", ".codegraph");
+    var gitRef = GetOption(argList, "--ref", (string?)null);
+    var only = GetOption(argList, "--only", (string?)null);
+    var format = GetOption(argList, "--format", "context");
+
+    if (argList.Count > 0)
+    {
+        Console.Error.WriteLine($"Unknown argument: {argList[0]}");
+        PrintDiffUsage();
+        return 1;
+    }
+
+    var outputFormat = format?.ToLowerInvariant() switch
+    {
+        "json" => OutputFormat.Json,
+        "text" => OutputFormat.Text,
+        "context" => OutputFormat.Context,
+        _ => OutputFormat.Context
+    };
+
+    if (!string.IsNullOrWhiteSpace(gitRef) && !hasBaseFlag)
+    {
+        var resolvedRef = RunGit($"rev-parse {gitRef}", Directory.GetCurrentDirectory());
+        var normalizedRef = gitRef.Replace('/', '-').Replace('\\', '-');
+        var candidates = new[]
+        {
+            Path.Combine(Directory.GetCurrentDirectory(), $".codegraph-{normalizedRef}"),
+            !string.IsNullOrEmpty(resolvedRef) ? Path.Combine(Directory.GetCurrentDirectory(), $".codegraph-{(resolvedRef.Length > 7 ? resolvedRef[..7] : resolvedRef)}") : string.Empty
+        };
+
+        var foundBase = candidates.FirstOrDefault(path => !string.IsNullOrEmpty(path) && Directory.Exists(path));
+        if (string.IsNullOrEmpty(foundBase))
+        {
+            Console.Error.WriteLine($"Error: Could not locate a graph snapshot for ref '{gitRef}'.");
+            Console.Error.WriteLine("Pass --base <graph-dir> explicitly, or store a snapshot as .codegraph-<ref>.");
+            return 1;
+        }
+
+        baseGraphDir = foundBase;
+    }
+
+    try
+    {
+        var reader = new GraphReader();
+        var (baseMetadata, baseNodes, baseEdges) = await reader.ReadAsync(baseGraphDir);
+        var (headMetadata, headNodes, headEdges) = await reader.ReadAsync(headGraphDir);
+
+        var diff = GraphDiffEngine.Compare(baseMetadata, baseNodes, baseEdges, headMetadata, headNodes, headEdges);
+        var filter = ParseDiffOnly(only);
+        if (filter.Count > 0)
+            diff = ApplyDiffFilter(diff, filter);
+
+        var output = outputFormat switch
+        {
+            OutputFormat.Json => GraphDiffJsonFormatter.Format(diff),
+            OutputFormat.Text => GraphDiffTextFormatter.Format(diff),
+            OutputFormat.Context => GraphDiffContextFormatter.Format(diff),
+            _ => GraphDiffContextFormatter.Format(diff)
+        };
+
+        Console.WriteLine(output);
+        return 0;
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+    catch (InvalidOperationException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+    catch (ArgumentException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
 }
 
 static async Task<int> RunIndexAsync(string[] args)
@@ -801,12 +894,14 @@ static void PrintUsage()
     Console.WriteLine("  codegraph init [--agent <name>] [--solution <path.sln>] [--force]");
     Console.WriteLine("  codegraph index --solution <path.sln> [options]");
     Console.WriteLine("  codegraph query <symbol> [options]");
+    Console.WriteLine("  codegraph diff [options]");
     Console.WriteLine("  codegraph mcp [--graph-dir <dir>]");
     Console.WriteLine();
     Console.WriteLine("Commands:");
     Console.WriteLine("  init                     Initialize config, MCP, and agent skill files");
     Console.WriteLine("  index                    Build the code graph from a solution");
     Console.WriteLine("  query                    Query the code graph for symbols and relationships");
+    Console.WriteLine("  diff                     Compare graph snapshots and report structural changes");
     Console.WriteLine("  mcp                      Start MCP (Model Context Protocol) stdio server");
     Console.WriteLine();
     Console.WriteLine("Run 'codegraph <command> --help' for command-specific options.");
@@ -851,6 +946,21 @@ static void PrintQueryUsage()
           --include-external   Include external dependency nodes
           --no-rank            Disable result ranking
           --graph-dir <path>   Graph directory (default: .codegraph)
+        """);
+}
+
+static void PrintDiffUsage()
+{
+    Console.WriteLine("""
+        Usage: codegraph diff [options]
+
+        Options:
+          --base <path>         Base graph directory (default: .codegraph-prev)
+          --head <path>         Head graph directory (default: .codegraph)
+          --ref <git-ref>       Use snapshot named .codegraph-<ref> as base
+          --only <types>        Comma-separated: added, removed, signature-changed,
+                                added-nodes, removed-nodes, added-edges, removed-edges
+          --format <fmt>        json | text | context (default: context)
         """);
 }
 
@@ -917,6 +1027,64 @@ static bool HasFlag(List<string> args, string name)
     if (idx < 0) return false;
     args.RemoveAt(idx);
     return true;
+}
+
+static HashSet<GraphDiffChangeType> ParseDiffOnly(string? value)
+{
+    var result = new HashSet<GraphDiffChangeType>();
+    if (string.IsNullOrWhiteSpace(value))
+        return result;
+
+    var tokens = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    foreach (var token in tokens)
+    {
+        switch (token.ToLowerInvariant())
+        {
+            case "added":
+                result.Add(GraphDiffChangeType.AddedNodes);
+                result.Add(GraphDiffChangeType.AddedEdges);
+                break;
+            case "removed":
+                result.Add(GraphDiffChangeType.RemovedNodes);
+                result.Add(GraphDiffChangeType.RemovedEdges);
+                break;
+            case "signature-changed":
+                result.Add(GraphDiffChangeType.SignatureChangedNodes);
+                break;
+            case "added-nodes":
+                result.Add(GraphDiffChangeType.AddedNodes);
+                break;
+            case "removed-nodes":
+                result.Add(GraphDiffChangeType.RemovedNodes);
+                break;
+            case "added-edges":
+                result.Add(GraphDiffChangeType.AddedEdges);
+                break;
+            case "removed-edges":
+                result.Add(GraphDiffChangeType.RemovedEdges);
+                break;
+            default:
+                throw new ArgumentException($"Unknown diff change type '{token}' in --only.");
+        }
+    }
+
+    return result;
+}
+
+static GraphDiffResult ApplyDiffFilter(GraphDiffResult diff, HashSet<GraphDiffChangeType> filter)
+{
+    return new GraphDiffResult
+    {
+        BaseMetadata = diff.BaseMetadata,
+        HeadMetadata = diff.HeadMetadata,
+        AddedNodes = filter.Contains(GraphDiffChangeType.AddedNodes) ? diff.AddedNodes : new List<GraphNode>(),
+        RemovedNodes = filter.Contains(GraphDiffChangeType.RemovedNodes) ? diff.RemovedNodes : new List<GraphNode>(),
+        SignatureChangedNodes = filter.Contains(GraphDiffChangeType.SignatureChangedNodes)
+            ? diff.SignatureChangedNodes
+            : new List<GraphSignatureChange>(),
+        AddedEdges = filter.Contains(GraphDiffChangeType.AddedEdges) ? diff.AddedEdges : new List<GraphEdge>(),
+        RemovedEdges = filter.Contains(GraphDiffChangeType.RemovedEdges) ? diff.RemovedEdges : new List<GraphEdge>()
+    };
 }
 
 static string RunGit(string arguments, string workingDirectory)
