@@ -139,7 +139,7 @@ codegraph query OrderService --depth 1 --format json
 
 ## Fallback Behavior
 
-1. **Graph is stale** → Re-index: `codegraph index --solution <path.sln> --changed-only`
+1. **Graph is stale** → Re-index: `codegraph index --solution <path.sln|path.slnx> --changed-only`
 2. **Changed symbol not in graph** → It may be new code; review manually
 3. **No test coverage found** → Flag as a review finding — suggest adding tests
 4. **Too many dependents** → Focus on direct dependents (`--depth 1`) and critical paths

@@ -96,12 +96,12 @@ codegraph index --solution YourApp.sln --skip-build
 ## CLI Reference
 
 ```
-codegraph index --solution <path.sln> [options]
+codegraph index --solution <path.sln|path.slnx> [options]
 ```
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--solution <path>` | Path to `.sln` file | From `codegraph.json` |
+| `--solution <path>` | Path to `.sln` or `.slnx` file | From `codegraph.json` |
 | `--output <dir>` | Output directory for graph files | `.codegraph` |
 | `--projects <filter>` | Wildcard filter for project names | All projects |
 | `--config <path>` | Path to `codegraph.json` config | Auto-detected |
