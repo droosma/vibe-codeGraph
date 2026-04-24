@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using CodeGraph.Core.Configuration;
 using CodeGraph.Core.IO;
 using CodeGraph.Core.Models;
+using CodeGraph.Indexer.Init;
 using CodeGraph.Indexer.Mcp;
 using CodeGraph.Indexer.Passes;
 using CodeGraph.Indexer.Workspace;
@@ -26,6 +27,7 @@ static async Task<int> RunAsync(string[] args)
         "index" => await RunIndexAsync(args),
         "init" => await RunInitAsync(args),
         "query" => await RunQueryAsync(args),
+        "diff" => await RunDiffAsync(args),
         "mcp" => await RunMcpAsync(args),
         "-h" or "--help" => ShowHelp(),
         _ => ShowUnknown(args[0])
@@ -151,6 +153,98 @@ static async Task<int> RunMcpAsync(string[] args)
 
     var server = new McpServer(graphDir);
     return await server.RunAsync();
+}
+
+static async Task<int> RunDiffAsync(string[] args)
+{
+    var argList = args.Skip(1).ToList();
+
+    if (argList.Count > 0 && argList[0] is "-h" or "--help")
+    {
+        PrintDiffUsage();
+        return 0;
+    }
+
+    var hasBaseFlag = argList.Contains("--base");
+    var baseGraphDir = GetOption(argList, "--base", ".codegraph-prev");
+    var headGraphDir = GetOption(argList, "--head", ".codegraph");
+    var gitRef = GetOption(argList, "--ref", (string?)null);
+    var only = GetOption(argList, "--only", (string?)null);
+    var format = GetOption(argList, "--format", "context");
+
+    if (argList.Count > 0)
+    {
+        Console.Error.WriteLine($"Unknown argument: {argList[0]}");
+        PrintDiffUsage();
+        return 1;
+    }
+
+    var outputFormat = format?.ToLowerInvariant() switch
+    {
+        "json" => OutputFormat.Json,
+        "text" => OutputFormat.Text,
+        "context" => OutputFormat.Context,
+        _ => OutputFormat.Context
+    };
+
+    if (!string.IsNullOrWhiteSpace(gitRef) && !hasBaseFlag)
+    {
+        var resolvedRef = RunGit($"rev-parse {gitRef}", Directory.GetCurrentDirectory());
+        var normalizedRef = gitRef.Replace('/', '-').Replace('\\', '-');
+        var candidates = new[]
+        {
+            Path.Combine(Directory.GetCurrentDirectory(), $".codegraph-{normalizedRef}"),
+            !string.IsNullOrEmpty(resolvedRef) ? Path.Combine(Directory.GetCurrentDirectory(), $".codegraph-{(resolvedRef.Length > 7 ? resolvedRef[..7] : resolvedRef)}") : string.Empty
+        };
+
+        var foundBase = candidates.FirstOrDefault(path => !string.IsNullOrEmpty(path) && Directory.Exists(path));
+        if (string.IsNullOrEmpty(foundBase))
+        {
+            Console.Error.WriteLine($"Error: Could not locate a graph snapshot for ref '{gitRef}'.");
+            Console.Error.WriteLine("Pass --base <graph-dir> explicitly, or store a snapshot as .codegraph-<ref>.");
+            return 1;
+        }
+
+        baseGraphDir = foundBase;
+    }
+
+    try
+    {
+        var reader = new GraphReader();
+        var (baseMetadata, baseNodes, baseEdges) = await reader.ReadAsync(baseGraphDir);
+        var (headMetadata, headNodes, headEdges) = await reader.ReadAsync(headGraphDir);
+
+        var diff = GraphDiffEngine.Compare(baseMetadata, baseNodes, baseEdges, headMetadata, headNodes, headEdges);
+        var filter = ParseDiffOnly(only);
+        if (filter.Count > 0)
+            diff = ApplyDiffFilter(diff, filter);
+
+        var output = outputFormat switch
+        {
+            OutputFormat.Json => GraphDiffJsonFormatter.Format(diff),
+            OutputFormat.Text => GraphDiffTextFormatter.Format(diff),
+            OutputFormat.Context => GraphDiffContextFormatter.Format(diff),
+            _ => GraphDiffContextFormatter.Format(diff)
+        };
+
+        Console.WriteLine(output);
+        return 0;
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+    catch (InvalidOperationException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+    catch (ArgumentException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
 }
 
 static async Task<int> RunIndexAsync(string[] args)
@@ -458,6 +552,9 @@ static async Task<int> RunIndexAsync(string[] args)
 static async Task<int> RunInitAsync(string[] args)
 {
     string? outputDir = null;
+    string? agentFlag = null;
+    string? solutionFlag = null;
+    bool force = false;
 
     for (int i = 1; i < args.Length; i++)
     {
@@ -466,48 +563,60 @@ static async Task<int> RunInitAsync(string[] args)
             case "--output" when i + 1 < args.Length:
                 outputDir = args[++i];
                 break;
+            case "--agent" when i + 1 < args.Length:
+                agentFlag = args[++i];
+                break;
+            case "--solution" when i + 1 < args.Length:
+                solutionFlag = args[++i];
+                break;
+            case "--force":
+                force = true;
+                break;
+            case "-h" or "--help":
+                PrintInitUsage();
+                return 0;
             default:
                 Console.Error.WriteLine($"Unknown argument: {args[i]}");
-                PrintUsage();
+                PrintInitUsage();
                 return 1;
         }
     }
 
     var currentDir = Directory.GetCurrentDirectory();
+
+    // --- Step 0: codegraph.json + MCP configs (existing behavior) ---
     var slnFiles = Directory.GetFiles(currentDir, "*.sln");
+    string? selectedSln = solutionFlag;
 
-    if (slnFiles.Length == 0)
+    if (selectedSln is null && slnFiles.Length > 0)
     {
-        Console.Error.WriteLine("Error: No .sln file found in the current directory.");
-        return 1;
-    }
-
-    string selectedSln;
-    if (slnFiles.Length == 1)
-    {
-        selectedSln = Path.GetFileName(slnFiles[0]);
-        Console.WriteLine($"Found solution: {selectedSln}");
-    }
-    else
-    {
-        Console.WriteLine("Multiple solutions found:");
-        foreach (var sln in slnFiles)
+        if (slnFiles.Length == 1)
         {
-            Console.WriteLine($"  {Path.GetFileName(sln)}");
+            selectedSln = Path.GetFileName(slnFiles[0]);
+            Console.WriteLine($"Found solution: {selectedSln}");
         }
-        selectedSln = Path.GetFileName(slnFiles[0]);
-        Console.WriteLine($"Using first: {selectedSln}");
+        else
+        {
+            Console.WriteLine("Multiple solutions found:");
+            foreach (var sln in slnFiles)
+                Console.WriteLine($"  {Path.GetFileName(sln)}");
+            selectedSln = Path.GetFileName(slnFiles[0]);
+            Console.WriteLine($"Using first: {selectedSln}");
+        }
     }
 
-    var config = new CodeGraphConfig
+    if (selectedSln is not null)
     {
-        Solution = selectedSln,
-        Output = outputDir ?? ".codegraph"
-    };
+        var config = new CodeGraphConfig
+        {
+            Solution = selectedSln,
+            Output = outputDir ?? ".codegraph"
+        };
 
-    var configPath = Path.Combine(currentDir, ConfigLoader.DefaultFileName);
-    await ConfigLoader.SaveAsync(config, configPath);
-    Console.WriteLine($"Created {ConfigLoader.DefaultFileName}");
+        var configPath = Path.Combine(currentDir, ConfigLoader.DefaultFileName);
+        await ConfigLoader.SaveAsync(config, configPath);
+        Console.WriteLine($"Created {ConfigLoader.DefaultFileName}");
+    }
 
     // Generate MCP server configs for agent auto-discovery
     var mcpContent = """
@@ -541,7 +650,6 @@ static async Task<int> RunInitAsync(string[] args)
     var mcpPath = Path.Combine(currentDir, ".mcp.json");
     if (!File.Exists(mcpPath))
     {
-        // Claude Code uses mcpServers key
         var claudeMcpContent = """
             {
               "mcpServers": {
@@ -561,40 +669,167 @@ static async Task<int> RunInitAsync(string[] args)
     }
 
     // apm.yml — Microsoft APM (Agent Package Manager)
-    var apmPath = Path.Combine(currentDir, "apm.yml");
-    if (!File.Exists(apmPath))
+    if (selectedSln is not null)
     {
-        var packageName = Regex.Replace(
-            Path.GetFileNameWithoutExtension(selectedSln).ToLowerInvariant(),
-            @"[^a-z0-9._-]", "-");
-        var apmContent = $"""
-            name: {packageName}
-            version: 1.0.0
-            description: Agent configuration for {Path.GetFileNameWithoutExtension(selectedSln)}
+        var apmPath = Path.Combine(currentDir, "apm.yml");
+        if (!File.Exists(apmPath))
+        {
+            var packageName = Regex.Replace(
+                Path.GetFileNameWithoutExtension(selectedSln).ToLowerInvariant(),
+                @"[^a-z0-9._-]", "-");
+            var apmContent = $"""
+                name: {packageName}
+                version: 1.0.0
+                description: Agent configuration for {Path.GetFileNameWithoutExtension(selectedSln)}
 
-            dependencies:
-              apm: []
-              mcp:
-                - name: codegraph
-                  registry: false
-                  transport: stdio
-                  command: dotnet
-                  args: ["codegraph", "mcp"]
-            """;
-        await File.WriteAllTextAsync(apmPath, apmContent);
-        Console.WriteLine("Created apm.yml");
+                dependencies:
+                  apm: []
+                  mcp:
+                    - name: codegraph
+                      registry: false
+                      transport: stdio
+                      command: dotnet
+                      args: ["codegraph", "mcp"]
+                """;
+            await File.WriteAllTextAsync(apmPath, apmContent);
+            Console.WriteLine("Created apm.yml");
+        }
+        else
+        {
+            Console.WriteLine("apm.yml already exists — skipped");
+        }
+    }
+
+    // --- Step 1: Detect / select agents ---
+    Console.WriteLine();
+    Console.WriteLine("CodeGraph Agent Setup");
+    Console.WriteLine("=====================");
+    Console.WriteLine();
+
+    List<AgentKind> agentsToInstall;
+
+    if (agentFlag is not null)
+    {
+        // Non-interactive: use specified agent(s)
+        agentsToInstall = ParseAgentFlag(agentFlag);
+        if (agentsToInstall.Count == 0)
+        {
+            Console.Error.WriteLine($"Unknown agent: {agentFlag}");
+            Console.Error.WriteLine("Valid agents: claude, copilot, opencode, cursor, all");
+            return 1;
+        }
     }
     else
     {
-        Console.WriteLine("apm.yml already exists — skipped");
+        // Auto-detect agent configurations
+        var detections = AgentDetector.Detect(currentDir);
+
+        if (detections.Count > 0)
+        {
+            Console.WriteLine("Detected agent configurations:");
+            foreach (var d in detections)
+                Console.WriteLine($"  ✓ {d.Agent} ({d.MatchedPath} found)");
+
+            // Report agents NOT detected
+            var detected = detections.Select(d => d.Agent).ToHashSet();
+            foreach (var agent in Enum.GetValues(typeof(AgentKind)).Cast<AgentKind>())
+            {
+                if (!detected.Contains(agent))
+                    Console.WriteLine($"  ✗ {agent} (not detected)");
+            }
+
+            agentsToInstall = detections.Select(d => d.Agent).ToList();
+        }
+        else
+        {
+            Console.WriteLine("No agent configurations detected.");
+            Console.WriteLine("Installing generic CodeGraph instructions.");
+            agentsToInstall = new List<AgentKind>();
+        }
     }
 
+    // --- Step 2: Write skill files ---
+    Console.WriteLine();
+    Console.WriteLine("Installing CodeGraph skills...");
+    Console.WriteLine();
+
+    var results = await AgentSkillWriter.WriteAsync(currentDir, agentsToInstall, force);
+
+    foreach (var r in results)
+    {
+        var icon = r.Action switch
+        {
+            WriteAction.Created => "✓ Created",
+            WriteAction.Appended => "✓ Appended CodeGraph section to",
+            WriteAction.AlreadyPresent => "· Already present in",
+            WriteAction.Skipped => "· Skipped (exists)",
+            _ => "?"
+        };
+        Console.WriteLine($"  {icon} {r.RelativePath}");
+    }
+
+    // --- Step 3: .gitignore ---
+    var gitignoreResult = await AgentSkillWriter.EnsureGitignoreEntryAsync(currentDir);
+    {
+        var icon = gitignoreResult.Action switch
+        {
+            WriteAction.Created => "✓ Created",
+            WriteAction.Appended => "✓ Added .codegraph/ to",
+            WriteAction.AlreadyPresent => "· .codegraph/ already in",
+            _ => "?"
+        };
+        Console.WriteLine($"  {icon} {gitignoreResult.RelativePath}");
+    }
+
+    // --- Step 4: Optional — run index ---
+    if (solutionFlag is not null)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"Indexing {solutionFlag}...");
+        var indexArgs = new[] { "index", "--solution", solutionFlag, "--output", outputDir ?? ".codegraph" };
+        var indexResult = await RunIndexAsync(indexArgs);
+        if (indexResult != 0)
+            return indexResult;
+    }
+
+    // --- Next steps ---
     Console.WriteLine();
     Console.WriteLine("Next steps:");
-    Console.WriteLine("  1. Review codegraph.json and adjust settings");
-    Console.WriteLine("  2. Run 'codegraph index' to build the graph");
+    if (solutionFlag is null)
+    {
+        Console.WriteLine("  1. Index your codebase:");
+        Console.WriteLine("     codegraph index --solution <your-solution.sln> --output .codegraph/");
+        Console.WriteLine();
+        Console.WriteLine("  2. Verify it works:");
+        Console.WriteLine("     codegraph query '<any-type-name>' --depth 1");
+    }
+    else
+    {
+        Console.WriteLine("  1. Verify it works:");
+        Console.WriteLine("     codegraph query '<any-type-name>' --depth 1");
+    }
+    Console.WriteLine();
+    Console.WriteLine("  Commit the skill files:");
+    Console.WriteLine("     git add .claude/ .github/ .codegraph/INSTRUCTIONS.md");
+    Console.WriteLine("     git commit -m 'Add CodeGraph agent skills'");
 
     return 0;
+}
+
+static List<AgentKind> ParseAgentFlag(string value)
+{
+    return value.ToLowerInvariant() switch
+    {
+        "all" => new List<AgentKind>
+        {
+            AgentKind.Claude, AgentKind.Copilot, AgentKind.OpenCode, AgentKind.Cursor
+        },
+        "claude" => new List<AgentKind> { AgentKind.Claude },
+        "copilot" => new List<AgentKind> { AgentKind.Copilot },
+        "opencode" => new List<AgentKind> { AgentKind.OpenCode },
+        "cursor" => new List<AgentKind> { AgentKind.Cursor },
+        _ => new List<AgentKind>()
+    };
 }
 
 static List<ProjectGraph> GroupIntoProjectGraphs(
@@ -656,18 +891,43 @@ static List<ProjectGraph> GroupIntoProjectGraphs(
 static void PrintUsage()
 {
     Console.WriteLine("Usage:");
-    Console.WriteLine("  codegraph init [--output <dir>]");
+    Console.WriteLine("  codegraph init [--agent <name>] [--solution <path.sln>] [--force]");
     Console.WriteLine("  codegraph index --solution <path.sln> [options]");
     Console.WriteLine("  codegraph query <symbol> [options]");
+    Console.WriteLine("  codegraph diff [options]");
     Console.WriteLine("  codegraph mcp [--graph-dir <dir>]");
     Console.WriteLine();
     Console.WriteLine("Commands:");
-    Console.WriteLine("  init                     Initialize codegraph.json in the current directory");
+    Console.WriteLine("  init                     Initialize config, MCP, and agent skill files");
     Console.WriteLine("  index                    Build the code graph from a solution");
     Console.WriteLine("  query                    Query the code graph for symbols and relationships");
+    Console.WriteLine("  diff                     Compare graph snapshots and report structural changes");
     Console.WriteLine("  mcp                      Start MCP (Model Context Protocol) stdio server");
     Console.WriteLine();
     Console.WriteLine("Run 'codegraph <command> --help' for command-specific options.");
+}
+
+static void PrintInitUsage()
+{
+    Console.WriteLine("""
+        Usage: codegraph init [options]
+
+        Initializes codegraph.json, MCP configs, and scaffolds agent skill files.
+        Auto-detects which AI agents are configured in the repository.
+
+        Options:
+          --agent <name>       Install for a specific agent: claude, copilot, opencode, cursor, all
+          --solution <path>    Combine init + index in one step
+          --output <dir>       Output directory for graph data (default: .codegraph)
+          --force              Overwrite existing skill files
+          --help, -h           Show this help
+
+        Examples:
+          codegraph init                          # Auto-detect agents and scaffold
+          codegraph init --agent claude           # Install Claude Code skill files
+          codegraph init --agent all              # Install for all agents
+          codegraph init --solution MyApp.sln     # Init + index in one step
+        """);
 }
 
 static void PrintQueryUsage()
@@ -686,6 +946,21 @@ static void PrintQueryUsage()
           --include-external   Include external dependency nodes
           --no-rank            Disable result ranking
           --graph-dir <path>   Graph directory (default: .codegraph)
+        """);
+}
+
+static void PrintDiffUsage()
+{
+    Console.WriteLine("""
+        Usage: codegraph diff [options]
+
+        Options:
+          --base <path>         Base graph directory (default: .codegraph-prev)
+          --head <path>         Head graph directory (default: .codegraph)
+          --ref <git-ref>       Use snapshot named .codegraph-<ref> as base
+          --only <types>        Comma-separated: added, removed, signature-changed,
+                                added-nodes, removed-nodes, added-edges, removed-edges
+          --format <fmt>        json | text | context (default: context)
         """);
 }
 
@@ -752,6 +1027,64 @@ static bool HasFlag(List<string> args, string name)
     if (idx < 0) return false;
     args.RemoveAt(idx);
     return true;
+}
+
+static HashSet<GraphDiffChangeType> ParseDiffOnly(string? value)
+{
+    var result = new HashSet<GraphDiffChangeType>();
+    if (string.IsNullOrWhiteSpace(value))
+        return result;
+
+    var tokens = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    foreach (var token in tokens)
+    {
+        switch (token.ToLowerInvariant())
+        {
+            case "added":
+                result.Add(GraphDiffChangeType.AddedNodes);
+                result.Add(GraphDiffChangeType.AddedEdges);
+                break;
+            case "removed":
+                result.Add(GraphDiffChangeType.RemovedNodes);
+                result.Add(GraphDiffChangeType.RemovedEdges);
+                break;
+            case "signature-changed":
+                result.Add(GraphDiffChangeType.SignatureChangedNodes);
+                break;
+            case "added-nodes":
+                result.Add(GraphDiffChangeType.AddedNodes);
+                break;
+            case "removed-nodes":
+                result.Add(GraphDiffChangeType.RemovedNodes);
+                break;
+            case "added-edges":
+                result.Add(GraphDiffChangeType.AddedEdges);
+                break;
+            case "removed-edges":
+                result.Add(GraphDiffChangeType.RemovedEdges);
+                break;
+            default:
+                throw new ArgumentException($"Unknown diff change type '{token}' in --only.");
+        }
+    }
+
+    return result;
+}
+
+static GraphDiffResult ApplyDiffFilter(GraphDiffResult diff, HashSet<GraphDiffChangeType> filter)
+{
+    return new GraphDiffResult
+    {
+        BaseMetadata = diff.BaseMetadata,
+        HeadMetadata = diff.HeadMetadata,
+        AddedNodes = filter.Contains(GraphDiffChangeType.AddedNodes) ? diff.AddedNodes : new List<GraphNode>(),
+        RemovedNodes = filter.Contains(GraphDiffChangeType.RemovedNodes) ? diff.RemovedNodes : new List<GraphNode>(),
+        SignatureChangedNodes = filter.Contains(GraphDiffChangeType.SignatureChangedNodes)
+            ? diff.SignatureChangedNodes
+            : new List<GraphSignatureChange>(),
+        AddedEdges = filter.Contains(GraphDiffChangeType.AddedEdges) ? diff.AddedEdges : new List<GraphEdge>(),
+        RemovedEdges = filter.Contains(GraphDiffChangeType.RemovedEdges) ? diff.RemovedEdges : new List<GraphEdge>()
+    };
 }
 
 static string RunGit(string arguments, string workingDirectory)
