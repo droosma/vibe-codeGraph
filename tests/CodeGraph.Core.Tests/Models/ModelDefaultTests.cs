@@ -195,6 +195,13 @@ public class GraphMetadataDefaultTests
     }
 
     [Fact]
+    public void Default_SolutionName_IsEmpty()
+    {
+        var meta = new GraphMetadata();
+        Assert.Equal(string.Empty, meta.SolutionName);
+    }
+
+    [Fact]
     public void Default_ProjectsIndexed_IsEmpty()
     {
         var meta = new GraphMetadata();
