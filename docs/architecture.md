@@ -172,7 +172,8 @@ GraphMetadata  — Index metadata (git info, stats, schema version)
 
 The `GraphWriter` splits the graph into multiple JSON files using the configured `splitBy` strategy:
 
-- **`project`** (default) — One `.json` file per project (e.g., `MyApp.Core.json`)
+- **`assembly`** (default) — One `.json` file per assembly (e.g., `MyApp.Core.json`). External/NuGet nodes go to `_external.json`.
+- **`project`** — Also groups by assembly name (functionally equivalent to `assembly`)
 - **`namespace`** — One `.json` file per root namespace
 
 Plus a `meta.json` containing `GraphMetadata`.
