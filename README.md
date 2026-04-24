@@ -312,7 +312,7 @@ See [codegraph.json.example](codegraph.json.example) for a fully annotated examp
                                                               └─────────────┘
 ```
 
-1. **Hybrid Workspace Loader** — Runs `dotnet build`, then parses `.sln` / `.csproj` / `project.assets.json` to assemble Roslyn `CSharpCompilation` objects directly (no MSBuildWorkspace).
+1. **Hybrid Workspace Loader** — Runs `dotnet build`, then parses `.sln` / `.csproj` / `project.assets.json` to assemble Roslyn `CSharpCompilation` objects directly (no MSBuildWorkspace). If the build fails, a warning is emitted to stderr and indexing continues with best-effort compilation.
 2. **Syntax Pass** — Walks syntax trees to extract namespaces, types, methods, properties, fields, constructors, and events. Creates structural `Contains` edges. Enriches nodes with metadata (`isAbstract`, `isStatic`, `isAsync`, `returnType`, etc.).
 3. **Semantic Pass** — Uses the Roslyn semantic model to resolve calls, inheritance, interface implementations, type dependencies, references, and overrides. Creates external nodes for cross-assembly references.
 4. **DI Pass** — Detects `AddScoped/AddTransient/AddSingleton` patterns to emit `ResolvesTo` edges with lifetime metadata.
