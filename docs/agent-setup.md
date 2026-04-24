@@ -56,6 +56,38 @@ For **Claude Code**: the server is auto-discovered from `.mcp.json`. No restart 
 
 For **APM**: run `apm install` to wire the MCP server into all detected clients.
 
+### `codegraph_query` Tool Reference
+
+Once registered via MCP, agents call the tool with these parameters:
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `symbol` | `string` | ✅ | — | Symbol name or pattern. Supports wildcards (`Order*`, `*Service`) and kind prefix (`type:OrderService`, `method:PlaceOrder`). |
+| `depth` | `integer` | | `1` | BFS traversal depth from matched nodes. `0` = matched node only; `1` = direct neighbors. |
+| `kind` | `string` | | all edges | Edge type filter. See values below. |
+| `namespace` | `string` | | all | Namespace filter (wildcards OK, e.g. `MyApp.Services*`). |
+| `project` | `string` | | all | Project/assembly filter. |
+| `format` | `string` | | `"context"` | Output format: `"context"` (Markdown), `"json"`, or `"text"`. |
+| `max_nodes` | `integer` | | `50` | Maximum nodes to return. |
+| `include_external` | `boolean` | | `false` | Include external (NuGet) dependency nodes. |
+
+**`kind` values:**
+
+| Value | Traverses |
+|-------|-----------|
+| `calls-to` | Outgoing call edges from the matched symbol |
+| `calls-from` | Incoming call edges to the matched symbol |
+| `inherits` | Inheritance hierarchy |
+| `implements` | Interface implementations |
+| `depends-on` | Type-level dependencies |
+| `resolves-to` | DI container wiring |
+| `covers` | Test → production coverage edges |
+| `covered-by` | Production → test coverage edges |
+| `references` | Cross-symbol references |
+| `overrides` | Method override edges |
+| `contains` | Parent/child containment edges |
+| `all` | No filter — all edge types |
+
 ---
 
 ## Agent Skill Scaffolding

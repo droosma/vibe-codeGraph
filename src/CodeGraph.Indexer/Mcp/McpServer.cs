@@ -229,7 +229,7 @@ internal sealed class McpServer
                     {
                         ["type"] = "string",
                         ["description"] = "Edge type filter",
-                        ["enum"] = new JsonArray("calls-to", "calls-from", "inherits", "implements", "depends-on", "resolves-to", "covers", "all")
+                        ["enum"] = new JsonArray("calls-to", "calls-from", "inherits", "implements", "depends-on", "resolves-to", "covers", "covered-by", "references", "overrides", "contains", "all")
                     },
                     ["namespace"] = new JsonObject
                     {
