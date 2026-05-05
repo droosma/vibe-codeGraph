@@ -177,7 +177,11 @@ static async Task<int> RunViewAsync(string[] args)
                 outputPath = args[++i];
                 break;
             case "--max-nodes" when i + 1 < args.Length:
-                maxNodes = int.Parse(args[++i]);
+                if (!int.TryParse(args[++i], out maxNodes) || maxNodes <= 0)
+                {
+                    Console.Error.WriteLine("Error: --max-nodes must be a positive integer.");
+                    return 1;
+                }
                 break;
             case "--no-open":
                 noOpen = true;

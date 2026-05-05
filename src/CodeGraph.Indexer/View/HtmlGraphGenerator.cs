@@ -97,6 +97,7 @@ public class HtmlGraphGenerator
         sb.AppendLine("<body>");
         sb.AppendLine(GetBodyHtml(solutionName, nodes.Count, edges.Count));
         sb.AppendLine("<script src=\"https://unpkg.com/3d-force-graph@1\"></script>");
+        sb.AppendLine("<script src=\"https://unpkg.com/three-spritetext@1\"></script>");
         sb.AppendLine("<script>");
         sb.AppendLine($"const graphData = {graphData};");
         sb.AppendLine(GetJs());
