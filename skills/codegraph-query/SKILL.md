@@ -156,8 +156,8 @@ Use `--format json` when you need structured data for programmatic processing.
 
 If the query returns no results or the graph is unavailable:
 
-1. **No `.codegraph/` directory** → Run `codegraph index --solution <path.sln>`
-2. **Graph is stale** (meta.json timestamp is old) → Run `codegraph index --solution <path.sln> --changed-only`
+1. **No `.codegraph/` directory** → Run `codegraph index --solution <path.sln|path.slnx>`
+2. **Graph is stale** (meta.json timestamp is old) → Run `codegraph index --solution <path.sln|path.slnx> --changed-only`
 3. **Symbol not found** → Try wildcard patterns (`*OrderService*`), check spelling, or try `--include-external`
 4. **Too many results** → Add `--namespace`, `--project`, or `--kind` filters; reduce `--max-nodes`
 5. **CodeGraph not installed** → Run `dotnet tool install -g CodeGraph`

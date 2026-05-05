@@ -102,7 +102,7 @@ The query command reads those files and returns a focused subgraph.
 Auto-detect your solution, create config + MCP server registration files, and scaffold agent skill files.
 
 ```
-codegraph init [--agent <name>] [--solution <path.sln>] [--output <dir>] [--force]
+codegraph init [--agent <name>] [--solution <path.sln|path.slnx>] [--output <dir>] [--force]
 ```
 
 **Step 1 — Config + MCP files** (always):
@@ -135,12 +135,12 @@ Auto-detects which AI agents are configured in the repo (looks for `.claude/`, `
 Build the semantic graph from your C# solution.
 
 ```
-codegraph index --solution <path.sln> [options]
+codegraph index --solution <path.sln|path.slnx> [options]
 ```
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--solution <path>` | Path to `.sln` file | From `codegraph.json` |
+| `--solution <path>` | Path to `.sln` or `.slnx` file | From `codegraph.json` |
 | `--output <dir>` | Output directory for graph files | `.codegraph` |
 | `--projects <filter>` | Wildcard filter for project names | All projects |
 | `--config <path>` | Path to `codegraph.json` config | Auto-detected |
@@ -297,7 +297,8 @@ CodeGraph is configured via a `codegraph.json` file in your repo root. Run `code
 
 | Section | Controls |
 |---------|----------|
-| `solution` | Path to `.sln` file |
+| `solution` | Path to a single `.sln` or `.slnx` file |
+| `solutions` | Array of solution entries for multi-solution mono-repos |
 | `output` | Graph output directory (default: `.codegraph`) |
 | `splitBy` | File split strategy: `project` (default) or `assembly` (both are assembly-based), or `namespace` |
 | `index` | Project filtering, build configuration, external packages |
@@ -306,7 +307,7 @@ CodeGraph is configured via a `codegraph.json` file in your repo root. Run `code
 | `docs` | Documentation extraction |
 | `query` | Default query parameters |
 
-See [codegraph.json.example](codegraph.json.example) for a fully annotated example.
+See [codegraph.json.example](codegraph.json.example) for a single-solution example, or [codegraph.multi-solution.json.example](codegraph.multi-solution.json.example) for a multi-solution example.
 
 ---
 
@@ -331,7 +332,7 @@ See [codegraph.json.example](codegraph.json.example) for a fully annotated examp
                                                               └─────────────┘
 ```
 
-1. **Hybrid Workspace Loader** — Runs `dotnet restore`, then parses `.sln` / `.csproj` / `project.assets.json` to assemble Roslyn `CSharpCompilation` objects directly (no MSBuildWorkspace). If the restore fails, a warning is emitted to stderr and indexing continues with best-effort compilation.
+1. **Hybrid Workspace Loader** — Runs `dotnet restore`, then parses `.sln` / `.slnx` / `.csproj` / `project.assets.json` to assemble Roslyn `CSharpCompilation` objects directly (no MSBuildWorkspace). If the restore fails, a warning is emitted to stderr and indexing continues with best-effort compilation.
 2. **Syntax Pass** — Walks syntax trees to extract namespaces, types, methods, properties, fields, constructors, and events. Creates structural `Contains` edges. Enriches nodes with metadata (`isAbstract`, `isStatic`, `isAsync`, `returnType`, etc.).
 3. **Semantic Pass** — Uses the Roslyn semantic model to resolve calls, inheritance, interface implementations, type dependencies, references, and overrides. Creates external nodes for cross-assembly references.
 4. **DI Pass** — Detects `AddScoped/AddTransient/AddSingleton` patterns to emit `ResolvesTo` edges with lifetime metadata.
