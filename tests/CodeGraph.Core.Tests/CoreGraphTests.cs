@@ -98,6 +98,7 @@ public class JsonRoundTripTests
             GeneratedAt = new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.Zero),
             IndexerVersion = "1.0.0",
             Solution = "MyApp.sln",
+            SolutionName = "MyApp",
             ProjectsIndexed = new[] { "MyApp", "MyApp.Tests" },
             Stats = new Dictionary<string, int> { ["nodes"] = 100, ["edges"] = 250 }
         };
@@ -110,6 +111,7 @@ public class JsonRoundTripTests
         Assert.Equal(meta.CommitHash, deserialized.CommitHash);
         Assert.Equal(meta.Branch, deserialized.Branch);
         Assert.Equal(meta.GeneratedAt, deserialized.GeneratedAt);
+        Assert.Equal(meta.SolutionName, deserialized.SolutionName);
         Assert.Equal(meta.ProjectsIndexed, deserialized.ProjectsIndexed);
         Assert.Equal(meta.Stats["nodes"], deserialized.Stats["nodes"]);
     }

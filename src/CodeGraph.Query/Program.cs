@@ -39,6 +39,7 @@ static async Task<int> RunAsync(string[] args)
     var includeExternal = HasFlag(argList, "--include-external");
     var rank = !HasFlag(argList, "--no-rank");
     var graphDir = GetOption(argList, "--graph-dir", ".codegraph");
+    var fromSolution = GetOption(argList, "--from", (string?)null);
 
     var outputFormat = format?.ToLowerInvariant() switch
     {
@@ -63,7 +64,7 @@ static async Task<int> RunAsync(string[] args)
     QueryEngine engine;
     try
     {
-        engine = await QueryEngine.LoadAsync(graphDir);
+        engine = await QueryEngine.LoadAsync(graphDir, fromSolution);
     }
     catch (FileNotFoundException ex)
     {
@@ -170,6 +171,7 @@ static void PrintUsage()
           --include-external   Include external dependency nodes (default: false)
           --no-rank            Disable result ranking
           --graph-dir <path>   Graph directory (default: .codegraph)
+          --from <solution>    Query only the specified solution sub-graph (multi-solution)
         """);
 }
 

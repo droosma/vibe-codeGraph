@@ -16,6 +16,7 @@ internal sealed class McpServer
 {
     private readonly string _graphDir;
     private QueryEngine? _engine;
+    private string? _lastSolutionFilter;
 
     internal McpServer(string graphDir)
     {
@@ -259,6 +260,11 @@ internal sealed class McpServer
                         ["type"] = "boolean",
                         ["description"] = "Include external dependency nodes",
                         ["default"] = false
+                    },
+                    ["solution"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Scope query to a specific solution (multi-solution support). Uses the solution name without extension."
                     }
                 },
                 ["required"] = new JsonArray("symbol")
@@ -285,7 +291,14 @@ internal sealed class McpServer
 
         try
         {
-            _engine ??= await QueryEngine.LoadAsync(_graphDir);
+            var solutionFilter = arguments?["solution"]?.GetValue<string>();
+
+            // Reload engine if solution filter changed or on first load
+            if (_engine is null || solutionFilter != _lastSolutionFilter)
+            {
+                _engine = await QueryEngine.LoadAsync(_graphDir, solutionFilter);
+                _lastSolutionFilter = solutionFilter;
+            }
 
             var depth = arguments?["depth"]?.GetValue<int>() ?? 1;
             var kind = arguments?["kind"]?.GetValue<string>();

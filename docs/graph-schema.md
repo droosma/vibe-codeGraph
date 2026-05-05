@@ -53,6 +53,7 @@ Contains metadata about the indexing run.
 | `generatedAt` | `string` (ISO 8601) | UTC timestamp of when the graph was generated. |
 | `indexerVersion` | `string` | Version of the CodeGraph indexer assembly. |
 | `solution` | `string` | Name of the `.sln` or `.slnx` file that was indexed. |
+| `solutionName` | `string` | Solution name without extension (used for sub-graph directory naming in multi-solution setups). |
 | `projectsIndexed` | `string[]` | List of project names that were indexed. |
 | `stats` | `object` | Summary statistics. Keys: `node_count`, `edge_count`, `type_count`, `method_count`. |
 

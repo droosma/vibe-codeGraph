@@ -1,6 +1,6 @@
 # Configuration Reference
 
-CodeGraph is configured via a `codegraph.json` file in your repo root. All settings have sensible defaults — you only need to set `solution`.
+CodeGraph is configured via a `codegraph.json` file in your repo root. All settings have sensible defaults — you only need to set `solution` (single solution) or `solutions` (multi-solution).
 
 Generate a starter config: `codegraph init`
 
@@ -14,9 +14,55 @@ The `ConfigLoader` searches for `codegraph.json` by walking up the directory tre
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `solution` | `string?` | `null` | Path to the `.sln` or `.slnx` file. Can also be set via `--solution` CLI flag. |
+| `solution` | `string?` | `null` | Path to a single `.sln` or `.slnx` file. Can also be set via `--solution` CLI flag. Use `solutions` for multi-solution repos. |
+| `solutions` | `SolutionEntry[]` | `[]` | Array of solution entries for multi-solution support. Each entry has a `path` and optional per-solution overrides. Cannot be used together with `solution`. |
 | `output` | `string` | `".codegraph"` | Output directory for graph JSON files. |
 | `splitBy` | `string` | `"project"` | How to split graph files: `"project"` or `"assembly"` (both are assembly-based and produce one file per assembly) or `"namespace"` (one file per root namespace). |
+
+### Multi-Solution Support
+
+For mono-repos with multiple solutions, use the `solutions` array instead of `solution`:
+
+```json
+{
+  "solutions": [
+    { "path": "src/backend/backend.sln" },
+    {
+      "path": "src/client/wpf/wpfclient.sln",
+      "ioc": {
+        "registrationMethodPatterns": ["RegisterType*", "Add*"]
+      }
+    }
+  ],
+  "output": ".codegraph"
+}
+```
+
+Each `SolutionEntry` supports:
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| `path` | `string` | Yes | Path to the `.sln` or `.slnx` file (relative to config file). |
+| `ioc` | `IocConfig?` | No | Per-solution IoC/DI overrides. |
+| `index` | `IndexConfig?` | No | Per-solution indexing overrides. |
+| `tests` | `TestConfig?` | No | Per-solution test discovery overrides. |
+| `docs` | `DocConfig?` | No | Per-solution documentation overrides. |
+
+**Directory Layout (After Multi-Solution Indexing):**
+
+```
+.codegraph/
+├── backend/
+│   ├── meta.json
+│   ├── Backend.Core.json
+│   └── ...
+├── wpfclient/
+│   ├── meta.json
+│   ├── WpfClient.UI.json
+│   └── ...
+```
+
+**Migration from single solution:** If you have an existing `"solution"` config, you can keep it as-is. To switch to multi-solution, replace `"solution"` with `"solutions"`. Using both simultaneously is an error.
 
 ---
 
@@ -191,6 +237,24 @@ Everything else uses defaults: output to `.codegraph`, split by project, index a
 }
 ```
 
+### Multi-Solution (Mono-Repo)
+
+```json
+{
+  "solutions": [
+    { "path": "src/backend/backend.sln" },
+    {
+      "path": "src/client/wpf/wpfclient.sln",
+      "ioc": {
+        "registrationMethodPatterns": ["RegisterType*", "Add*"]
+      }
+    }
+  ],
+  "output": ".codegraph",
+  "query": { "defaultDepth": 1, "defaultFormat": "context", "maxNodes": 50 }
+}
+```
+
 ### Full Configuration
 
 See [`codegraph.json.example`](../codegraph.json.example) in the repo root for a fully annotated example.
@@ -211,13 +275,17 @@ CLI flags take precedence over config file values:
 | `--skip-restore` | *(no config equivalent)* — skip the `dotnet restore` step |
 | `--skip-build` | Hidden alias for `--skip-restore` |
 | `--changed-only` | *(no config equivalent)* — incremental re-index only changed projects |
+| `--sequential` | *(no config equivalent)* — disable parallel multi-solution indexing |
 | `--verbose` | *(no config equivalent)* — enable verbose output |
+| `--from <solution>` | *(query only)* — scope query to a specific solution sub-graph |
 
 ---
 
 ## Tips
 
-- **Minimal config**: You only need `solution` — everything else has sensible defaults.
+- **Minimal config**: You only need `solution` (or `solutions` for multi-solution repos) — everything else has sensible defaults.
 - **CI override**: Use `--configuration Release --skip-restore` in CI if you've already restored.
 - **Large repos**: Increase `maxNodes` or use `--namespace` / `--project` filters to scope queries.
 - **External packages**: Add frequently-used libraries to `includeExternalPackages` to see cross-assembly call chains.
+- **Multi-solution**: Use `--sequential` flag on machines with less than 16GB RAM to avoid memory pressure during parallel indexing.
+- **Solution scoping**: Use `--from <solution-name>` to query only a specific solution's graph in a multi-solution setup.
