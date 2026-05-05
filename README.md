@@ -148,6 +148,7 @@ codegraph index --solution <path.sln|path.slnx> [options]
 | `--skip-restore` | Skip `dotnet restore` step | `false` |
 | `--skip-build` | Hidden alias for `--skip-restore` | `false` |
 | `--changed-only` | Incremental re-index; only re-index projects with changes since last indexed commit | `false` |
+| `--sequential` | Disable parallel multi-solution indexing (recommended on machines with < 16 GB RAM) | `false` |
 | `--verbose` | Enable verbose output | `false` |
 
 ### `codegraph query`
@@ -171,6 +172,7 @@ codegraph query <symbol-pattern> [options]
 | `--include-external` | Include external assembly dependencies | `false` |
 | `--no-rank` | Disable relevance ranking | (ranking enabled by default) |
 | `--graph-dir <dir>` | Graph directory | `.codegraph` |
+| `--from <solution>` | Scope query to a specific solution sub-graph (multi-solution only) | All solutions |
 
 **Edge kind aliases:**
 
