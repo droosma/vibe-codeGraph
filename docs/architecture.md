@@ -37,11 +37,11 @@ CodeGraph deliberately avoids `MSBuildWorkspace` due to its well-known reliabili
    - Project references
    - `Directory.Build.props` inheritance
 
-4. **Reference Resolution** — Two resolvers locate the DLLs needed for compilation:
-   - `AssetsFileResolver` — Reads `project.assets.json` (NuGet restore output) to find package DLLs.
-   - `FrameworkRefResolver` — Locates .NET runtime reference assemblies (e.g., `System.Runtime.dll`).
+4. **Reference Resolution + Compilation (parallelized)** — Steps 4 and 5 run concurrently across all projects using `Parallel.ForEachAsync` with `MaxDegreeOfParallelism = Environment.ProcessorCount`. A shared `MetadataReferenceCache` (`ConcurrentDictionary<string, MetadataReference>`) eliminates redundant `MetadataReference.CreateFromFile` calls for framework and NuGet DLLs referenced by multiple projects. Results are collected into a `ConcurrentBag` and then sorted by original project order for deterministic output.
+   - `AssetsFileResolver` — Reads `project.assets.json` (NuGet restore output) to find package DLLs. Results are cached per `(projectDirectory, targetFramework)` tuple in a static `ConcurrentDictionary`.
+   - `FrameworkRefResolver` — Locates .NET runtime reference assemblies (e.g., `System.Runtime.dll`). Results are cached by target framework moniker (TFM) string in a static `ConcurrentDictionary`.
 
-5. **Compilation** — `CompilationFactory` assembles a `CSharpCompilation` per project from source files + resolved references.
+5. **Compilation** — `CompilationFactory` assembles a `CSharpCompilation` per project from source files + resolved references. Accepts an optional `MetadataReferenceCache` to reuse already-loaded references.
 
 ### Output
 
@@ -64,15 +64,23 @@ Each `ProjectCompilation` is a self-contained Roslyn compilation ready for analy
 |-----------|---------|
 | `SolutionParser` | Parses `.sln` (regex) and `.slnx` (XML) files, extracts project paths |
 | `ProjectParser` | XML `.csproj` parser (SDK-style), handles `Directory.Build.props` |
-| `AssetsFileResolver` | Reads `obj/project.assets.json` for NuGet DLL paths |
-| `FrameworkRefResolver` | Locates .NET SDK reference assemblies |
-| `CompilationFactory` | Creates `CSharpCompilation` from source files + references |
+| `AssetsFileResolver` | Reads `obj/project.assets.json` for NuGet DLL paths; caches by `(directory, framework)` |
+| `FrameworkRefResolver` | Locates .NET SDK reference assemblies; caches by TFM string |
+| `MetadataReferenceCache` | Shared `ConcurrentDictionary` that deduplicates `MetadataReference.CreateFromFile` calls across projects |
+| `CompilationFactory` | Creates `CSharpCompilation` from source files + references; accepts optional `MetadataReferenceCache` |
 
 ---
 
 ## Pass Architecture
 
-Indexing runs four sequential passes over each compilation. This separation keeps each pass focused and independently testable.
+Indexing runs four passes over each compilation. Projects are processed in parallel (`Parallel.ForEach` over all compiled projects); each project's four passes run sequentially within its own thread. Results are aggregated after the parallel loop.
+
+Each pass receives:
+- The `CSharpCompilation` for one project
+- The solution root path (for computing relative file paths)
+- A `HashSet<string> knownIds` (populated and extended as each pass runs) to distinguish internal symbols from external ones
+
+This separation keeps each pass focused and independently testable.
 
 ### SyntaxPass
 
