@@ -8,6 +8,7 @@ using CodeGraph.Core.Models;
 using CodeGraph.Indexer.Init;
 using CodeGraph.Indexer.Mcp;
 using CodeGraph.Indexer.Passes;
+using CodeGraph.Indexer.View;
 using CodeGraph.Indexer.Workspace;
 using CodeGraph.Query;
 using CodeGraph.Query.Filters;
@@ -30,6 +31,7 @@ static async Task<int> RunAsync(string[] args)
         "query" => await RunQueryAsync(args),
         "diff" => await RunDiffAsync(args),
         "mcp" => await RunMcpAsync(args),
+        "view" => await RunViewAsync(args),
         "-h" or "--help" => ShowHelp(),
         _ => ShowUnknown(args[0])
     };
@@ -155,6 +157,70 @@ static async Task<int> RunMcpAsync(string[] args)
 
     var server = new McpServer(graphDir);
     return await server.RunAsync();
+}
+
+static async Task<int> RunViewAsync(string[] args)
+{
+    var graphDir = ".codegraph";
+    string? outputPath = null;
+    var maxNodes = 5000;
+    var noOpen = false;
+
+    for (int i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--graph-dir" when i + 1 < args.Length:
+                graphDir = args[++i];
+                break;
+            case "--output" when i + 1 < args.Length:
+                outputPath = args[++i];
+                break;
+            case "--max-nodes" when i + 1 < args.Length:
+                maxNodes = int.Parse(args[++i]);
+                break;
+            case "--no-open":
+                noOpen = true;
+                break;
+            case "-h" or "--help":
+                PrintViewUsage();
+                return 0;
+            default:
+                Console.Error.WriteLine($"Unknown argument: {args[i]}");
+                PrintViewUsage();
+                return 1;
+        }
+    }
+
+    if (!Directory.Exists(graphDir))
+    {
+        Console.Error.WriteLine($"Graph directory not found: {graphDir}");
+        Console.Error.WriteLine("Run 'codegraph index' first to generate the graph.");
+        return 1;
+    }
+
+    var generator = new HtmlGraphGenerator(graphDir, maxNodes);
+    var html = await generator.GenerateAsync();
+
+    var filePath = outputPath ?? Path.Combine(Path.GetTempPath(), $"codegraph-view-{Guid.NewGuid():N}.html");
+    await File.WriteAllTextAsync(filePath, html);
+
+    Console.WriteLine($"Graph visualization written to: {filePath}");
+
+    if (!noOpen)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(filePath) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Could not open browser: {ex.Message}");
+            Console.WriteLine("Open the file manually in your browser.");
+        }
+    }
+
+    return 0;
 }
 
 static async Task<int> RunDiffAsync(string[] args)
@@ -1033,6 +1099,7 @@ static void PrintUsage()
     Console.WriteLine("  codegraph query <symbol> [options]");
     Console.WriteLine("  codegraph diff [options]");
     Console.WriteLine("  codegraph mcp [--graph-dir <dir>]");
+    Console.WriteLine("  codegraph view [--graph-dir <dir>] [--output <path>] [--max-nodes <n>]");
     Console.WriteLine();
     Console.WriteLine("Commands:");
     Console.WriteLine("  init                     Initialize config, MCP, and agent skill files");
@@ -1040,6 +1107,7 @@ static void PrintUsage()
     Console.WriteLine("  query                    Query the code graph for symbols and relationships");
     Console.WriteLine("  diff                     Compare graph snapshots and report structural changes");
     Console.WriteLine("  mcp                      Start MCP (Model Context Protocol) stdio server");
+    Console.WriteLine("  view                     Generate interactive 3D graph visualization");
     Console.WriteLine();
     Console.WriteLine("Run 'codegraph <command> --help' for command-specific options.");
 }
@@ -1064,6 +1132,29 @@ static void PrintInitUsage()
           codegraph init --agent claude           # Install Claude Code skill files
           codegraph init --agent all              # Install for all agents
           codegraph init --solution MyApp.sln     # Init + index in one step
+        """);
+}
+
+static void PrintViewUsage()
+{
+    Console.WriteLine("""
+        Usage: codegraph view [options]
+
+        Generates an interactive 3D graph visualization as a self-contained HTML file
+        and opens it in the default browser.
+
+        Options:
+          --graph-dir <path>   Graph directory (default: .codegraph)
+          --output <path>      Write HTML to a specific file instead of a temp file
+          --max-nodes <n>      Maximum nodes to render (default: 5000)
+          --no-open            Generate HTML but don't open in browser
+          --help, -h           Show this help
+
+        Examples:
+          codegraph view                              # Open graph in browser
+          codegraph view --output graph.html          # Save to file
+          codegraph view --max-nodes 2000             # Limit for performance
+          codegraph view --graph-dir .codegraph/Api   # View specific sub-graph
         """);
 }
 
