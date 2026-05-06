@@ -163,7 +163,7 @@ static void PrintUsage()
 
         Options:
           --depth <n>          Traversal depth (default: 1)
-          --kind <type>        Edge filter: calls-to, calls-from, inherits, implements, depends-on, resolves-to, covers, all
+          --kind <type>        Edge filter: calls-to, calls-from, inherits, implements, depends-on, resolves-to, covers, covered-by, references, overrides, contains, all
           --namespace <filter> Include only nodes in matching namespaces
           --project <filter>   Include only nodes in matching projects
           --format <fmt>       json | text | context (default: context)
