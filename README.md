@@ -148,7 +148,7 @@ codegraph index --solution <path.sln|path.slnx> [options]
 | `--skip-restore` | Skip `dotnet restore` step | `false` |
 | `--skip-build` | Hidden alias for `--skip-restore` | `false` |
 | `--changed-only` | Incremental re-index; only re-index projects with changes since last indexed commit | `false` |
-| `--sequential` | Disable parallel indexing for multi-solution repos (use on machines with <16 GB RAM) | `false` |
+| `--sequential` | Disable parallel multi-solution indexing (recommended on machines with < 16 GB RAM) | `false` |
 | `--verbose` | Enable verbose output | `false` |
 
 ### `codegraph query`
