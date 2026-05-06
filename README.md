@@ -190,6 +190,25 @@ codegraph query <symbol-pattern> [options]
 | `contains` | Contains |
 | `all` | No filter |
 
+### `codegraph view`
+
+Generate an interactive 3D graph visualization and open it in your browser.
+
+```
+codegraph view [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--graph-dir <path>` | Graph directory to visualize | `.codegraph` |
+| `--output <path>` | Write HTML to a specific file instead of a temp file | (temp file) |
+| `--max-nodes <n>` | Maximum nodes to render | `5000` |
+| `--no-open` | Generate HTML but do not open it in the browser | `false` |
+
+The output is a **self-contained HTML file** — no server required. Nodes are colored by `NodeKind`, edges by `EdgeType`. The sidebar lets you filter by kind, edge type, and assembly. Use `/` to search and `Escape` to reset.
+
+See [docs/view.md](docs/view.md) for the full guide including smart sampling and performance tips.
+
 ### `codegraph diff`
 
 Compare two graph snapshots and report structural changes.
@@ -398,6 +417,7 @@ Stryker generates HTML reports in `StrykerOutput/` with mutation scores per proj
 - [Configuration Reference](docs/configuration.md)
 - [Agent Setup Guide](docs/agent-setup.md)
 - [Graph Diff How-to Guide](docs/diff.md)
+- [Graph Visualization How-to Guide](docs/view.md)
 
 ---
 
