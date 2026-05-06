@@ -544,7 +544,7 @@ static async Task<int> RunSingleIndexAsync(
     var compilations = await loader.LoadAsync(
         solutionPath,
         skipRestore: skipBuild || skipRestore,
-        configuration: configuration,
+        configuration: configuration ?? "Debug",
         preprocessorSymbols: config.Index.PreprocessorSymbols.Length > 0 ? config.Index.PreprocessorSymbols : null);
 
     // Filter projects
