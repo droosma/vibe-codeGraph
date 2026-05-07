@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using CodeGraph.Core.IO;
+using CodeGraph.Core.IO.Sqlite;
 using CodeGraph.Core.Models;
 using CodeGraph.Query.Filters;
 
@@ -47,8 +48,6 @@ public class QueryEngine
 
     public static async Task<QueryEngine> LoadAsync(string graphDirectory, string? solutionFilter)
     {
-        var reader = new GraphReader();
-
         // Check if this is a federated graph directory (has subdirectories with meta.json)
         var subGraphDirs = Directory.Exists(graphDirectory)
             ? Directory.GetDirectories(graphDirectory)
@@ -58,9 +57,17 @@ public class QueryEngine
 
         if (subGraphDirs.Length == 0)
         {
-            // Single-solution graph (backward compatible)
-            var (metadata, nodes, edges) = await reader.ReadAsync(graphDirectory);
-            return new QueryEngine(nodes, edges, metadata);
+            // Single-solution graph — prefer SQLite when available
+            var dbPath = Path.Combine(graphDirectory, "graph.db");
+            if (File.Exists(dbPath))
+            {
+                var (metadata, nodes, edges) = await SqliteGraphReader.ReadAsync(dbPath);
+                return new QueryEngine(nodes, edges, metadata);
+            }
+
+            // Fall back to JSON
+            var result = await GraphReader.ReadAsync(graphDirectory);
+            return new QueryEngine(result.Nodes, result.Edges, result.Metadata);
         }
 
         // Federated: load all sub-graphs, deduplicate nodes, merge edges
@@ -81,7 +88,7 @@ public class QueryEngine
                 continue;
             }
 
-            var (metadata, nodes, edges) = await reader.ReadAsync(subDir);
+            var (metadata, nodes, edges) = await GraphReader.ReadAsync(subDir);
             firstMetadata ??= metadata;
             solutionNames.Add(solutionName);
             allProjectsIndexed.AddRange(metadata.ProjectsIndexed);
@@ -144,12 +151,13 @@ public class QueryEngine
 
         // Step 4: Depth traversal (BFS)
         var seedIds = matchedNodes.Select(n => n.Id).ToList();
+        var allowedEdges = QueryModeEdgeSets.ForMode(options.Mode);
         var reachableIds = DepthFilter.Traverse(
-            seedIds, _outgoing, _incoming, options.Depth, options.IncludeExternal);
+            seedIds, _outgoing, _incoming, options.Depth, options.IncludeExternal, allowedEdges);
 
         // Collect direct neighbors for ranking
         var directNeighborIds = options.Depth >= 1
-            ? DepthFilter.Traverse(seedIds, _outgoing, _incoming, 1, options.IncludeExternal)
+            ? DepthFilter.Traverse(seedIds, _outgoing, _incoming, 1, options.IncludeExternal, allowedEdges)
             : new HashSet<string>(seedIds);
 
         // Step 5: Build subgraph
@@ -169,6 +177,12 @@ public class QueryEngine
         if (options.EdgeTypeFilter is not null)
         {
             subgraphEdges = EdgeTypeFilter.Apply(subgraphEdges, options.EdgeTypeFilter);
+        }
+
+        // Step 7b: Apply confidence filter (lower enum value = higher confidence)
+        if (options.ConfidenceThreshold is not null)
+        {
+            subgraphEdges = subgraphEdges.Where(e => e.Confidence <= options.ConfidenceThreshold.Value).ToList();
         }
 
         // Step 8: Filter out external if not requested
@@ -303,9 +317,49 @@ public record QueryOptions
     public bool IncludeExternal { get; init; }
     public bool Rank { get; init; } = true;
     public OutputFormat Format { get; init; } = OutputFormat.Context;
+    public QueryMode Mode { get; init; } = QueryMode.All;
+    public int? Budget { get; init; }
+    /// <summary>
+    /// Include edges at this confidence level or better.
+    /// Verified (0) is highest confidence, Unresolved (2) is lowest.
+    /// A threshold of Inferred includes Verified and Inferred, but not Unresolved.
+    /// </summary>
+    public EdgeConfidence? ConfidenceThreshold { get; init; }
 }
 
-public enum OutputFormat { Json, Text, Context }
+public enum OutputFormat { Json, Text, Context, Compact }
+
+public enum QueryMode
+{
+    /// <summary>Follow only high-signal edges: Calls, Implements, ResolvesTo, Covers, CoveredBy, Inherits, Overrides</summary>
+    Focused,
+    /// <summary>Follow structural edges too: Focused + Contains, DependsOn</summary>
+    Structural,
+    /// <summary>Follow all edge types (current behavior)</summary>
+    All
+}
+
+internal static class QueryModeEdgeSets
+{
+    public static readonly HashSet<EdgeType> Focused = new()
+    {
+        EdgeType.Calls, EdgeType.Implements, EdgeType.ResolvesTo,
+        EdgeType.Covers, EdgeType.CoveredBy, EdgeType.Inherits, EdgeType.Overrides
+    };
+
+    public static readonly HashSet<EdgeType> Structural = new(Focused)
+    {
+        EdgeType.Contains, EdgeType.DependsOn
+    };
+
+    public static HashSet<EdgeType>? ForMode(QueryMode mode) => mode switch
+    {
+        QueryMode.Focused => Focused,
+        QueryMode.Structural => Structural,
+        QueryMode.All => null,
+        _ => null
+    };
+}
 
 public record QueryResult
 {

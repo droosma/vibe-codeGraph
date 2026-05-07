@@ -15,6 +15,21 @@ public static class DepthFilter
         int depth,
         bool includeExternal)
     {
+        return Traverse(seedIds, outgoing, incoming, depth, includeExternal, allowedEdgeTypes: null);
+    }
+
+    /// <summary>
+    /// BFS traversal from seed node IDs up to the specified depth, optionally filtering by edge type.
+    /// Returns the set of all reachable node IDs within depth hops.
+    /// </summary>
+    public static HashSet<string> Traverse(
+        IEnumerable<string> seedIds,
+        Dictionary<string, List<GraphEdge>> outgoing,
+        Dictionary<string, List<GraphEdge>> incoming,
+        int depth,
+        bool includeExternal,
+        HashSet<EdgeType>? allowedEdgeTypes)
+    {
         var visited = new HashSet<string>();
         var queue = new Queue<(string Id, int CurrentDepth)>();
 
@@ -31,7 +46,7 @@ public static class DepthFilter
             if (currentDepth >= depth)
                 continue;
 
-            var neighbors = GetNeighbors(current, outgoing, incoming, includeExternal);
+            var neighbors = GetNeighbors(current, outgoing, incoming, includeExternal, allowedEdgeTypes);
             foreach (var neighbor in neighbors)
             {
                 if (visited.Add(neighbor))
@@ -46,12 +61,15 @@ public static class DepthFilter
         string nodeId,
         Dictionary<string, List<GraphEdge>> outgoing,
         Dictionary<string, List<GraphEdge>> incoming,
-        bool includeExternal)
+        bool includeExternal,
+        HashSet<EdgeType>? allowedEdgeTypes)
     {
         if (outgoing.TryGetValue(nodeId, out var outEdges))
         {
             foreach (var edge in outEdges)
             {
+                if (allowedEdgeTypes is not null && !allowedEdgeTypes.Contains(edge.Type))
+                    continue;
                 if (includeExternal || !edge.IsExternal)
                     yield return edge.ToId;
             }
@@ -61,6 +79,8 @@ public static class DepthFilter
         {
             foreach (var edge in inEdges)
             {
+                if (allowedEdgeTypes is not null && !allowedEdgeTypes.Contains(edge.Type))
+                    continue;
                 if (includeExternal || !edge.IsExternal)
                     yield return edge.FromId;
             }

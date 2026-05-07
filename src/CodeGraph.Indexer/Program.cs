@@ -4,15 +4,18 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using CodeGraph.Core.Configuration;
 using CodeGraph.Core.IO;
+using CodeGraph.Core.IO.Sqlite;
 using CodeGraph.Core.Models;
 using CodeGraph.Indexer.Init;
 using CodeGraph.Indexer.Mcp;
 using CodeGraph.Indexer.Passes;
-using CodeGraph.Indexer.View;
 using CodeGraph.Indexer.Workspace;
 using CodeGraph.Query;
 using CodeGraph.Query.Filters;
+using CodeGraph.Query.Metrics;
 using CodeGraph.Query.OutputFormatters;
+using CodeGraph.Query.Report;
+using CodeGraph.Query.Wiki;
 
 return await RunAsync(args);
 
@@ -29,9 +32,13 @@ static async Task<int> RunAsync(string[] args)
         "index" => await RunIndexAsync(args),
         "init" => await RunInitAsync(args),
         "query" => await RunQueryAsync(args),
+        "list" => await RunListAsync(args),
         "diff" => await RunDiffAsync(args),
+        "export" => await RunExportAsync(args),
+        "report" => await RunReportAsync(args),
+        "stats" => await RunStatsAsync(args),
+        "wiki" => await RunWikiAsync(args),
         "mcp" => await RunMcpAsync(args),
-        "view" => await RunViewAsync(args),
         "-h" or "--help" => ShowHelp(),
         _ => ShowUnknown(args[0])
     };
@@ -68,18 +75,30 @@ static async Task<int> RunQueryAsync(string[] args)
     var ns = GetOption(argList, "--namespace", (string?)null);
     var project = GetOption(argList, "--project", (string?)null);
     var format = GetOption(argList, "--format", "context");
+    var mode = GetOption(argList, "--mode", "all");
     var maxNodes = GetOption(argList, "--max-nodes", 50);
     var includeExternal = HasFlag(argList, "--include-external");
     var rank = !HasFlag(argList, "--no-rank");
+    var noMetrics = HasFlag(argList, "--no-metrics");
     var graphDir = GetOption(argList, "--graph-dir", ".codegraph");
     var fromSolution = GetOption(argList, "--from", (string?)null);
+    var budget = GetOption(argList, "--budget", (int?)null);
 
     var outputFormat = format?.ToLowerInvariant() switch
     {
         "json" => OutputFormat.Json,
         "text" => OutputFormat.Text,
         "context" => OutputFormat.Context,
+        "compact" => OutputFormat.Compact,
         _ => OutputFormat.Context
+    };
+
+    var queryMode = mode?.ToLowerInvariant() switch
+    {
+        "focused" => QueryMode.Focused,
+        "structural" => QueryMode.Structural,
+        "all" => QueryMode.All,
+        _ => QueryMode.All
     };
 
     EdgeType? edgeTypeFilter;
@@ -122,7 +141,9 @@ static async Task<int> RunQueryAsync(string[] args)
         MaxNodes = maxNodes,
         IncludeExternal = includeExternal,
         Rank = rank,
-        Format = outputFormat
+        Format = outputFormat,
+        Mode = queryMode,
+        Budget = budget
     };
 
     var result = engine.Query(options);
@@ -139,8 +160,17 @@ static async Task<int> RunQueryAsync(string[] args)
         OutputFormat.Json => JsonFormatter.Format(result),
         OutputFormat.Text => TextFormatter.Format(result),
         OutputFormat.Context => ContextFormatter.Format(result, queryDesc),
+        OutputFormat.Compact => CompactFormatter.Format(result),
         _ => ContextFormatter.Format(result, queryDesc)
     };
+
+    output = BudgetTruncator.Apply(output, budget);
+
+    if (!noMetrics)
+    {
+        var metrics = CompressionCalculator.Calculate(result, output);
+        output = MetricsFormatter.AppendMetrics(output, metrics);
+    }
 
     Console.WriteLine(output);
     return 0;
@@ -159,69 +189,89 @@ static async Task<int> RunMcpAsync(string[] args)
     return await server.RunAsync();
 }
 
-static async Task<int> RunViewAsync(string[] args)
+static async Task<int> RunListAsync(string[] args)
 {
-    var graphDir = ".codegraph";
-    string? outputPath = null;
-    var maxNodes = 5000;
-    var noOpen = false;
+    var argList = args.Skip(1).ToList();
 
-    for (int i = 1; i < args.Length; i++)
+    if (argList.Count > 0 && argList[0] is "-h" or "--help")
     {
-        switch (args[i])
-        {
-            case "--graph-dir" when i + 1 < args.Length:
-                graphDir = args[++i];
-                break;
-            case "--output" when i + 1 < args.Length:
-                outputPath = args[++i];
-                break;
-            case "--max-nodes" when i + 1 < args.Length:
-                if (!int.TryParse(args[++i], out maxNodes) || maxNodes <= 0)
-                {
-                    Console.Error.WriteLine("Error: --max-nodes must be a positive integer.");
-                    return 1;
-                }
-                break;
-            case "--no-open":
-                noOpen = true;
-                break;
-            case "-h" or "--help":
-                PrintViewUsage();
-                return 0;
-            default:
-                Console.Error.WriteLine($"Unknown argument: {args[i]}");
-                PrintViewUsage();
-                return 1;
-        }
+        PrintListUsage();
+        return 0;
     }
 
-    if (!Directory.Exists(graphDir))
+    var scope = argList.Count > 0 ? argList[0] : "assemblies";
+    if (argList.Count > 0)
+        argList.RemoveAt(0);
+
+    var assemblyFilter = GetOption(argList, "--assembly", (string?)null);
+    var top = GetOption(argList, "--top", 20);
+    var graphDir = GetOption(argList, "--graph-dir", ".codegraph");
+
+    Dictionary<string, GraphNode> nodes;
+    List<GraphEdge> edges;
+
+    try
     {
-        Console.Error.WriteLine($"Graph directory not found: {graphDir}");
-        Console.Error.WriteLine("Run 'codegraph index' first to generate the graph.");
+        var dbPath = Path.Combine(graphDir, "graph.db");
+        if (File.Exists(dbPath))
+        {
+            var (_, n, e) = await SqliteGraphReader.ReadAsync(dbPath);
+            nodes = n;
+            edges = e;
+        }
+        else
+        {
+            var (_, n, e) = await GraphReader.ReadAsync(graphDir);
+            nodes = n;
+            edges = e;
+        }
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
         return 1;
     }
 
-    var generator = new HtmlGraphGenerator(graphDir, maxNodes);
-    var html = await generator.GenerateAsync();
+    var list = new ListEngine(nodes, edges);
 
-    var filePath = outputPath ?? Path.Combine(Path.GetTempPath(), $"codegraph-view-{Guid.NewGuid():N}.html");
-    await File.WriteAllTextAsync(filePath, html);
-
-    Console.WriteLine($"Graph visualization written to: {filePath}");
-
-    if (!noOpen)
+    switch (scope)
     {
-        try
-        {
-            Process.Start(new ProcessStartInfo(filePath) { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"Could not open browser: {ex.Message}");
-            Console.WriteLine("Open the file manually in your browser.");
-        }
+        case "assemblies":
+            var assemblies = list.ListAssemblies();
+            Console.WriteLine($"{"Assembly",-40} {"Types",6} {"Methods",8} {"Total",6}");
+            Console.WriteLine(new string('-', 62));
+            foreach (var a in assemblies)
+                Console.WriteLine($"{a.Name,-40} {a.TypeCount,6} {a.MethodCount,8} {a.TotalNodeCount,6}");
+            break;
+
+        case "types":
+            var types = list.ListTypes(assemblyFilter, top);
+            Console.WriteLine($"{"Type",-50} {"In",4} {"Out",4} {"Assembly",-20}");
+            Console.WriteLine(new string('-', 80));
+            foreach (var t in types)
+                Console.WriteLine($"{t.Name,-50} {t.InDegree,4} {t.OutDegree,4} {t.Assembly,-20}");
+            break;
+
+        case "interfaces":
+            var ifaces = list.ListInterfaces(assemblyFilter);
+            Console.WriteLine($"{"Interface",-50} {"Impls",6} {"Assembly",-20}");
+            Console.WriteLine(new string('-', 78));
+            foreach (var iface in ifaces)
+                Console.WriteLine($"{iface.Name,-50} {iface.ImplementationCount,6} {iface.Assembly,-20}");
+            break;
+
+        case "namespaces":
+            var namespaces = list.ListNamespaces(assemblyFilter);
+            Console.WriteLine($"{"Namespace",-50} {"Types",6} {"Methods",8}");
+            Console.WriteLine(new string('-', 66));
+            foreach (var ns in namespaces)
+                Console.WriteLine($"{ns.Name,-50} {ns.TypeCount,6} {ns.MethodCount,8}");
+            break;
+
+        default:
+            Console.Error.WriteLine($"Unknown list scope: {scope}. Use: assemblies, types, interfaces, namespaces");
+            return 1;
     }
 
     return 0;
@@ -256,6 +306,7 @@ static async Task<int> RunDiffAsync(string[] args)
         "json" => OutputFormat.Json,
         "text" => OutputFormat.Text,
         "context" => OutputFormat.Context,
+        "compact" => OutputFormat.Compact,
         _ => OutputFormat.Context
     };
 
@@ -282,9 +333,8 @@ static async Task<int> RunDiffAsync(string[] args)
 
     try
     {
-        var reader = new GraphReader();
-        var (baseMetadata, baseNodes, baseEdges) = await reader.ReadAsync(baseGraphDir);
-        var (headMetadata, headNodes, headEdges) = await reader.ReadAsync(headGraphDir);
+        var (baseMetadata, baseNodes, baseEdges) = await GraphReader.ReadAsync(baseGraphDir);
+        var (headMetadata, headNodes, headEdges) = await GraphReader.ReadAsync(headGraphDir);
 
         var diff = GraphDiffEngine.Compare(baseMetadata, baseNodes, baseEdges, headMetadata, headNodes, headEdges);
         var filter = ParseDiffOnly(only);
@@ -484,8 +534,7 @@ static async Task<int> RunSingleIndexAsync(
         }
         else
         {
-            var reader = new GraphReader();
-            (existingMetadata, existingNodes, existingEdges) = await reader.ReadAsync(outputDir);
+            (existingMetadata, existingNodes, existingEdges) = await GraphReader.ReadAsync(outputDir);
 
             var lastCommit = existingMetadata.CommitHash;
             if (string.IsNullOrEmpty(lastCommit))
@@ -641,8 +690,7 @@ static async Task<int> RunSingleIndexAsync(
 
         var partialGraphs = GroupIntoProjectGraphs(allNodes, allEdges, splitStrategy);
 
-        var merger = new GraphMerger();
-        var (mergedNodes, mergedEdges) = merger.Merge(existingNodes, existingEdges, partialGraphs);
+        var (mergedNodes, mergedEdges) = GraphMerger.Merge(existingNodes, existingEdges, partialGraphs);
 
         var mergedNodeList = mergedNodes.Values.ToList();
         var allProjectsIndexed = existingMetadata!.ProjectsIndexed
@@ -670,6 +718,10 @@ static async Task<int> RunSingleIndexAsync(
 
         var writer = new GraphWriter(splitStrategy);
         await writer.WriteAsync(outputDir, mergedNodeList, mergedEdges, metadata);
+
+        var sqliteWriter = new SqliteGraphWriter();
+        var dbPath = Path.Combine(outputDir, "graph.db");
+        await sqliteWriter.WriteAsync(dbPath, mergedNodeList, mergedEdges, metadata);
 
         Console.WriteLine($"CodeGraph incremental index complete.");
         Console.WriteLine($"  Changed projects: {projects.Count}");
@@ -705,6 +757,10 @@ static async Task<int> RunSingleIndexAsync(
             : SplitFileStrategy.ByAssembly;
         var writer = new GraphWriter(splitStrategy);
         await writer.WriteAsync(outputDir, allNodes, allEdges, fullMetadata);
+
+        var sqliteWriter = new SqliteGraphWriter();
+        var dbPath = Path.Combine(outputDir, "graph.db");
+        await sqliteWriter.WriteAsync(dbPath, allNodes, allEdges, fullMetadata);
     }
 
     // Summary
@@ -716,6 +772,199 @@ static async Task<int> RunSingleIndexAsync(
     Console.WriteLine($"  Methods:  {fullMetadata.Stats["method_count"]}");
     Console.WriteLine($"  Output:   {outputDir}");
 
+    return 0;
+}
+
+static async Task<int> RunReportAsync(string[] args)
+{
+    var graphDir = ".codegraph";
+    var outputPath = (string?)null;
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--graph-dir" when i + 1 < args.Length:
+                graphDir = args[++i];
+                break;
+            case "--output" or "-o" when i + 1 < args.Length:
+                outputPath = args[++i];
+                break;
+            case "-h" or "--help":
+                PrintReportUsage();
+                return 0;
+        }
+    }
+
+    var dbPath = Path.Combine(graphDir, "graph.db");
+    if (!File.Exists(dbPath))
+    {
+        Console.Error.WriteLine($"Error: Graph database not found at {dbPath}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
+        return 1;
+    }
+
+    var (metadata, nodes, edges) = await SqliteGraphReader.ReadAsync(dbPath);
+    var edgeList = edges.ToList();
+
+    var report = ReportGenerator.Generate(nodes, edgeList, metadata);
+
+    outputPath ??= Path.Combine(graphDir, "REPORT.md");
+    var dir = Path.GetDirectoryName(outputPath);
+    if (!string.IsNullOrEmpty(dir))
+        Directory.CreateDirectory(dir);
+    await File.WriteAllTextAsync(outputPath, report);
+
+    Console.WriteLine($"Report written to {outputPath}");
+    return 0;
+}
+
+static async Task<int> RunStatsAsync(string[] args)
+{
+    var graphDir = ".codegraph";
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--graph-dir" when i + 1 < args.Length:
+                graphDir = args[++i];
+                break;
+            case "-h" or "--help":
+                PrintStatsUsage();
+                return 0;
+        }
+    }
+
+    Dictionary<string, GraphNode> nodes;
+    List<GraphEdge> edges;
+
+    try
+    {
+        var dbPath = Path.Combine(graphDir, "graph.db");
+        if (File.Exists(dbPath))
+        {
+            var (_, n, e) = await SqliteGraphReader.ReadAsync(dbPath);
+            nodes = n;
+            edges = e;
+        }
+        else
+        {
+            var (_, n, e) = await GraphReader.ReadAsync(graphDir);
+            nodes = n;
+            edges = e;
+        }
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
+        return 1;
+    }
+
+    Console.WriteLine("CodeGraph Statistics");
+    Console.WriteLine($"  Total nodes: {nodes.Count}");
+    Console.WriteLine($"  Total edges: {edges.Count}");
+    Console.WriteLine();
+    Console.WriteLine("Nodes by kind:");
+    foreach (var group in nodes.Values.GroupBy(n => n.Kind).OrderByDescending(g => g.Count()))
+        Console.WriteLine($"  {group.Key}: {group.Count()}");
+    Console.WriteLine();
+    Console.WriteLine("Edges by type:");
+    foreach (var group in edges.GroupBy(e => e.Type).OrderByDescending(g => g.Count()))
+        Console.WriteLine($"  {group.Key}: {group.Count()}");
+
+    return 0;
+}
+
+static async Task<int> RunWikiAsync(string[] args)
+{
+    var graphDir = ".codegraph";
+    var outputDir = (string?)null;
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--graph-dir" when i + 1 < args.Length:
+                graphDir = args[++i];
+                break;
+            case "--output" or "-o" when i + 1 < args.Length:
+                outputDir = args[++i];
+                break;
+            case "-h" or "--help":
+                PrintWikiUsage();
+                return 0;
+        }
+    }
+
+    outputDir ??= Path.Combine(graphDir, "wiki");
+
+    Dictionary<string, GraphNode> nodes;
+    List<GraphEdge> edges;
+    GraphMetadata metadata;
+
+    try
+    {
+        var dbPath = Path.Combine(graphDir, "graph.db");
+        if (File.Exists(dbPath))
+        {
+            (metadata, nodes, edges) = await SqliteGraphReader.ReadAsync(dbPath);
+        }
+        else
+        {
+            (metadata, nodes, edges) = await GraphReader.ReadAsync(graphDir);
+        }
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
+        return 1;
+    }
+
+    WikiGenerator.Generate(outputDir, nodes, edges, metadata);
+
+    Console.WriteLine($"Wiki generated at {outputDir}/");
+    return 0;
+}
+
+static async Task<int> RunExportAsync(string[] args)
+{
+    var graphDir = ".codegraph";
+    var outputDir = "export";
+
+    for (int i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--graph-dir" when i + 1 < args.Length:
+                graphDir = args[++i];
+                break;
+            case "--output" when i + 1 < args.Length:
+                outputDir = args[++i];
+                break;
+            case "-h" or "--help":
+                PrintExportUsage();
+                return 0;
+        }
+    }
+
+    var dbPath = Path.Combine(graphDir, "graph.db");
+    if (!File.Exists(dbPath))
+    {
+        Console.Error.WriteLine($"Error: Graph database not found at {dbPath}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
+        return 1;
+    }
+
+    var (metadata, nodes, edges) = await SqliteGraphReader.ReadAsync(dbPath);
+    var edgeList = edges.ToList();
+
+    var writer = new GraphWriter();
+    await writer.WriteAsync(outputDir, nodes.Values, edgeList, metadata);
+
+    Console.WriteLine($"Exported {nodes.Count} nodes and {edgeList.Count} edges to {outputDir}/");
     return 0;
 }
 
@@ -1101,19 +1350,45 @@ static void PrintUsage()
     Console.WriteLine("  codegraph init [--agent <name>] [--solution <path.sln>] [--force]");
     Console.WriteLine("  codegraph index --solution <path.sln> [options]");
     Console.WriteLine("  codegraph query <symbol> [options]");
+    Console.WriteLine("  codegraph list [scope] [options]");
     Console.WriteLine("  codegraph diff [options]");
+    Console.WriteLine("  codegraph export [--graph-dir <dir>] [--output <dir>]");
+    Console.WriteLine("  codegraph report [--graph-dir <dir>] [--output <path>]");
+    Console.WriteLine("  codegraph stats [--graph-dir <dir>]");
+    Console.WriteLine("  codegraph wiki [--graph-dir <dir>] [--output <dir>]");
     Console.WriteLine("  codegraph mcp [--graph-dir <dir>]");
-    Console.WriteLine("  codegraph view [--graph-dir <dir>] [--output <path>] [--max-nodes <n>]");
     Console.WriteLine();
     Console.WriteLine("Commands:");
     Console.WriteLine("  init                     Initialize config, MCP, and agent skill files");
     Console.WriteLine("  index                    Build the code graph from a solution");
     Console.WriteLine("  query                    Query the code graph for symbols and relationships");
+    Console.WriteLine("  list                     Browse the code graph hierarchy (assemblies, types, etc.)");
     Console.WriteLine("  diff                     Compare graph snapshots and report structural changes");
+    Console.WriteLine("  export                   Export graph from SQLite database to JSON files");
+    Console.WriteLine("  report                   Generate a markdown report analyzing the graph");
+    Console.WriteLine("  stats                    Show graph-level statistics (node/edge counts by kind)");
+    Console.WriteLine("  wiki                     Generate navigable markdown wiki pages from the graph");
     Console.WriteLine("  mcp                      Start MCP (Model Context Protocol) stdio server");
-    Console.WriteLine("  view                     Generate interactive 3D graph visualization");
     Console.WriteLine();
     Console.WriteLine("Run 'codegraph <command> --help' for command-specific options.");
+}
+
+static void PrintListUsage()
+{
+    Console.WriteLine("""
+        Usage: codegraph list [scope] [options]
+
+        Scopes:
+          assemblies             List all assemblies with type/method counts (default)
+          types                  List types, ranked by connectivity
+          interfaces             List interfaces with implementation counts
+          namespaces             List namespaces with type counts
+
+        Options:
+          --assembly <name>      Filter by assembly name (types, interfaces, namespaces)
+          --top <n>              Max items to return (default: 20, types only)
+          --graph-dir <path>     Graph directory (default: .codegraph)
+        """);
 }
 
 static void PrintInitUsage()
@@ -1139,26 +1414,79 @@ static void PrintInitUsage()
         """);
 }
 
-static void PrintViewUsage()
+static void PrintExportUsage()
 {
     Console.WriteLine("""
-        Usage: codegraph view [options]
+        Usage: codegraph export [options]
 
-        Generates an interactive 3D graph visualization as a self-contained HTML file
-        and opens it in the default browser.
+        Exports the graph from SQLite database (graph.db) to JSON files.
 
         Options:
-          --graph-dir <path>   Graph directory (default: .codegraph)
-          --output <path>      Write HTML to a specific file instead of a temp file
-          --max-nodes <n>      Maximum nodes to render (default: 5000)
-          --no-open            Generate HTML but don't open in browser
+          --graph-dir <dir>    Directory containing graph.db (default: .codegraph)
+          --output <dir>       Output directory for JSON files (default: export)
           --help, -h           Show this help
 
         Examples:
-          codegraph view                              # Open graph in browser
-          codegraph view --output graph.html          # Save to file
-          codegraph view --max-nodes 2000             # Limit for performance
-          codegraph view --graph-dir .codegraph/Api   # View specific sub-graph
+          codegraph export                                    # Export from .codegraph/graph.db to export/
+          codegraph export --output my-export                 # Export to my-export/
+          codegraph export --graph-dir .codegraph --output .  # Export JSON alongside graph.db
+        """);
+}
+
+static void PrintReportUsage()
+{
+    Console.WriteLine("""
+        Usage: codegraph report [options]
+
+        Generates a markdown report analyzing the code graph: hub types,
+        assembly boundaries, test coverage, and suggested queries.
+
+        Options:
+          --graph-dir <dir>    Directory containing graph.db (default: .codegraph)
+          --output, -o <path>  Output file path (default: .codegraph/REPORT.md)
+          --help, -h           Show this help
+
+        Examples:
+          codegraph report                                    # Generate .codegraph/REPORT.md
+          codegraph report -o report.md                       # Write to custom path
+          codegraph report --graph-dir .codegraph-prev        # Report on a different graph
+        """);
+}
+
+static void PrintStatsUsage()
+{
+    Console.WriteLine("""
+        Usage: codegraph stats [options]
+
+        Shows graph-level statistics: total nodes/edges, counts by kind and type.
+
+        Options:
+          --graph-dir <dir>    Directory containing graph data (default: .codegraph)
+          --help, -h           Show this help
+
+        Examples:
+          codegraph stats                                     # Stats for .codegraph
+          codegraph stats --graph-dir .codegraph-prev         # Stats for a different graph
+        """);
+}
+
+static void PrintWikiUsage()
+{
+    Console.WriteLine("""
+        Usage: codegraph wiki [options]
+
+        Generates navigable markdown wiki pages from the code graph.
+        Creates INDEX.md, per-assembly pages, INTERFACES.md, and DI-WIRING.md.
+
+        Options:
+          --graph-dir <dir>    Directory containing graph data (default: .codegraph)
+          --output, -o <dir>   Output directory for wiki pages (default: .codegraph/wiki)
+          --help, -h           Show this help
+
+        Examples:
+          codegraph wiki                                      # Generate .codegraph/wiki/
+          codegraph wiki -o docs/wiki                         # Write to custom directory
+          codegraph wiki --graph-dir .codegraph-prev          # Wiki from a different graph
         """);
 }
 
@@ -1170,8 +1498,8 @@ static void PrintQueryUsage()
         Options:
           --depth <n>          Traversal depth (default: 1)
           --kind <type>        Edge filter: calls-to, calls-from, inherits, implements,
-                               depends-on, resolves-to, covers, covered-by,
-                               references, overrides, contains, all
+                               depends-on, resolves-to, covers, all
+          --mode <mode>        Traversal mode: focused, structural, all (default: all)
           --namespace <filter> Include only nodes in matching namespaces
           --project <filter>   Include only nodes in matching projects
           --format <fmt>       json | text | context (default: context)
@@ -1180,6 +1508,8 @@ static void PrintQueryUsage()
           --no-rank            Disable result ranking
           --graph-dir <path>   Graph directory (default: .codegraph)
           --from <solution>    Query only the specified solution sub-graph (multi-solution)
+          --budget <tokens>    Maximum token budget for output (truncates with hint)
+          --no-metrics         Suppress the compression metrics footer
         """);
 }
 

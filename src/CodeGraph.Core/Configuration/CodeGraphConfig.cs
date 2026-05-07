@@ -80,5 +80,6 @@ public class QueryConfig
 {
     public int DefaultDepth { get; set; } = 1;
     public string DefaultFormat { get; set; } = "context";
+    public string DefaultMode { get; set; } = "all";
     public int MaxNodes { get; set; } = 50;
 }

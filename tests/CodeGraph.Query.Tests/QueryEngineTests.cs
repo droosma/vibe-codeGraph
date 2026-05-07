@@ -865,6 +865,7 @@ public class QueryEngineTests
         Assert.False(opts.IncludeExternal);
         Assert.True(opts.Rank);
         Assert.Equal(OutputFormat.Context, opts.Format);
+        Assert.Equal(QueryMode.All, opts.Mode);
     }
 
     [Fact]
@@ -904,5 +905,173 @@ public class QueryEngineTests
         var result = engine.Query(new QueryOptions { Pattern = "FooService", Depth = 0 });
 
         Assert.Single(result.MatchedNodes);
+    }
+
+    [Fact]
+    public void Query_FocusedMode_ExcludesContainsAndDependsOnEdges()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A"] = new() { Id = "A", Name = "A", Kind = NodeKind.Method },
+            ["B"] = new() { Id = "B", Name = "B", Kind = NodeKind.Method },
+            ["C"] = new() { Id = "C", Name = "C", Kind = NodeKind.Type },
+            ["D"] = new() { Id = "D", Name = "D", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A", ToId = "B", Type = EdgeType.Calls },
+            new() { FromId = "A", ToId = "C", Type = EdgeType.Contains },
+            new() { FromId = "A", ToId = "D", Type = EdgeType.DependsOn }
+        };
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+
+        var engine = new QueryEngine(nodes, edges, meta);
+        var result = engine.Query(new QueryOptions { Pattern = "A", Depth = 1, Mode = QueryMode.Focused, MaxNodes = 100, Rank = false });
+
+        Assert.True(result.Nodes.ContainsKey("A"));
+        Assert.True(result.Nodes.ContainsKey("B"));
+        Assert.DoesNotContain("C", result.Nodes.Keys);
+        Assert.DoesNotContain("D", result.Nodes.Keys);
+    }
+
+    [Fact]
+    public void Query_StructuralMode_IncludesContainsEdges()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A"] = new() { Id = "A", Name = "A", Kind = NodeKind.Method },
+            ["B"] = new() { Id = "B", Name = "B", Kind = NodeKind.Method },
+            ["C"] = new() { Id = "C", Name = "C", Kind = NodeKind.Type },
+            ["D"] = new() { Id = "D", Name = "D", Kind = NodeKind.Type },
+            ["E"] = new() { Id = "E", Name = "E", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A", ToId = "B", Type = EdgeType.Calls },
+            new() { FromId = "A", ToId = "C", Type = EdgeType.Contains },
+            new() { FromId = "A", ToId = "D", Type = EdgeType.DependsOn },
+            new() { FromId = "A", ToId = "E", Type = EdgeType.References }
+        };
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+
+        var engine = new QueryEngine(nodes, edges, meta);
+        var result = engine.Query(new QueryOptions { Pattern = "A", Depth = 1, Mode = QueryMode.Structural, MaxNodes = 100, Rank = false });
+
+        Assert.True(result.Nodes.ContainsKey("A"));
+        Assert.True(result.Nodes.ContainsKey("B"));
+        Assert.True(result.Nodes.ContainsKey("C"));
+        Assert.True(result.Nodes.ContainsKey("D"));
+        Assert.DoesNotContain("E", result.Nodes.Keys);
+    }
+
+    [Fact]
+    public void Query_AllMode_IncludesAllEdgeTypes()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A"] = new() { Id = "A", Name = "A", Kind = NodeKind.Method },
+            ["B"] = new() { Id = "B", Name = "B", Kind = NodeKind.Method },
+            ["C"] = new() { Id = "C", Name = "C", Kind = NodeKind.Type },
+            ["D"] = new() { Id = "D", Name = "D", Kind = NodeKind.Type },
+            ["E"] = new() { Id = "E", Name = "E", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A", ToId = "B", Type = EdgeType.Calls },
+            new() { FromId = "A", ToId = "C", Type = EdgeType.Contains },
+            new() { FromId = "A", ToId = "D", Type = EdgeType.DependsOn },
+            new() { FromId = "A", ToId = "E", Type = EdgeType.References }
+        };
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+
+        var engine = new QueryEngine(nodes, edges, meta);
+        var result = engine.Query(new QueryOptions { Pattern = "A", Depth = 1, Mode = QueryMode.All, MaxNodes = 100, Rank = false });
+
+        Assert.True(result.Nodes.ContainsKey("A"));
+        Assert.True(result.Nodes.ContainsKey("B"));
+        Assert.True(result.Nodes.ContainsKey("C"));
+        Assert.True(result.Nodes.ContainsKey("D"));
+        Assert.True(result.Nodes.ContainsKey("E"));
+    }
+
+    [Fact]
+    public void Query_ConfidenceThresholdVerified_ExcludesInferredEdges()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A"] = new() { Id = "A", Name = "A", Kind = NodeKind.Type },
+            ["B"] = new() { Id = "B", Name = "B", Kind = NodeKind.Type },
+            ["C"] = new() { Id = "C", Name = "C", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A", ToId = "B", Type = EdgeType.Calls, Confidence = EdgeConfidence.Verified },
+            new() { FromId = "A", ToId = "C", Type = EdgeType.ResolvesTo, Confidence = EdgeConfidence.Inferred }
+        };
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+
+        var engine = new QueryEngine(nodes, edges, meta);
+        var result = engine.Query(new QueryOptions
+        {
+            Pattern = "A", Depth = 1, MaxNodes = 100, Rank = false,
+            ConfidenceThreshold = EdgeConfidence.Verified
+        });
+
+        Assert.Single(result.Edges);
+        Assert.Equal(EdgeConfidence.Verified, result.Edges[0].Confidence);
+    }
+
+    [Fact]
+    public void Query_ConfidenceThresholdInferred_IncludesVerifiedAndInferred()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A"] = new() { Id = "A", Name = "A", Kind = NodeKind.Type },
+            ["B"] = new() { Id = "B", Name = "B", Kind = NodeKind.Type },
+            ["C"] = new() { Id = "C", Name = "C", Kind = NodeKind.Type },
+            ["D"] = new() { Id = "D", Name = "D", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A", ToId = "B", Type = EdgeType.Calls, Confidence = EdgeConfidence.Verified },
+            new() { FromId = "A", ToId = "C", Type = EdgeType.ResolvesTo, Confidence = EdgeConfidence.Inferred },
+            new() { FromId = "A", ToId = "D", Type = EdgeType.DependsOn, Confidence = EdgeConfidence.Unresolved }
+        };
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+
+        var engine = new QueryEngine(nodes, edges, meta);
+        var result = engine.Query(new QueryOptions
+        {
+            Pattern = "A", Depth = 1, MaxNodes = 100, Rank = false,
+            ConfidenceThreshold = EdgeConfidence.Inferred
+        });
+
+        Assert.Equal(2, result.Edges.Count);
+        Assert.All(result.Edges, e => Assert.True(e.Confidence <= EdgeConfidence.Inferred));
+    }
+
+    [Fact]
+    public void Query_NoConfidenceThreshold_IncludesAllEdges()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A"] = new() { Id = "A", Name = "A", Kind = NodeKind.Type },
+            ["B"] = new() { Id = "B", Name = "B", Kind = NodeKind.Type },
+            ["C"] = new() { Id = "C", Name = "C", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A", ToId = "B", Type = EdgeType.Calls, Confidence = EdgeConfidence.Verified },
+            new() { FromId = "A", ToId = "C", Type = EdgeType.DependsOn, Confidence = EdgeConfidence.Unresolved }
+        };
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+
+        var engine = new QueryEngine(nodes, edges, meta);
+        var result = engine.Query(new QueryOptions
+        {
+            Pattern = "A", Depth = 1, MaxNodes = 100, Rank = false
+        });
+
+        Assert.Equal(2, result.Edges.Count);
     }
 }

@@ -227,4 +227,46 @@ public class DepthFilterTests
         Assert.Contains("A", result);
         Assert.Contains("B", result);
     }
+
+    [Fact]
+    public void Traverse_WithFocusedEdgeTypes_ExcludesContainsEdges()
+    {
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A", ToId = "B", Type = EdgeType.Calls },
+            new() { FromId = "A", ToId = "C", Type = EdgeType.Contains }
+        };
+        var (outgoing, incoming) = BuildAdjacency(edges);
+
+        var allowedEdgeTypes = new HashSet<EdgeType>
+        {
+            EdgeType.Calls, EdgeType.Implements, EdgeType.ResolvesTo,
+            EdgeType.Covers, EdgeType.CoveredBy, EdgeType.Inherits, EdgeType.Overrides
+        };
+
+        var result = DepthFilter.Traverse(new[] { "A" }, outgoing, incoming, 1, false, allowedEdgeTypes);
+
+        Assert.Contains("A", result);
+        Assert.Contains("B", result);
+        Assert.DoesNotContain("C", result);
+    }
+
+    [Fact]
+    public void Traverse_WithNullEdgeTypes_TraversesAllEdges()
+    {
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A", ToId = "B", Type = EdgeType.Calls },
+            new() { FromId = "A", ToId = "C", Type = EdgeType.Contains },
+            new() { FromId = "A", ToId = "D", Type = EdgeType.DependsOn }
+        };
+        var (outgoing, incoming) = BuildAdjacency(edges);
+
+        var result = DepthFilter.Traverse(new[] { "A" }, outgoing, incoming, 1, false, allowedEdgeTypes: null);
+
+        Assert.Contains("A", result);
+        Assert.Contains("B", result);
+        Assert.Contains("C", result);
+        Assert.Contains("D", result);
+    }
 }

@@ -14,6 +14,14 @@ static async Task<int> RunAsync(string[] args)
         return 0;
     }
 
+    // Route subcommands
+    if (args[0].Equals("path", StringComparison.OrdinalIgnoreCase))
+        return await RunPathAsync(args.Skip(1).ToList());
+    if (args[0].Equals("impact", StringComparison.OrdinalIgnoreCase))
+        return await RunImpactAsync(args.Skip(1).ToList());
+    if (args[0].Equals("explain", StringComparison.OrdinalIgnoreCase))
+        return await RunExplainAsync(args.Skip(1).ToList());
+
     // Parse: codegraph query <symbol-pattern> [options]
     // The first arg may be "query" (if invoked as subcommand) or the pattern directly
     var argList = args.ToList();
@@ -40,6 +48,7 @@ static async Task<int> RunAsync(string[] args)
     var rank = !HasFlag(argList, "--no-rank");
     var graphDir = GetOption(argList, "--graph-dir", ".codegraph");
     var fromSolution = GetOption(argList, "--from", (string?)null);
+    var confidenceStr = GetOption(argList, "--confidence", (string?)null);
 
     var outputFormat = format?.ToLowerInvariant() switch
     {
@@ -81,6 +90,21 @@ static async Task<int> RunAsync(string[] args)
     // Staleness check
     CheckStaleness(graphDir);
 
+    EdgeConfidence? minConfidence = confidenceStr?.ToLowerInvariant() switch
+    {
+        "verified" => EdgeConfidence.Verified,
+        "inferred" => EdgeConfidence.Inferred,
+        "unresolved" => EdgeConfidence.Unresolved,
+        null => null,
+        _ => null
+    };
+
+    if (confidenceStr is not null && minConfidence is null)
+    {
+        Console.Error.WriteLine($"Error: Invalid confidence value '{confidenceStr}'. Use verified, inferred, or unresolved.");
+        return 1;
+    }
+
     var options = new QueryOptions
     {
         Pattern = pattern,
@@ -91,7 +115,8 @@ static async Task<int> RunAsync(string[] args)
         MaxNodes = maxNodes,
         IncludeExternal = includeExternal,
         Rank = rank,
-        Format = outputFormat
+        Format = outputFormat,
+        ConfidenceThreshold = minConfidence
     };
 
     var result = engine.Query(options);
@@ -156,12 +181,139 @@ static void CheckStaleness(string graphDir)
     }
 }
 
+static async Task<int> RunPathAsync(List<string> argList)
+{
+    if (argList.Count < 2)
+    {
+        Console.Error.WriteLine("Usage: codegraph path <from> <to> [--max-depth N] [--graph-dir DIR]");
+        return 1;
+    }
+
+    var from = argList[0];
+    var to = argList[1];
+    argList.RemoveRange(0, 2);
+    var maxDepth = GetOption(argList, "--max-depth", 10);
+    var graphDir = GetOption(argList, "--graph-dir", ".codegraph");
+
+    Dictionary<string, GraphNode> nodes;
+    List<GraphEdge> edges;
+    try
+    {
+        (nodes, edges) = await LoadGraphDataAsync(graphDir);
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
+        return 1;
+    }
+
+    var finder = new PathFinder(nodes, edges);
+    var result = finder.FindPath(from, to, maxDepth);
+    if (result is null)
+    {
+        Console.Error.WriteLine($"No path found from '{from}' to '{to}'.");
+        return 1;
+    }
+
+    Console.WriteLine(PathFormatter.Format(result));
+    return 0;
+}
+
+static async Task<int> RunImpactAsync(List<string> argList)
+{
+    if (argList.Count < 1)
+    {
+        Console.Error.WriteLine("Usage: codegraph impact <symbol> [--depth N] [--graph-dir DIR]");
+        return 1;
+    }
+
+    var symbol = argList[0];
+    argList.RemoveAt(0);
+    var depth = GetOption(argList, "--depth", 3);
+    var graphDir = GetOption(argList, "--graph-dir", ".codegraph");
+
+    Dictionary<string, GraphNode> nodes;
+    List<GraphEdge> edges;
+    try
+    {
+        (nodes, edges) = await LoadGraphDataAsync(graphDir);
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
+        return 1;
+    }
+
+    var analyzer = new ImpactAnalyzer(nodes, edges);
+    var result = analyzer.Analyze(symbol, depth);
+    Console.WriteLine(ImpactFormatter.Format(result));
+    return 0;
+}
+
+static async Task<int> RunExplainAsync(List<string> argList)
+{
+    if (argList.Count < 1)
+    {
+        Console.Error.WriteLine("Usage: codegraph explain <symbol> [--graph-dir DIR]");
+        return 1;
+    }
+
+    var symbol = argList[0];
+    argList.RemoveAt(0);
+    var graphDir = GetOption(argList, "--graph-dir", ".codegraph");
+
+    Dictionary<string, GraphNode> nodes;
+    List<GraphEdge> edges;
+    try
+    {
+        (nodes, edges) = await LoadGraphDataAsync(graphDir);
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
+        return 1;
+    }
+
+    var explainer = new SymbolExplainer(nodes, edges);
+    var result = explainer.Explain(symbol);
+    if (result is null)
+    {
+        Console.Error.WriteLine($"No node found matching '{symbol}'.");
+        return 1;
+    }
+
+    Console.WriteLine(ExplainFormatter.Format(result));
+    return 0;
+}
+
+static async Task<(Dictionary<string, GraphNode> Nodes, List<GraphEdge> Edges)> LoadGraphDataAsync(string graphDir)
+{
+    var dbPath = Path.Combine(graphDir, "graph.db");
+    if (File.Exists(dbPath))
+    {
+        var (_, nodes, edges) = await CodeGraph.Core.IO.Sqlite.SqliteGraphReader.ReadAsync(dbPath);
+        return (nodes, edges);
+    }
+
+    var result = await CodeGraph.Core.IO.GraphReader.ReadAsync(graphDir);
+    return (result.Nodes, result.Edges);
+}
+
 static void PrintUsage()
 {
     Console.WriteLine("""
-        Usage: codegraph query <symbol-pattern> [options]
+        Usage: codegraph <command> [options]
 
-        Options:
+        Commands:
+          query <symbol-pattern>     Query the code graph for symbol relationships
+          path <from> <to>           Find shortest path between two symbols
+          impact <symbol>            Analyze what depends on a symbol
+          explain <symbol>           Comprehensive single-symbol view
+
+        Query options:
           --depth <n>          Traversal depth (default: 1)
           --kind <type>        Edge filter: calls-to, calls-from, inherits, implements, depends-on, resolves-to, covers, covered-by, references, overrides, contains, all
           --namespace <filter> Include only nodes in matching namespaces
@@ -170,8 +322,20 @@ static void PrintUsage()
           --max-nodes <n>      Cap output size (default: 50)
           --include-external   Include external dependency nodes (default: false)
           --no-rank            Disable result ranking
+          --confidence <level> Minimum confidence: verified, inferred, unresolved (default: all)
           --graph-dir <path>   Graph directory (default: .codegraph)
           --from <solution>    Query only the specified solution sub-graph (multi-solution)
+
+        Path options:
+          --max-depth <n>      Maximum search depth (default: 10)
+          --graph-dir <path>   Graph directory (default: .codegraph)
+
+        Impact options:
+          --depth <n>          Reverse traversal depth (default: 3)
+          --graph-dir <path>   Graph directory (default: .codegraph)
+
+        Explain options:
+          --graph-dir <path>   Graph directory (default: .codegraph)
         """);
 }
 
