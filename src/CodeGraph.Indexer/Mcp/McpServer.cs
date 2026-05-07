@@ -171,7 +171,7 @@ internal sealed class McpServer
         await writer.FlushAsync();
     }
 
-    private async Task<JsonNode?> HandleMessageAsync(JsonNode message)
+    internal async Task<JsonNode?> HandleMessageAsync(JsonNode message)
     {
         var method = message["method"]?.GetValue<string>();
         var id = message["id"];

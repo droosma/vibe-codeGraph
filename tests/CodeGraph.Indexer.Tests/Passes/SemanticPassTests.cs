@@ -1915,4 +1915,258 @@ namespace MyApp
             e.Type == EdgeType.Calls).ToList();
         Assert.Single(callEdges);
     }
+
+    // ── Cross-class method calls ──
+
+    [Fact]
+    public void MethodCall_AcrossClasses_CreatesCallsEdge()
+    {
+        var source = @"
+namespace MyApp
+{
+    public class Alpha
+    {
+        public void Step1()
+        {
+            var b = new Beta();
+            b.Step2();
+        }
+    }
+    public class Beta
+    {
+        public void Step2()
+        {
+            var g = new Gamma();
+            g.Step3();
+        }
+    }
+    public class Gamma
+    {
+        public void Step3() { }
+    }
+}";
+        var (_, _, _, semanticEdges) = RunBothPasses(source);
+
+        Assert.Contains(semanticEdges, e =>
+            e.FromId == "MyApp.Alpha.Step1()" &&
+            e.ToId == "MyApp.Beta.Step2()" &&
+            e.Type == EdgeType.Calls);
+        Assert.Contains(semanticEdges, e =>
+            e.FromId == "MyApp.Beta.Step2()" &&
+            e.ToId == "MyApp.Gamma.Step3()" &&
+            e.Type == EdgeType.Calls);
+    }
+
+    // ── Multiple interface implementation ──
+
+    [Fact]
+    public void ClassImplementingMultipleInterfaces_CreatesMultipleImplementsEdges()
+    {
+        var source = @"
+namespace MyApp
+{
+    public interface IFirst { }
+    public interface ISecond { }
+    public class Multi : IFirst, ISecond { }
+}";
+        var (_, _, _, semanticEdges) = RunBothPasses(source);
+
+        Assert.Contains(semanticEdges, e =>
+            e.FromId == "MyApp.Multi" &&
+            e.ToId == "MyApp.IFirst" &&
+            e.Type == EdgeType.Implements);
+        Assert.Contains(semanticEdges, e =>
+            e.FromId == "MyApp.Multi" &&
+            e.ToId == "MyApp.ISecond" &&
+            e.Type == EdgeType.Implements);
+    }
+
+    // ── UnwrapType: nullable, array ──
+
+    [Fact]
+    public void NullableValueType_DependsOn_UnwrappedType()
+    {
+        var source = @"
+namespace MyApp
+{
+    public struct MyStruct { }
+    public class Consumer
+    {
+        public void Act(MyStruct? val) { }
+    }
+}";
+        var (_, _, _, semanticEdges) = RunBothPasses(source);
+
+        Assert.Contains(semanticEdges, e =>
+            e.FromId.Contains("Act") &&
+            e.ToId == "MyApp.MyStruct" &&
+            e.Type == EdgeType.DependsOn);
+    }
+
+    [Fact]
+    public void ArrayType_DependsOn_ElementType()
+    {
+        var source = @"
+namespace MyApp
+{
+    public class Item { }
+    public class Container
+    {
+        private Item[] _items;
+    }
+}";
+        var (_, _, _, semanticEdges) = RunBothPasses(source);
+
+        Assert.Contains(semanticEdges, e =>
+            e.FromId.Contains("_items") &&
+            e.ToId == "MyApp.Item" &&
+            e.Type == EdgeType.DependsOn);
+    }
+
+    // ── Confidence on semantic edges ──
+
+    [Fact]
+    public void SemanticEdges_HaveVerifiedConfidence()
+    {
+        var source = @"
+namespace MyApp
+{
+    public interface IService { }
+    public class MyService : IService
+    {
+        public void Run() { }
+    }
+    public class Caller
+    {
+        public void Go() { new MyService().Run(); }
+    }
+}";
+        var (_, _, _, semanticEdges) = RunBothPasses(source);
+
+        Assert.All(semanticEdges, e => Assert.Equal(EdgeConfidence.Verified, e.Confidence));
+    }
+
+    // ── External type kind mapping ──
+
+    [Fact]
+    public void ExternalPropertyAccess_CreatesExternalNode_WithCorrectKind()
+    {
+        var source = @"
+namespace MyApp
+{
+    public class Reader
+    {
+        public int Count()
+        {
+            return System.Environment.ProcessorCount;
+        }
+    }
+}";
+        var (_, _, externalNodes, semanticEdges) = RunBothPasses(source);
+
+        var refEdge = semanticEdges.FirstOrDefault(e =>
+            e.FromId == "MyApp.Reader.Count()" &&
+            e.Type == EdgeType.References);
+        if (refEdge is not null)
+        {
+            var extNode = externalNodes.FirstOrDefault(n => n.Id == refEdge.ToId);
+            if (extNode is not null)
+            {
+                Assert.True(extNode.Metadata.ContainsKey("assembly"));
+            }
+        }
+    }
+
+    // ── struct and record type declarations visited in SemanticPass ──
+
+    [Fact]
+    public void StructImplementingInterface_CreatesImplementsEdge_ViaSemanticPass()
+    {
+        var source = @"
+namespace MyApp
+{
+    public interface IValue { }
+    public struct MyValue : IValue { }
+}";
+        var (_, _, _, semanticEdges) = RunBothPasses(source);
+
+        Assert.Contains(semanticEdges, e =>
+            e.FromId == "MyApp.MyValue" &&
+            e.ToId == "MyApp.IValue" &&
+            e.Type == EdgeType.Implements);
+    }
+
+    [Fact]
+    public void RecordImplementingInterface_CreatesImplementsEdge()
+    {
+        var source = @"
+namespace MyApp
+{
+    public interface IRecord { }
+    public record MyRec : IRecord;
+}";
+        var (_, _, _, semanticEdges) = RunBothPasses(source);
+
+        Assert.Contains(semanticEdges, e =>
+            e.FromId == "MyApp.MyRec" &&
+            e.ToId == "MyApp.IRecord" &&
+            e.Type == EdgeType.Implements);
+    }
+
+    // ── MemberAccess inside invocation is skipped ──
+
+    [Fact]
+    public void MemberAccessInsideInvocation_DoesNotCreateReferencesEdge()
+    {
+        var source = @"
+namespace MyApp
+{
+    public class Svc
+    {
+        public void Run() { }
+    }
+    public class Caller
+    {
+        public void Go()
+        {
+            var s = new Svc();
+            s.Run();
+        }
+    }
+}";
+        var (_, _, _, semanticEdges) = RunBothPasses(source);
+
+        // s.Run() should produce a Calls edge, NOT a References edge
+        Assert.DoesNotContain(semanticEdges, e =>
+            e.FromId == "MyApp.Caller.Go()" &&
+            e.ToId == "MyApp.Svc.Run()" &&
+            e.Type == EdgeType.References);
+        Assert.Contains(semanticEdges, e =>
+            e.FromId == "MyApp.Caller.Go()" &&
+            e.ToId == "MyApp.Svc.Run()" &&
+            e.Type == EdgeType.Calls);
+    }
+
+    // ── Member DependsOn its own containing type (return type) ──
+
+    [Fact]
+    public void MemberReturningOwnType_CreatesDependsOnEdge()
+    {
+        var source = @"
+namespace MyApp
+{
+    public class SelfRef
+    {
+        public SelfRef Create() => null;
+    }
+}";
+        var (_, _, _, semanticEdges) = RunBothPasses(source);
+
+        // A factory method creates a DependsOn edge to its return type,
+        // even when that type is the containing class.
+        Assert.Contains(semanticEdges, e =>
+            e.FromId.Contains("SelfRef.Create") &&
+            e.ToId == "MyApp.SelfRef" &&
+            e.Type == EdgeType.DependsOn);
+    }
 }

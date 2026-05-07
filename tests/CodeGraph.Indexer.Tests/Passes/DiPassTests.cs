@@ -773,4 +773,135 @@ namespace MyApp
         Assert.Single(externalNodes, n => n.Id == "MyApp.IService");
         Assert.Single(externalNodes, n => n.Id == "MyApp.ServiceImpl");
     }
+
+    // ── Multiple implementations of same interface ──
+
+    [Fact]
+    public void MultipleImplementations_EmitsResolvesToForEach()
+    {
+        var source = @"
+namespace MyApp
+{
+    public interface IHandler { }
+    public class HandlerA : IHandler { }
+    public class HandlerB : IHandler { }
+
+    public static class Ext
+    {
+        public static void AddScoped<T1, T2>(this object s) where T2 : T1 { }
+    }
+
+    public class Startup
+    {
+        public void Configure(object services)
+        {
+            services.AddScoped<IHandler, HandlerA>();
+            services.AddScoped<IHandler, HandlerB>();
+        }
+    }
+}";
+        var compilation = CreateCompilation(source);
+        var pass = new DiPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        Assert.Equal(2, edges.Count);
+        Assert.Contains(edges, e => e.FromId == "MyApp.IHandler" && e.ToId == "MyApp.HandlerA");
+        Assert.Contains(edges, e => e.FromId == "MyApp.IHandler" && e.ToId == "MyApp.HandlerB");
+    }
+
+    // ── No implementation found: non-DI method names ──
+
+    [Fact]
+    public void UnrecognizedDiMethodName_NoEdge()
+    {
+        var source = @"
+namespace MyApp
+{
+    public interface IService { }
+    public class Impl : IService { }
+
+    public static class Ext
+    {
+        public static void AddCustom<T1, T2>(this object s) where T2 : T1 { }
+    }
+
+    public class Startup
+    {
+        public void Configure(object services)
+        {
+            services.AddCustom<IService, Impl>();
+        }
+    }
+}";
+        var compilation = CreateCompilation(source);
+        var pass = new DiPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        Assert.Empty(edges);
+    }
+
+    // ── Lifetime extraction ──
+
+    [Theory]
+    [InlineData("TryAddScoped", "Scoped")]
+    [InlineData("TryAddTransient", "Transient")]
+    [InlineData("TryAddSingleton", "Singleton")]
+    public void TryAdd_Variants_EmitCorrectLifetime(string methodName, string expectedLifetime)
+    {
+        var compilation = CreateCompilation(MakeGenericSource(methodName));
+        var pass = new DiPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var edge = Assert.Single(edges);
+        Assert.Equal(expectedLifetime, edge.Metadata["lifetime"]);
+    }
+
+    // ── Edge type is always ResolvesTo ──
+
+    [Fact]
+    public void AllDiEdges_AreResolvesToType()
+    {
+        var source = @"
+namespace MyApp
+{
+    public interface IA { }
+    public interface IB { }
+    public class ImplA : IA { }
+    public class ImplB : IB { }
+
+    public static class Ext
+    {
+        public static void AddScoped<T1, T2>(this object s) where T2 : T1 { }
+        public static void AddSingleton<T1, T2>(this object s) where T2 : T1 { }
+    }
+
+    public class Startup
+    {
+        public void Configure(object services)
+        {
+            services.AddScoped<IA, ImplA>();
+            services.AddSingleton<IB, ImplB>();
+        }
+    }
+}";
+        var compilation = CreateCompilation(source);
+        var pass = new DiPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        Assert.Equal(2, edges.Count);
+        Assert.All(edges, e => Assert.Equal(EdgeType.ResolvesTo, e.Type));
+    }
+
+    // ── Edge confidence ──
+
+    [Fact]
+    public void DiEdges_HaveVerifiedConfidence()
+    {
+        var compilation = CreateCompilation(MakeGenericSource("AddScoped"));
+        var pass = new DiPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var edge = Assert.Single(edges);
+        Assert.Equal(EdgeConfidence.Verified, edge.Confidence);
+    }
 }

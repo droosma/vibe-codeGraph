@@ -1507,4 +1507,123 @@ namespace A
     }
 
     #endregion
+
+    #region Nested types
+
+    [Fact]
+    public void NestedType_CreatesContainsEdge_OuterToInner()
+    {
+        var source = @"namespace N {
+            public class Outer {
+                public class Middle {
+                    public class Innermost { }
+                }
+            }
+        }";
+        var (nodes, edges) = Execute(source);
+
+        Assert.Contains(nodes, n => n.Kind == NodeKind.Type && n.Name == "Outer");
+        Assert.Contains(nodes, n => n.Kind == NodeKind.Type && n.Name == "Middle");
+        Assert.Contains(nodes, n => n.Kind == NodeKind.Type && n.Name == "Innermost");
+
+        Assert.Contains(edges, e => e.FromId == "N.Outer" && e.ToId == "N.Outer.Middle" && e.Type == EdgeType.Contains);
+        Assert.Contains(edges, e => e.FromId == "N.Outer.Middle" && e.ToId == "N.Outer.Middle.Innermost" && e.Type == EdgeType.Contains);
+    }
+
+    [Fact]
+    public void NestedType_HasContainingTypeId_Set()
+    {
+        var source = "namespace N { public class Outer { public class Nested { } } }";
+        var (nodes, _) = Execute(source);
+
+        var nested = nodes.First(n => n.Name == "Nested");
+        Assert.Equal("N.Outer", nested.ContainingTypeId);
+    }
+
+    #endregion
+
+    #region Generic types and methods
+
+    [Fact]
+    public void GenericType_HasCorrectId_WithTypeParameters()
+    {
+        var (nodes, _) = Execute("namespace A { public class Gen<T, U> { } }");
+        var gen = nodes.First(n => n.Kind == NodeKind.Type && n.Name == "Gen");
+        Assert.Contains("Gen<T, U>", gen.Id);
+        Assert.Equal("2", gen.Metadata["genericArity"]);
+    }
+
+    [Fact]
+    public void GenericMethod_HasCorrectArity()
+    {
+        var (nodes, _) = Execute("namespace A { public class C { public T Get<T, U>(U key) { return default; } } }");
+        var method = nodes.First(n => n.Kind == NodeKind.Method && n.Name == "Get");
+        Assert.Equal("2", method.Metadata["genericArity"]);
+    }
+
+    #endregion
+
+    #region Static vs instance methods
+
+    [Fact]
+    public void StaticMethod_HasIsStaticMetadata()
+    {
+        var (nodes, _) = Execute("namespace A { public class C { public static void S() { } public void I() { } } }");
+        var staticMethod = nodes.First(n => n.Kind == NodeKind.Method && n.Name == "S");
+        var instanceMethod = nodes.First(n => n.Kind == NodeKind.Method && n.Name == "I");
+
+        Assert.True(staticMethod.Metadata.ContainsKey("isStatic"));
+        Assert.Equal("true", staticMethod.Metadata["isStatic"]);
+        Assert.False(instanceMethod.Metadata.ContainsKey("isStatic"));
+    }
+
+    #endregion
+
+    #region Enum member fields
+
+    [Fact]
+    public void EnumDeclaration_DoesNotEmitEnumMembers_AsFieldNodes()
+    {
+        // Enum members are part of the type; SyntaxPass visits FieldDeclaration but enum members
+        // use EnumMemberDeclarationSyntax, not FieldDeclarationSyntax
+        var (nodes, _) = Execute("namespace A { public enum Color { Red, Green, Blue } }");
+        var fields = nodes.Where(n => n.Kind == NodeKind.Field).ToList();
+        Assert.Empty(fields);
+    }
+
+    #endregion
+
+    #region Multiple Contains edges for all members
+
+    [Fact]
+    public void AllMemberKinds_HaveContainsEdge_FromType()
+    {
+        var source = @"namespace N {
+            public class Owner {
+                public Owner() { }
+                public void M() { }
+                public int P { get; set; }
+                private int _f;
+                public event System.Action E { add {} remove {} }
+            }
+        }";
+        var (_, edges) = Execute(source);
+
+        var containsEdges = edges.Where(e => e.FromId == "N.Owner" && e.Type == EdgeType.Contains).ToList();
+        // Constructor, Method, Property, Field, Event = at least 5
+        Assert.True(containsEdges.Count >= 5, $"Expected >=5 Contains edges, got {containsEdges.Count}");
+    }
+
+    #endregion
+
+    #region Edge Confidence on Contains edges
+
+    [Fact]
+    public void ContainsEdges_HaveVerifiedConfidence()
+    {
+        var (_, edges) = Execute("namespace N { public class C { public void M() { } } }");
+        Assert.All(edges, e => Assert.Equal(EdgeConfidence.Verified, e.Confidence));
+    }
+
+    #endregion
 }
