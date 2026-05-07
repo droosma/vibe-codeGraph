@@ -16,6 +16,7 @@ using CodeGraph.Query.Metrics;
 using CodeGraph.Query.OutputFormatters;
 using CodeGraph.Query.Report;
 using CodeGraph.Query.Wiki;
+using CodeGraph.Indexer.View;
 
 return await RunAsync(args);
 
@@ -38,6 +39,7 @@ static async Task<int> RunAsync(string[] args)
         "report" => await RunReportAsync(args),
         "stats" => await RunStatsAsync(args),
         "wiki" => await RunWikiAsync(args),
+        "view" => await RunViewAsync(args),
         "mcp" => await RunMcpAsync(args),
         "-h" or "--help" => ShowHelp(),
         _ => ShowUnknown(args[0])
@@ -993,6 +995,62 @@ static async Task<int> RunWikiAsync(string[] args)
     return 0;
 }
 
+static async Task<int> RunViewAsync(string[] args)
+{
+    var graphDir = ".codegraph";
+    var output = (string?)null;
+    var maxNodes = 5000;
+    var open = true;
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--graph-dir" when i + 1 < args.Length:
+                graphDir = args[++i];
+                break;
+            case "--output" or "-o" when i + 1 < args.Length:
+                output = args[++i];
+                break;
+            case "--max-nodes" when i + 1 < args.Length:
+                maxNodes = int.Parse(args[++i]);
+                break;
+            case "--no-open":
+                open = false;
+                break;
+            case "-h" or "--help":
+                PrintViewUsage();
+                return 0;
+        }
+    }
+
+    output ??= Path.Combine(graphDir, "graph.html");
+
+    var generator = new HtmlGraphGenerator(graphDir, maxNodes);
+
+    try
+    {
+        var html = await generator.GenerateAsync();
+        var fullPath = Path.GetFullPath(output);
+        await File.WriteAllTextAsync(fullPath, html);
+        Console.WriteLine($"Graph visualization written to {fullPath}");
+
+        if (open)
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo(fullPath) { UseShellExecute = true };
+            System.Diagnostics.Process.Start(psi);
+        }
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
+        return 1;
+    }
+
+    return 0;
+}
+
 static async Task<int> RunExportAsync(string[] args)
 {
     var graphDir = ".codegraph";
@@ -1428,6 +1486,7 @@ static void PrintUsage()
     Console.WriteLine("  codegraph report [--graph-dir <dir>] [--output <path>]");
     Console.WriteLine("  codegraph stats [--graph-dir <dir>]");
     Console.WriteLine("  codegraph wiki [--graph-dir <dir>] [--output <dir>]");
+    Console.WriteLine("  codegraph view [--graph-dir <dir>] [--output <path>] [--max-nodes <n>] [--no-open]");
     Console.WriteLine("  codegraph mcp [--graph-dir <dir>]");
     Console.WriteLine();
     Console.WriteLine("Commands:");
@@ -1440,6 +1499,7 @@ static void PrintUsage()
     Console.WriteLine("  report                   Generate a markdown report analyzing the graph");
     Console.WriteLine("  stats                    Show graph-level statistics (node/edge counts by kind)");
     Console.WriteLine("  wiki                     Generate navigable markdown wiki pages from the graph");
+    Console.WriteLine("  view                     Open interactive 3D graph visualization in browser");
     Console.WriteLine("  mcp                      Start MCP (Model Context Protocol) stdio server");
     Console.WriteLine();
     Console.WriteLine("Run 'codegraph <command> --help' for command-specific options.");
@@ -1559,6 +1619,29 @@ static void PrintWikiUsage()
           codegraph wiki                                      # Generate .codegraph/wiki/
           codegraph wiki -o docs/wiki                         # Write to custom directory
           codegraph wiki --graph-dir .codegraph-prev          # Wiki from a different graph
+        """);
+}
+
+static void PrintViewUsage()
+{
+    Console.WriteLine("""
+        Usage: codegraph view [options]
+
+        Generates an interactive 3D graph visualization as a self-contained HTML file
+        and opens it in your default browser.
+
+        Options:
+          --graph-dir <dir>    Directory containing graph data (default: .codegraph)
+          --output, -o <path>  Output HTML file (default: .codegraph/graph.html)
+          --max-nodes <n>      Maximum nodes to render (default: 5000)
+          --no-open            Don't open browser automatically
+          --help, -h           Show this help
+
+        Examples:
+          codegraph view                                      # Generate and open
+          codegraph view --no-open                            # Generate without opening
+          codegraph view --max-nodes 2000                     # Smaller graph for performance
+          codegraph view -o report/graph.html                 # Custom output path
         """);
 }
 
