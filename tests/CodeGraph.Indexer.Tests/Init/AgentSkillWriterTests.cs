@@ -32,7 +32,7 @@ public class AgentSkillWriterTests : IDisposable
         var skillPath = Path.Combine(_testDir, ".claude", "skills", "codegraph", "SKILL.md");
         Assert.True(File.Exists(skillPath));
         var content = File.ReadAllText(skillPath);
-        Assert.Contains("CodeGraph Query Skill", content);
+        Assert.Contains("Structural Code Intelligence", content);
 
         var wrapperPath = Path.Combine(_testDir, ".claude", "skills", "codegraph", "scripts", "query-wrapper.sh");
         Assert.True(File.Exists(wrapperPath));
@@ -175,7 +175,7 @@ public class AgentSkillWriterTests : IDisposable
             r.RelativePath == ".claude/skills/codegraph/SKILL.md" && r.Action == WriteAction.Created);
 
         var content = File.ReadAllText(Path.Combine(skillDir, "SKILL.md"));
-        Assert.Contains("CodeGraph Query Skill", content);
+        Assert.Contains("Structural Code Intelligence", content);
     }
 
     [Fact]

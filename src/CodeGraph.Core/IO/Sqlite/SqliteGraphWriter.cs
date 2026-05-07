@@ -225,7 +225,7 @@ public class SqliteGraphWriter
     {
         using var nodeCmd = connection.CreateCommand();
         nodeCmd.CommandText = """
-            INSERT INTO nodes (id, name, kind, file_path, start_line, end_line, signature, doc_comment,
+            INSERT OR REPLACE INTO nodes (id, name, kind, file_path, start_line, end_line, signature, doc_comment,
                                containing_type_id, containing_namespace_id, accessibility, assembly_name)
             VALUES ($id, $name, $kind, $filePath, $startLine, $endLine, $signature, $docComment,
                     $containingTypeId, $containingNamespaceId, $accessibility, $assemblyName)
@@ -245,7 +245,7 @@ public class SqliteGraphWriter
         var pAssemblyName = nodeCmd.Parameters.Add("$assemblyName", SqliteType.Text);
 
         using var metaCmd = connection.CreateCommand();
-        metaCmd.CommandText = "INSERT INTO node_metadata (node_id, key, value) VALUES ($nodeId, $key, $value)";
+        metaCmd.CommandText = "INSERT OR REPLACE INTO node_metadata (node_id, key, value) VALUES ($nodeId, $key, $value)";
         var pmNodeId = metaCmd.Parameters.Add("$nodeId", SqliteType.Text);
         var pmKey = metaCmd.Parameters.Add("$key", SqliteType.Text);
         var pmValue = metaCmd.Parameters.Add("$value", SqliteType.Text);
@@ -281,7 +281,7 @@ public class SqliteGraphWriter
     {
         using var edgeCmd = connection.CreateCommand();
         edgeCmd.CommandText = """
-            INSERT INTO edges (from_id, to_id, type, is_external, package_source, source_link, resolution, confidence)
+            INSERT OR IGNORE INTO edges (from_id, to_id, type, is_external, package_source, source_link, resolution, confidence)
             VALUES ($fromId, $toId, $type, $isExternal, $packageSource, $sourceLink, $resolution, $confidence)
             """;
 

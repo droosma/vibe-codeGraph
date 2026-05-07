@@ -173,6 +173,13 @@ static async Task<int> RunQueryAsync(string[] args)
     }
 
     Console.WriteLine(output);
+
+    // Emit contextual follow-up suggestions to guide exploration
+    var suggestions = QuerySuggestionGenerator.Generate(result, options);
+    var hints = QuerySuggestionGenerator.FormatHints(suggestions);
+    if (!string.IsNullOrEmpty(hints))
+        Console.Error.WriteLine(hints);
+
     return 0;
 }
 
@@ -1303,6 +1310,14 @@ static async Task<int> RunInitAsync(string[] args)
         var indexResult = await RunIndexAsync(indexArgs);
         if (indexResult != 0)
             return indexResult;
+
+        // Auto-generate REPORT.md so agents have an overview on first use
+        Console.WriteLine();
+        Console.WriteLine("Generating REPORT.md for agent context...");
+        var reportArgs = new[] { "report", "--graph-dir", outputDir ?? ".codegraph" };
+        var reportResult = await RunReportAsync(reportArgs);
+        if (reportResult != 0)
+            Console.Error.WriteLine("Warning: report generation failed (non-blocking).");
     }
 
     // --- Next steps ---
