@@ -343,4 +343,145 @@ public class SqliteGraphWriterTests : IDisposable
         Assert.Equal("MyApp.Core", node.Metadata["assembly"]);
         Assert.Equal("true", node.Metadata["is_abstract"]);
     }
+
+    [Fact]
+    public async Task AppendAsync_TwoSolutions_BothPresentInDb()
+    {
+        var writer = new SqliteGraphWriter();
+
+        var nodesA = new List<GraphNode>
+        {
+            new() { Id = "SolA.ClassA", Name = "ClassA", Kind = NodeKind.Type, AssemblyName = "SolA" }
+        };
+        var edgesA = new List<GraphEdge>
+        {
+            new() { FromId = "SolA.ClassA", ToId = "External.Lib", Type = EdgeType.Calls, IsExternal = true }
+        };
+
+        var nodesB = new List<GraphNode>
+        {
+            new() { Id = "SolB.ClassB", Name = "ClassB", Kind = NodeKind.Type, AssemblyName = "SolB" }
+        };
+        var edgesB = new List<GraphEdge>
+        {
+            new() { FromId = "SolB.ClassB", ToId = "External.Other", Type = EdgeType.Calls, IsExternal = true }
+        };
+
+        await writer.AppendAsync(_dbPath, nodesA, edgesA, "SolutionA");
+        await writer.AppendAsync(_dbPath, nodesB, edgesB, "SolutionB");
+
+        var (_, readNodes, readEdges) = await SqliteGraphReader.ReadAsync(_dbPath);
+
+        Assert.Equal(2, readNodes.Count);
+        Assert.True(readNodes.ContainsKey("SolA.ClassA"));
+        Assert.True(readNodes.ContainsKey("SolB.ClassB"));
+        Assert.Equal("SolutionA", readNodes["SolA.ClassA"].Metadata["source_solution"]);
+        Assert.Equal("SolutionB", readNodes["SolB.ClassB"].Metadata["source_solution"]);
+
+        Assert.Equal(2, readEdges.Count);
+    }
+
+    [Fact]
+    public async Task AppendAsync_ReIndexSameSolution_ReplacesData()
+    {
+        var writer = new SqliteGraphWriter();
+
+        var nodesV1 = new List<GraphNode>
+        {
+            new() { Id = "Sol.OldClass", Name = "OldClass", Kind = NodeKind.Type }
+        };
+        await writer.AppendAsync(_dbPath, nodesV1, Array.Empty<GraphEdge>(), "MySolution");
+
+        var nodesV2 = new List<GraphNode>
+        {
+            new() { Id = "Sol.NewClass", Name = "NewClass", Kind = NodeKind.Type }
+        };
+        await writer.AppendAsync(_dbPath, nodesV2, Array.Empty<GraphEdge>(), "MySolution");
+
+        var (_, readNodes, _) = await SqliteGraphReader.ReadAsync(_dbPath);
+
+        Assert.Single(readNodes);
+        Assert.True(readNodes.ContainsKey("Sol.NewClass"));
+        Assert.False(readNodes.ContainsKey("Sol.OldClass"));
+    }
+
+    [Fact]
+    public async Task AppendAsync_ReIndexOneSolution_PreservesOther()
+    {
+        var writer = new SqliteGraphWriter();
+
+        await writer.AppendAsync(_dbPath,
+            new[] { new GraphNode { Id = "A.Node", Name = "Node", Kind = NodeKind.Type } },
+            Array.Empty<GraphEdge>(), "SolA");
+
+        await writer.AppendAsync(_dbPath,
+            new[] { new GraphNode { Id = "B.Node", Name = "Node", Kind = NodeKind.Type } },
+            Array.Empty<GraphEdge>(), "SolB");
+
+        // Re-index SolA with different data
+        await writer.AppendAsync(_dbPath,
+            new[] { new GraphNode { Id = "A.Updated", Name = "Updated", Kind = NodeKind.Type } },
+            Array.Empty<GraphEdge>(), "SolA");
+
+        var (_, readNodes, _) = await SqliteGraphReader.ReadAsync(_dbPath);
+
+        Assert.Equal(2, readNodes.Count);
+        Assert.True(readNodes.ContainsKey("A.Updated"));
+        Assert.True(readNodes.ContainsKey("B.Node"));
+        Assert.False(readNodes.ContainsKey("A.Node"));
+    }
+
+    [Fact]
+    public async Task AppendAsync_UpdatesSolutionsMetadata()
+    {
+        var writer = new SqliteGraphWriter();
+
+        await writer.AppendAsync(_dbPath,
+            new[] { new GraphNode { Id = "A.N", Name = "N", Kind = NodeKind.Type } },
+            Array.Empty<GraphEdge>(), "Alpha");
+
+        await writer.AppendAsync(_dbPath,
+            new[] { new GraphNode { Id = "B.N", Name = "N", Kind = NodeKind.Type } },
+            Array.Empty<GraphEdge>(), "Beta");
+
+        // Read the raw metadata to verify solutions list
+        var connStr = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly,
+            Pooling = false
+        }.ToString();
+        using var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr);
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT value FROM metadata WHERE key = 'solutions'";
+        var json = (string)(await cmd.ExecuteScalarAsync())!;
+        var solutions = System.Text.Json.JsonSerializer.Deserialize<List<string>>(json)!;
+
+        Assert.Equal(2, solutions.Count);
+        Assert.Contains("Alpha", solutions);
+        Assert.Contains("Beta", solutions);
+    }
+
+    [Fact]
+    public async Task AppendAsync_EdgesFromSameSolution_RemovedOnReIndex()
+    {
+        var writer = new SqliteGraphWriter();
+
+        var nodes = new List<GraphNode>
+        {
+            new() { Id = "A.Class", Name = "Class", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A.Class", ToId = "External.Dep", Type = EdgeType.Calls, IsExternal = true }
+        };
+        await writer.AppendAsync(_dbPath, nodes, edges, "SolA");
+
+        // Re-index with no edges
+        await writer.AppendAsync(_dbPath, nodes, Array.Empty<GraphEdge>(), "SolA");
+
+        var (_, _, readEdges) = await SqliteGraphReader.ReadAsync(_dbPath);
+        Assert.Empty(readEdges);
+    }
 }

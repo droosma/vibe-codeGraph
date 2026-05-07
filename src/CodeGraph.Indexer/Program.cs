@@ -381,6 +381,7 @@ static async Task<int> RunIndexAsync(string[] args)
     bool skipRestore = false;
     bool changedOnly = false;
     bool sequential = false;
+    string? extendDbPath = null;
 
     for (int i = 1; i < args.Length; i++)
     {
@@ -416,6 +417,9 @@ static async Task<int> RunIndexAsync(string[] args)
             case "--sequential":
                 sequential = true;
                 break;
+            case "--extend" when i + 1 < args.Length:
+                extendDbPath = args[++i];
+                break;
             default:
                 Console.Error.WriteLine($"Unknown argument: {args[i]}");
                 PrintUsage();
@@ -442,7 +446,7 @@ static async Task<int> RunIndexAsync(string[] args)
     {
         // Multi-solution indexing
         return await RunMultiSolutionIndexAsync(effectiveSolutions, outputDir!, projectFilter,
-            configuration!, verbose, skipBuild, skipRestore, changedOnly, sequential, config);
+            configuration!, verbose, skipBuild, skipRestore, changedOnly, sequential, config, extendDbPath);
     }
 
     if (effectiveSolutions.Length == 1)
@@ -459,7 +463,7 @@ static async Task<int> RunIndexAsync(string[] args)
 static async Task<int> RunMultiSolutionIndexAsync(
     SolutionEntry[] solutions, string outputDir, string? projectFilter,
     string configuration, bool verbose, bool skipBuild, bool skipRestore,
-    bool changedOnly, bool sequential, CodeGraphConfig config)
+    bool changedOnly, bool sequential, CodeGraphConfig config, string? extendDbPath)
 {
     Console.WriteLine($"Multi-solution index: {solutions.Length} solutions");
     var errors = new ConcurrentBag<string>();
@@ -496,8 +500,61 @@ static async Task<int> RunMultiSolutionIndexAsync(
         return 1;
     }
 
+    // Merge per-solution graphs into a unified DB
+    var unifiedDbPath = extendDbPath ?? Path.Combine(Path.GetFullPath(outputDir), "graph.db");
+    await MergeMultiSolutionGraphsAsync(solutions, outputDir, unifiedDbPath, verbose);
+
     Console.WriteLine($"Multi-solution index complete: {solutions.Length} solutions indexed to {outputDir}");
     return 0;
+}
+
+// Reads each per-solution graph, appends them into a unified database, then
+// runs CrossSolutionLinker to resolve external edges across solutions.
+static async Task MergeMultiSolutionGraphsAsync(
+    SolutionEntry[] solutions, string outputDir, string unifiedDbPath, bool verbose)
+{
+    var writer = new SqliteGraphWriter();
+    var allNodes = new Dictionary<string, GraphNode>();
+    var allEdges = new List<GraphEdge>();
+
+    foreach (var entry in solutions)
+    {
+        var slnName = Path.GetFileNameWithoutExtension(entry.Path);
+        var subDir = Path.Combine(Path.GetFullPath(outputDir), slnName);
+        var subDbPath = Path.Combine(subDir, "graph.db");
+
+        if (!File.Exists(subDbPath))
+        {
+            if (verbose) Console.WriteLine($"  Skipping merge for {slnName}: no graph.db found");
+            continue;
+        }
+
+        if (verbose) Console.WriteLine($"  Merging {slnName} into unified graph");
+
+        var (_, nodes, edges) = await SqliteGraphReader.ReadAsync(subDbPath);
+
+        foreach (var kvp in nodes)
+            allNodes[kvp.Key] = kvp.Value;
+        allEdges.AddRange(edges);
+
+        await writer.AppendAsync(unifiedDbPath, nodes.Values, edges, slnName);
+    }
+
+    // Run cross-solution linking
+    var (crossEdges, resolvedIds) = CrossSolutionLinker.Link(allNodes, allEdges);
+    if (crossEdges.Count > 0)
+    {
+        if (verbose)
+            Console.WriteLine($"  Cross-solution linker: {crossEdges.Count} edges resolved, " +
+                              $"{resolvedIds.Count} external IDs matched");
+
+        // Append the cross-solution edges under a synthetic solution name
+        await writer.AppendAsync(
+            unifiedDbPath,
+            Array.Empty<GraphNode>(),
+            crossEdges,
+            "__cross_solution__");
+    }
 }
 
 static async Task<int> RunSingleIndexAsync(
