@@ -67,4 +67,85 @@ public class ClusterAnalyzerTests
         Assert.Single(clusters);
         Assert.Equal("Assembly1", clusters[0].Assembly);
     }
+
+    [Fact]
+    public void Analyze_EmptyGraph_ReturnsEmptyList()
+    {
+        var nodes = new Dictionary<string, GraphNode>();
+        var edges = new List<GraphEdge>();
+
+        var clusters = ClusterAnalyzer.Analyze(nodes, edges);
+
+        Assert.Empty(clusters);
+    }
+
+    [Fact]
+    public void Analyze_SingleNode_ZeroEdges()
+    {
+        var nodes = CreateNodes(("A", "Assembly1"));
+        var edges = new List<GraphEdge>();
+
+        var clusters = ClusterAnalyzer.Analyze(nodes, edges);
+
+        Assert.Single(clusters);
+        Assert.Equal(1, clusters[0].NodeCount);
+        Assert.Equal(0, clusters[0].InternalEdges);
+        Assert.Equal(0, clusters[0].ExternalEdges);
+    }
+
+    [Fact]
+    public void Analyze_SortedByNodeCountDescending()
+    {
+        var nodes = CreateNodes(
+            ("A", "Small"),
+            ("B", "Big"),
+            ("C", "Big"),
+            ("D", "Big"));
+        var edges = new List<GraphEdge>();
+
+        var clusters = ClusterAnalyzer.Analyze(nodes, edges);
+
+        Assert.Equal("Big", clusters[0].Assembly);
+        Assert.Equal(3, clusters[0].NodeCount);
+        Assert.Equal("Small", clusters[1].Assembly);
+        Assert.Equal(1, clusters[1].NodeCount);
+    }
+
+    [Fact]
+    public void Analyze_BidirectionalCrossEdge_CountedForBothAssemblies()
+    {
+        var nodes = CreateNodes(("A", "Asm1"), ("B", "Asm2"));
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A", ToId = "B", Type = EdgeType.Calls }
+        };
+
+        var clusters = ClusterAnalyzer.Analyze(nodes, edges);
+
+        var asm1 = clusters.Single(c => c.Assembly == "Asm1");
+        Assert.Equal(1, asm1.ExternalEdges);
+        Assert.Equal(0, asm1.InternalEdges);
+
+        var asm2 = clusters.Single(c => c.Assembly == "Asm2");
+        Assert.Equal(1, asm2.ExternalEdges);
+        Assert.Equal(0, asm2.InternalEdges);
+    }
+
+    [Fact]
+    public void Analyze_MultipleInternalEdges_CountedCorrectly()
+    {
+        var nodes = CreateNodes(("A", "Asm1"), ("B", "Asm1"), ("C", "Asm1"));
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A", ToId = "B", Type = EdgeType.Calls },
+            new() { FromId = "B", ToId = "C", Type = EdgeType.DependsOn },
+            new() { FromId = "A", ToId = "C", Type = EdgeType.Implements }
+        };
+
+        var clusters = ClusterAnalyzer.Analyze(nodes, edges);
+
+        Assert.Single(clusters);
+        Assert.Equal(3, clusters[0].InternalEdges);
+        Assert.Equal(0, clusters[0].ExternalEdges);
+    }
 }
