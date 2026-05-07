@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <!-- CA1707: Test methods use underscore naming by convention -->
+    <!-- CA1816: Tests don't need GC.SuppressFinalize patterns -->
+    <!-- CA1861: Inline arrays in test data are acceptable for readability -->
+    <NoWarn>$(NoWarn);CA1707;CA1816;CA1861</NoWarn>
+  </PropertyGroup>
+</Project>
