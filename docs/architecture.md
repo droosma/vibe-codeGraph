@@ -365,3 +365,57 @@ Snapshots are plain graph directories (the same `.codegraph/` layout) stored und
 - `.codegraph-<short-sha>` — commit-tagged snapshot (e.g., `.codegraph-abc1234`)
 
 The `--ref <git-ref>` flag resolves the ref to its short SHA and looks for `.codegraph-<ref>` or `.codegraph-<short-sha>` automatically. See [docs/diff.md](diff.md) for CI/CD patterns.
+
+---
+
+## Multi-Solution Indexing
+
+**Location:** `src/CodeGraph.Indexer/Program.cs` (`RunMultiSolutionIndexAsync`)
+
+When the config contains a `solutions` array (instead of a single `solution`), CodeGraph switches to multi-solution mode. Each solution is indexed independently using `RunSingleIndexAsync` and its graph is written to an isolated subdirectory named after the solution file (without extension).
+
+### Directory Layout
+
+```
+.codegraph/
+├── backend/
+│   ├── meta.json
+│   ├── Backend.Core.json
+│   └── ...
+├── wpfclient/
+│   ├── meta.json
+│   ├── WpfClient.UI.json
+│   └── ...
+```
+
+Each subdirectory is a self-contained graph — same layout as a single-solution index.
+
+### Parallel Execution
+
+Solutions are indexed concurrently via `Task.WhenAll`. Each solution gets its own restore → compile → pass pipeline running in full parallel. Use `--sequential` to fall back to serial execution on machines with limited RAM (<16 GB recommended threshold).
+
+### CLI Flags (multi-solution)
+
+| Flag | Effect |
+|------|--------|
+| `--sequential` | Disable parallel indexing; process one solution at a time |
+| `--solution <name>` | Index only the named solution from the `solutions` list (matches `.sln` basename) |
+
+---
+
+## Federated Query Engine
+
+When the graph directory contains subdirectories that each have their own `meta.json`, `QueryEngine.LoadAsync` automatically enters **federated mode**: it reads all sub-graphs, merges them in memory, and deduplicates before returning results.
+
+### Merge Rules
+
+- **Nodes** — deduplicated by fully-qualified ID (first-seen wins)
+- **Edges** — deduplicated by `(FromId, ToId, Type)` tuple
+
+### Solution Filter
+
+`--from <solution>` (CLI) / `solutionFilter` parameter (`QueryEngine.LoadAsync`) restricts loading to the subdirectory whose name matches the given solution name (case-insensitive). All nodes from other solutions are excluded from the result.
+
+### MCP
+
+The `codegraph_query` MCP tool accepts an optional `solution` parameter. When provided, the engine reloads using the matching solution filter. The engine instance is reused when the filter is unchanged.
