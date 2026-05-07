@@ -56,6 +56,35 @@ jobs:
             gh pr ready ${{ steps.pr.outputs.number }} --repo ${{ github.repository }}
           fi
 
+      - name: Checkout PR branch for rebase
+        if: steps.pr.outputs.should_run == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && '' || github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Fetch and set PR branch ref
+        if: steps.pr.outputs.should_run == 'true' && github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HEAD_REF=$(gh pr view ${{ steps.pr.outputs.number }} --repo ${{ github.repository }} --json headRefName --jq '.headRefName')
+          git fetch origin "$HEAD_REF"
+          git checkout "$HEAD_REF"
+
+      - name: Rebase onto main
+        if: steps.pr.outputs.should_run == 'true'
+        run: |
+          git fetch origin main
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rebase origin/main || {
+            echo "Rebase had conflicts — attempting auto-resolution with ours strategy"
+            git rebase --abort
+            git merge origin/main --strategy-option theirs --no-edit
+          }
+          git push --force-with-lease origin HEAD
+
       - name: Approve PR
         if: steps.pr.outputs.should_run == 'true'
         continue-on-error: true
