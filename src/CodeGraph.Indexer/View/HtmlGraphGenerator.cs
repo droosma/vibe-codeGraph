@@ -18,8 +18,7 @@ public class HtmlGraphGenerator
 
     public async Task<string> GenerateAsync()
     {
-        var reader = new GraphReader();
-        var (metadata, nodes, edges) = await reader.ReadAsync(_graphDir);
+        var (metadata, nodes, edges) = await GraphReader.ReadAsync(_graphDir);
 
         var (sampledNodes, sampledEdges) = Sample(nodes, edges);
         return BuildHtml(metadata, sampledNodes, sampledEdges);
