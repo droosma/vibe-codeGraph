@@ -191,7 +191,9 @@ Plus a `meta.json` containing `GraphMetadata`.
 | Component | Purpose |
 |-----------|---------|
 | `GraphWriter` | Groups nodes/edges by split strategy, writes JSON files |
+| `SqliteGraphWriter` | Writes the complete graph to `graph.db` (SQLite, preferred) |
 | `GraphReader` | Reads `meta.json` + all project JSON files, validates schema version |
+| `SqliteGraphReader` | Reads `graph.db`; used by all commands when `graph.db` is present |
 | `GraphMerger` | Merges partial graphs into existing graph (for incremental indexing) |
 
 ---
@@ -228,9 +230,14 @@ flowchart TD
 
 5. **Edge type filter** (`EdgeTypeFilter`) — Keep only edges matching the requested `EdgeType`. Supports aliases (e.g., `calls-to` → `Calls`).
 
-6. **External filter** — Remove external nodes/edges unless `--include-external`.
+6. **Query mode filter** (`QueryModeFilter`) — Applied before BFS when `--mode` is not `all`:
+   - `focused` — Only high-signal edges: `Calls`, `Implements`, `Inherits`, `ResolvesTo`, `Covers`, `CoveredBy`
+   - `structural` — High-signal edges plus `Contains` for navigating type hierarchies
+   - `all` — No filtering (default)
 
-7. **Rank + truncate** (`RankingStrategy`) — When results exceed `--max-nodes`:
+7. **External filter** — Remove external nodes/edges unless `--include-external`.
+
+8. **Rank + truncate** (`RankingStrategy`) — When results exceed `--max-nodes`:
    - Direct neighbors (depth=1) before transitive
    - Same project before cross-project
    - Internal before external
@@ -238,7 +245,9 @@ flowchart TD
    - Nodes with doc comments before those without
    - Seed nodes are always preserved
 
-8. **Format output** — Render via `ContextFormatter`, `JsonFormatter`, or `TextFormatter`.
+8. **Budget truncation** (`BudgetTruncator`) — When `--budget <tokens>` is set, the formatted output is truncated at the token limit and a hint is appended describing how many results were omitted.
+
+9. **Format output** — Render via `ContextFormatter`, `CompactFormatter`, `JsonFormatter`, or `TextFormatter`.
 
 ### Staleness Detection
 
@@ -251,6 +260,7 @@ The query engine compares the graph's `commitHash` in `meta.json` against the cu
 | Format | Class | Use Case |
 |--------|-------|----------|
 | `context` | `ContextFormatter` | Default. Markdown-like, optimized for LLM prompts. Shows target node, outgoing/incoming edges grouped by type. |
+| `compact` | `CompactFormatter` | Prefix-stripped compressed format, 3–5× smaller than `context`. Best for large result sets or constrained token budgets. |
 | `json` | `JsonFormatter` | Machine-readable. Serializes the full `QueryResult` (camelCase, enums as strings). |
 | `text` | `TextFormatter` | Human-readable tabular format with stats and edge summaries. |
 

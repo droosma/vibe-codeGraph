@@ -56,20 +56,28 @@ For **Claude Code**: the server is auto-discovered from `.mcp.json`. No restart 
 
 For **APM**: run `apm install` to wire the MCP server into all detected clients.
 
-### `codegraph_query` Tool Reference
+### MCP Tool Reference
 
-Once registered via MCP, agents call the tool with these parameters:
+The MCP server exposes six tools. Agents call them like any other native tool.
+
+#### `codegraph_query`
+
+Query the graph by symbol pattern.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `symbol` | `string` | ✅ | — | Symbol name or pattern. Supports wildcards (`Order*`, `*Service`) and kind prefix (`type:OrderService`, `method:PlaceOrder`). |
 | `depth` | `integer` | | `1` | BFS traversal depth from matched nodes. `0` = matched node only; `1` = direct neighbors. |
 | `kind` | `string` | | all edges | Edge type filter. See values below. |
+| `mode` | `string` | | `all` | Traversal mode: `focused` (high-signal edges), `structural` (includes containment), `all` (everything). |
 | `namespace` | `string` | | all | Namespace filter (wildcards OK, e.g. `MyApp.Services*`). |
 | `project` | `string` | | all | Project/assembly filter. |
-| `format` | `string` | | `"context"` | Output format: `"context"` (Markdown), `"json"`, or `"text"`. |
+| `format` | `string` | | `"context"` | Output format: `"context"` (Markdown), `"compact"` (prefix-stripped, 3–5× smaller), `"json"`, or `"text"`. |
 | `max_nodes` | `integer` | | `50` | Maximum nodes to return. |
 | `include_external` | `boolean` | | `false` | Include external (NuGet) dependency nodes. |
+| `confidence` | `string` | | all | Minimum edge confidence: `verified`, `inferred`, or `unresolved` (default: all). |
+| `budget` | `integer` | | (none) | Maximum token budget. Output is truncated with a hint when exceeded. |
+| `solution` | `string` | | all solutions | Scope query to a specific solution name (multi-solution support). |
 
 **`kind` values:**
 
@@ -87,6 +95,47 @@ Once registered via MCP, agents call the tool with these parameters:
 | `overrides` | Method override edges |
 | `contains` | Parent/child containment edges |
 | `all` | No filter — all edge types |
+
+#### `codegraph_list`
+
+Browse the graph hierarchy. Use before querying to orient yourself in an unfamiliar codebase.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `scope` | `string` | | `"assemblies"` | What to list: `assemblies`, `types`, `interfaces`, or `namespaces`. |
+| `assembly` | `string` | | all | Filter by assembly name. |
+| `top` | `integer` | | `20` | Max items to return. |
+
+#### `codegraph_summary`
+
+Generate an overview report of the code graph: hub types, assembly boundaries, test coverage, and suggested queries. Takes no parameters. Use to get a structural overview before diving into specific symbols.
+
+#### `codegraph_path`
+
+Find the shortest dependency path between two symbols through calls, inheritance, or other relationships.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `from` | `string` | ✅ | — | Source symbol name or pattern. |
+| `to` | `string` | ✅ | — | Target symbol name or pattern. |
+| `maxDepth` | `integer` | | `10` | Maximum search depth. |
+
+#### `codegraph_impact`
+
+Reverse-dependency analysis. Find all symbols that depend on a given symbol to assess the blast radius of a change.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `symbol` | `string` | ✅ | — | Symbol name or pattern to analyze. |
+| `depth` | `integer` | | `3` | Reverse traversal depth. |
+
+#### `codegraph_explain`
+
+Get a comprehensive view of a single symbol: its type, file location, signature, members, all incoming/outgoing edges, and test coverage. Use to fully understand a symbol before making changes.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `symbol` | `string` | ✅ | — | Symbol name or pattern to explain. |
 
 ---
 

@@ -8,14 +8,15 @@ CodeGraph writes its output as JSON files in the graph directory (default: `.cod
 
 ```
 .codegraph/
-├── meta.json              # Index metadata
+├── graph.db               # Primary SQLite graph database (preferred)
+├── meta.json              # Index metadata (also embedded in graph.db)
 ├── _external.json         # External/NuGet dependency nodes (SBOM-like)
 ├── MyApp.Core.json        # Graph for MyApp.Core project
 ├── MyApp.Services.json    # Graph for MyApp.Services project
 └── MyApp.Api.json         # Graph for MyApp.Api project
 ```
 
-Files are split by the `splitBy` config option (`project` or `namespace`).
+> **Storage note:** CodeGraph now writes `graph.db` (SQLite) as the primary storage format. The per-assembly JSON files are written for backwards compatibility. The query engine and all commands prefer `graph.db` when it is present; use `codegraph export` to convert back to JSON files if needed.
 
 ---
 
@@ -157,11 +158,26 @@ Each project file contains a `ProjectGraph` object:
 | `fromId` | `string` | ✓ | Source node ID. |
 | `toId` | `string` | ✓ | Target node ID. |
 | `type` | `EdgeType` | ✓ | The kind of relationship. |
+| `confidence` | `EdgeConfidence` | ✓ | How certain CodeGraph is about this edge. See values below. |
 | `isExternal` | `bool` | ✓ | `true` if the target node is from an external assembly. |
 | `packageSource` | `string?` | | NuGet package name (when `isExternal` is true). |
 | `sourceLink` | `string?` | | SourceLink URL for the external symbol. |
 | `resolution` | `string?` | | IoC resolution details (for `ResolvesTo` edges). |
 | `metadata` | `object` | ✓ | Key-value pairs for additional edge info. |
+
+---
+
+## EdgeConfidence Enum
+
+| Value | Description |
+|-------|-------------|
+| `verified` | Edge confirmed by Roslyn semantic analysis (e.g., resolved method call, explicit interface implementation). |
+| `inferred` | Edge was inferred without direct confirmation (e.g., single DI implementation auto-resolved, convention-based). |
+| `unresolved` | Edge target could not be fully resolved (e.g., dynamic dispatch, unbound generic). |
+
+Serialized as **camelCase strings** in JSON. The default is `verified`.
+
+When querying via MCP, use the `confidence` parameter to filter edges by minimum confidence level.
 
 ---
 
