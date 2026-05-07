@@ -269,4 +269,43 @@ public class DepthFilterTests
         Assert.Contains("C", result);
         Assert.Contains("D", result);
     }
+
+    [Fact]
+    public void Traverse_IncomingEdge_WithEdgeTypeFilter_ExcludesDisallowedTypes()
+    {
+        // Targets NoCoverage L82-83: incoming edge type filter branch
+        // B → A (Calls), C → A (Contains) — seed is A, filter to Calls only
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "B", ToId = "A", Type = EdgeType.Calls },
+            new() { FromId = "C", ToId = "A", Type = EdgeType.Contains }
+        };
+        var (outgoing, incoming) = BuildAdjacency(edges);
+
+        var allowedEdgeTypes = new HashSet<EdgeType> { EdgeType.Calls };
+        var result = DepthFilter.Traverse(new[] { "A" }, outgoing, incoming, 1, false, allowedEdgeTypes);
+
+        Assert.Contains("A", result);
+        Assert.Contains("B", result); // Calls is allowed
+        Assert.DoesNotContain("C", result); // Contains is not allowed
+    }
+
+    [Fact]
+    public void Traverse_IncomingExternalEdge_ExcludedWhenNotRequested_WithEdgeTypeFilter()
+    {
+        // Exercises incoming path with both edge type filter and external filter
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "Ext", ToId = "A", Type = EdgeType.Calls, IsExternal = true },
+            new() { FromId = "Int", ToId = "A", Type = EdgeType.Calls, IsExternal = false }
+        };
+        var (outgoing, incoming) = BuildAdjacency(edges);
+
+        var allowedEdgeTypes = new HashSet<EdgeType> { EdgeType.Calls };
+        var result = DepthFilter.Traverse(new[] { "A" }, outgoing, incoming, 1, includeExternal: false, allowedEdgeTypes);
+
+        Assert.Contains("A", result);
+        Assert.Contains("Int", result);
+        Assert.DoesNotContain("Ext", result);
+    }
 }

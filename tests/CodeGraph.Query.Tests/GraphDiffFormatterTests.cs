@@ -94,4 +94,83 @@ public class GraphDiffFormatterTests
             RemovedEdges = [new GraphEdge { FromId = "OrderController", ToId = "LegacyOrderProcessor", Type = EdgeType.Calls }]
         };
     }
+
+    [Fact]
+    public void TextFormatter_ShortCommit_NotTruncated()
+    {
+        // Targets L29: commitHash.Length > 7 condition
+        var diff = new GraphDiffResult
+        {
+            BaseMetadata = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow },
+            HeadMetadata = new GraphMetadata { CommitHash = "xyz", Branch = "feat", GeneratedAt = DateTimeOffset.UtcNow }
+        };
+
+        var output = GraphDiffTextFormatter.Format(diff);
+
+        Assert.Contains("Graph Diff abc..xyz", output);
+    }
+
+    [Fact]
+    public void TextFormatter_EmptyCommit_ShowsUnknown()
+    {
+        // Targets L27: empty commit NoCoverage
+        var diff = new GraphDiffResult
+        {
+            BaseMetadata = new GraphMetadata { CommitHash = "", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow },
+            HeadMetadata = new GraphMetadata { CommitHash = "", Branch = "feat", GeneratedAt = DateTimeOffset.UtcNow }
+        };
+
+        var output = GraphDiffTextFormatter.Format(diff);
+
+        Assert.Contains("Graph Diff unknown..unknown", output);
+    }
+
+    [Fact]
+    public void TextFormatter_Exactly7CharCommit_NotTruncated()
+    {
+        // Targets L29: equality mutation (> vs >=)
+        var diff = new GraphDiffResult
+        {
+            BaseMetadata = new GraphMetadata { CommitHash = "1234567", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow },
+            HeadMetadata = new GraphMetadata { CommitHash = "abcdefg", Branch = "feat", GeneratedAt = DateTimeOffset.UtcNow }
+        };
+
+        var output = GraphDiffTextFormatter.Format(diff);
+
+        Assert.Contains("Graph Diff 1234567..abcdefg", output);
+    }
+
+    [Fact]
+    public void TextFormatter_8CharCommit_Truncated()
+    {
+        // Length > 7 with 8 chars should be truncated
+        var diff = new GraphDiffResult
+        {
+            BaseMetadata = new GraphMetadata { CommitHash = "12345678", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow },
+            HeadMetadata = new GraphMetadata { CommitHash = "abcdefgh", Branch = "feat", GeneratedAt = DateTimeOffset.UtcNow }
+        };
+
+        var output = GraphDiffTextFormatter.Format(diff);
+
+        Assert.Contains("Graph Diff 1234567..abcdefg", output);
+        Assert.DoesNotContain("12345678", output);
+    }
+
+    [Fact]
+    public void TextFormatter_EmptyDiff_AllCountsZero()
+    {
+        var diff = new GraphDiffResult
+        {
+            BaseMetadata = new GraphMetadata { CommitHash = "abc1234", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow },
+            HeadMetadata = new GraphMetadata { CommitHash = "def5678", Branch = "feat", GeneratedAt = DateTimeOffset.UtcNow }
+        };
+
+        var output = GraphDiffTextFormatter.Format(diff);
+
+        Assert.Contains("Added nodes: 0", output);
+        Assert.Contains("Removed nodes: 0", output);
+        Assert.Contains("Signature changes: 0", output);
+        Assert.Contains("Added edges: 0", output);
+        Assert.Contains("Removed edges: 0", output);
+    }
 }

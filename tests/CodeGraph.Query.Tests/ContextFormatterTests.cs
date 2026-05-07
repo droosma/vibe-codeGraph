@@ -1022,4 +1022,205 @@ public class ContextFormatterTests
         Assert.DoesNotContain("### Matched Nodes", outputEmpty);
         Assert.DoesNotContain("### Target", outputEmpty);
     }
+
+    [Fact]
+    public void Format_TargetNodeId_UsedAsHeader_NotFirstMatched()
+    {
+        // Targets L39: Null coalescing mutations — TargetNode?.Id takes precedence
+        var target = new GraphNode { Id = "Target.Id", Name = "Target", Kind = NodeKind.Method };
+        var other = new GraphNode { Id = "Other.Id", Name = "Other", Kind = NodeKind.Method };
+
+        var result = new QueryResult
+        {
+            TargetNode = target,
+            MatchedNodes = new List<GraphNode> { other, target },
+            Nodes = new Dictionary<string, GraphNode> { ["Target.Id"] = target, ["Other.Id"] = other },
+            Edges = new List<GraphEdge>(),
+            Metadata = DefaultMeta
+        };
+
+        var output = ContextFormatter.Format(result);
+
+        // Must use TargetNode.Id, not first matched node
+        Assert.Contains("# Subgraph for Target.Id", output);
+        Assert.DoesNotContain("# Subgraph for Other.Id", output);
+    }
+
+    [Fact]
+    public void Format_CommitHash_Equality_LengthBoundary()
+    {
+        // Targets L45: Equality mutation (> to >=) on CommitHash.Length > 7
+        // Test with exactly 8 characters — should be truncated
+        var result = new QueryResult
+        {
+            MatchedNodes = new List<GraphNode> { new() { Id = "X", Name = "X", Kind = NodeKind.Method } },
+            Nodes = new Dictionary<string, GraphNode> { ["X"] = new() { Id = "X", Name = "X", Kind = NodeKind.Method } },
+            Edges = new List<GraphEdge>(),
+            Metadata = new GraphMetadata
+            {
+                CommitHash = "12345678",
+                Branch = "b",
+                GeneratedAt = new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
+            }
+        };
+
+        var output = ContextFormatter.Format(result);
+
+        Assert.Contains("## Commit: 1234567 (b, 2025-01-01)", output);
+        Assert.DoesNotContain("12345678", output);
+    }
+
+    [Fact]
+    public void Format_QueryDescriptionStatement_PresentInOutput()
+    {
+        // Targets L56: Statement mutation — queryDescription line
+        var result = new QueryResult
+        {
+            MatchedNodes = new List<GraphNode> { new() { Id = "X", Name = "X", Kind = NodeKind.Method } },
+            Nodes = new Dictionary<string, GraphNode> { ["X"] = new() { Id = "X", Name = "X", Kind = NodeKind.Method } },
+            Edges = new List<GraphEdge>(),
+            Metadata = DefaultMeta
+        };
+
+        var withDesc = ContextFormatter.Format(result, "test query desc");
+        var withoutDesc = ContextFormatter.Format(result, null);
+
+        Assert.Contains("## Query: test query desc", withDesc);
+        Assert.DoesNotContain("## Query:", withoutDesc);
+    }
+
+    [Fact]
+    public void Format_OutgoingEdge_AppendNodeDetail_Statement()
+    {
+        // Targets L100: Statement mutation on AppendNodeDetail for incoming edge
+        var target = new GraphNode { Id = "T", Name = "T", Kind = NodeKind.Method };
+        var caller = new GraphNode
+        {
+            Id = "Caller", Name = "Caller", Kind = NodeKind.Method,
+            FilePath = "caller.cs", StartLine = 1, EndLine = 5,
+            Signature = "void Call()"
+        };
+
+        var result = new QueryResult
+        {
+            TargetNode = target,
+            MatchedNodes = new List<GraphNode> { target },
+            Nodes = new Dictionary<string, GraphNode> { ["T"] = target, ["Caller"] = caller },
+            Edges = new List<GraphEdge>
+            {
+                new() { FromId = "Caller", ToId = "T", Type = EdgeType.Calls }
+            },
+            Metadata = DefaultMeta
+        };
+
+        var output = ContextFormatter.Format(result);
+
+        // The incoming edge node detail should show Caller's file info
+        Assert.Contains("- Caller", output);
+        Assert.Contains("File: caller.cs:1-5", output);
+        Assert.Contains("Sig:  void Call()", output);
+    }
+
+    [Fact]
+    public void Format_OutgoingEdge_TargetSection_AppendNodeDetail()
+    {
+        // Targets L120: Statement mutation on outgoing edge node detail  
+        var target = new GraphNode { Id = "T", Name = "T", Kind = NodeKind.Method };
+        var dep = new GraphNode
+        {
+            Id = "Dep", Name = "Dep", Kind = NodeKind.Type,
+            FilePath = "dep.cs", StartLine = 10, EndLine = 20
+        };
+
+        var result = new QueryResult
+        {
+            TargetNode = target,
+            MatchedNodes = new List<GraphNode> { target },
+            Nodes = new Dictionary<string, GraphNode> { ["T"] = target, ["Dep"] = dep },
+            Edges = new List<GraphEdge>
+            {
+                new() { FromId = "T", ToId = "Dep", Type = EdgeType.Calls }
+            },
+            Metadata = DefaultMeta
+        };
+
+        var output = ContextFormatter.Format(result);
+
+        Assert.Contains("- Dep", output);
+        Assert.Contains("File: dep.cs:10-20", output);
+    }
+
+    [Fact]
+    public void Format_EdgeConfidence_NonVerified_ShowsConfidence()
+    {
+        // Targets NoCoverage L146: edge.Confidence is not null and not Verified
+        var target = new GraphNode { Id = "T", Name = "T", Kind = NodeKind.Method };
+        var dep = new GraphNode { Id = "D", Name = "D", Kind = NodeKind.Type };
+
+        var result = new QueryResult
+        {
+            TargetNode = target,
+            MatchedNodes = new List<GraphNode> { target },
+            Nodes = new Dictionary<string, GraphNode> { ["T"] = target, ["D"] = dep },
+            Edges = new List<GraphEdge>
+            {
+                new() { FromId = "T", ToId = "D", Type = EdgeType.ResolvesTo,
+                    Confidence = EdgeConfidence.Inferred }
+            },
+            Metadata = DefaultMeta
+        };
+
+        var output = ContextFormatter.Format(result);
+
+        Assert.Contains("Confidence: Inferred", output);
+    }
+
+    [Fact]
+    public void Format_EdgeConfidence_Verified_DoesNotShowConfidence()
+    {
+        // Verified confidence should be suppressed
+        var target = new GraphNode { Id = "T", Name = "T", Kind = NodeKind.Method };
+        var dep = new GraphNode { Id = "D", Name = "D", Kind = NodeKind.Type };
+
+        var result = new QueryResult
+        {
+            TargetNode = target,
+            MatchedNodes = new List<GraphNode> { target },
+            Nodes = new Dictionary<string, GraphNode> { ["T"] = target, ["D"] = dep },
+            Edges = new List<GraphEdge>
+            {
+                new() { FromId = "T", ToId = "D", Type = EdgeType.Calls,
+                    Confidence = EdgeConfidence.Verified }
+            },
+            Metadata = DefaultMeta
+        };
+
+        var output = ContextFormatter.Format(result);
+
+        Assert.DoesNotContain("Confidence:", output);
+    }
+
+    [Fact]
+    public void Format_EdgeConfidence_Unresolved_ShowsConfidence()
+    {
+        var target = new GraphNode { Id = "T", Name = "T", Kind = NodeKind.Method };
+        var dep = new GraphNode { Id = "D", Name = "D", Kind = NodeKind.Type };
+
+        var result = new QueryResult
+        {
+            TargetNode = target,
+            MatchedNodes = new List<GraphNode> { target },
+            Nodes = new Dictionary<string, GraphNode> { ["T"] = target, ["D"] = dep },
+            Edges = new List<GraphEdge>
+            {
+                new() { FromId = "T", ToId = "D", Type = EdgeType.Calls,
+                    Confidence = EdgeConfidence.Unresolved }
+            },
+            Metadata = DefaultMeta
+        };
+
+        var output = ContextFormatter.Format(result);
+
+        Assert.Contains("Confidence: Unresolved", output);
+    }
 }

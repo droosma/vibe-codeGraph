@@ -1074,4 +1074,340 @@ public class QueryEngineTests
 
         Assert.Equal(2, result.Edges.Count);
     }
+
+    // --- Tests targeting surviving mutants ---
+
+    [Fact]
+    public void MaxNodes_WithoutRank_TakeNotSkip()
+    {
+        // Targets L226: Take() to Skip() mutation
+        var nodes = new Dictionary<string, GraphNode>();
+        var edges = new List<GraphEdge>();
+        nodes["Seed"] = new GraphNode { Id = "Seed", Name = "Seed", Kind = NodeKind.Method };
+        for (int i = 0; i < 10; i++)
+        {
+            var nid = $"Node{i}";
+            nodes[nid] = new GraphNode { Id = nid, Name = nid, Kind = NodeKind.Method };
+            edges.Add(new GraphEdge { FromId = "Seed", ToId = nid, Type = EdgeType.Calls });
+        }
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        var result = engine.Query(new QueryOptions { Pattern = "Seed", Depth = 1, MaxNodes = 3, Rank = false });
+
+        // Take(3) keeps first 3 keys + seed; Skip(3) would keep the rest.
+        // Total subgraph nodes should be <= MaxNodes + seeds, not > MaxNodes
+        Assert.True(result.Nodes.Count <= 4, $"Expected at most 4 nodes (MaxNodes=3 + seed), got {result.Nodes.Count}");
+        Assert.True(result.Nodes.Count > 0);
+    }
+
+    [Fact]
+    public void MaxNodes_WithoutRank_SeedAlwaysKept()
+    {
+        // Targets L228: Statement mutation (foreach seed keepIds.Add)
+        var nodes = new Dictionary<string, GraphNode>();
+        var edges = new List<GraphEdge>();
+        nodes["Seed"] = new GraphNode { Id = "Seed", Name = "Seed", Kind = NodeKind.Method };
+        for (int i = 0; i < 5; i++)
+        {
+            var nid = $"X{i}";
+            nodes[nid] = new GraphNode { Id = nid, Name = nid, Kind = NodeKind.Method };
+            edges.Add(new GraphEdge { FromId = "Seed", ToId = nid, Type = EdgeType.Calls });
+        }
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        // MaxNodes = 1 with rank=false: Take(1) gives first node from dict, then seed added
+        var result = engine.Query(new QueryOptions { Pattern = "Seed", Depth = 1, MaxNodes = 1, Rank = false });
+
+        Assert.True(result.Nodes.ContainsKey("Seed"), "Seed must always be kept even with MaxNodes=1");
+    }
+
+    [Fact]
+    public void Depth1_DirectNeighborIds_CoversBranch()
+    {
+        // Targets L159: directNeighborIds conditional — depth >= 1 should traverse vs depth < 1
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["S"] = new() { Id = "S", Name = "S", Kind = NodeKind.Method },
+            ["N1"] = new() { Id = "N1", Name = "N1", Kind = NodeKind.Method },
+            ["N2"] = new() { Id = "N2", Name = "N2", Kind = NodeKind.Method }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "S", ToId = "N1", Type = EdgeType.Calls },
+            new() { FromId = "N1", ToId = "N2", Type = EdgeType.Calls }
+        };
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        // depth=1 with rank: directNeighborIds should include N1 (neighbor of S)
+        var result = engine.Query(new QueryOptions { Pattern = "S", Depth = 2, MaxNodes = 2, Rank = true });
+
+        // N1 is a direct neighbor and should be ranked higher than N2
+        Assert.True(result.Nodes.ContainsKey("S"));
+        Assert.True(result.Nodes.ContainsKey("N1"), "Direct neighbor N1 should be kept by ranking");
+    }
+
+    [Fact]
+    public void WildcardPattern_RegexEscaping()
+    {
+        // Targets L273: Regex.Escape / string mutations on wildcard pattern
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A.B.C"] = new() { Id = "A.B.C", Name = "C", Kind = NodeKind.Method },
+            ["A.X.C"] = new() { Id = "A.X.C", Name = "C2", Kind = NodeKind.Method }
+        };
+        var edges = new List<GraphEdge>();
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        // Wildcard * should match anything
+        var result = engine.Query(new QueryOptions { Pattern = "A.*.C", Depth = 0 });
+        Assert.Equal(2, result.MatchedNodes.Count);
+
+        // Without wildcard, exact match should be attempted
+        var exact = engine.Query(new QueryOptions { Pattern = "A.B.C", Depth = 0 });
+        Assert.Single(exact.MatchedNodes);
+    }
+
+    [Fact]
+    public void PartialMatch_IdEndsWith_CaseInsensitive()
+    {
+        // Targets L283/L284: logical mutation and string mutation on partial match path
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Namespace.MyClass"] = new() { Id = "Namespace.MyClass", Name = "MyClass", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>();
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        // "myclass" should match Name via case-insensitive equals
+        var result = engine.Query(new QueryOptions { Pattern = "myclass", Depth = 0 });
+        Assert.Single(result.MatchedNodes);
+        Assert.Equal("Namespace.MyClass", result.MatchedNodes[0].Id);
+    }
+
+    [Fact]
+    public void PartialMatch_NameEndsWith_CaseInsensitive()
+    {
+        // Targets L295: logical mutations in partial match conditions
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Some.Thing.Worker"] = new() { Id = "Some.Thing.Worker", Name = "ThingWorker", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>();
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        // "thingworker" matches Name case-insensitively  
+        var result = engine.Query(new QueryOptions { Pattern = "thingworker", Depth = 0 });
+        Assert.Single(result.MatchedNodes);
+    }
+
+    [Fact]
+    public void PartialMatch_AllThreeBranches()
+    {
+        // Tests all 3 OR conditions in partial match: Name.Equals, Id.EndsWith, Name.EndsWith
+        // Use a pattern that does NOT match any exact path (Id.Equals or Id.EndsWith("."+pattern))
+        // so we fall through to partial match
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            // Match by Name.Equals (Name == "Svc123")
+            ["X.Y.FooSvc"] = new() { Id = "X.Y.FooSvc", Name = "Svc123", Kind = NodeKind.Type },
+            // Match by Id.EndsWith (Id ends with "Svc123" — but not ".Svc123")
+            ["A.BSvc123"] = new() { Id = "A.BSvc123", Name = "Renamed", Kind = NodeKind.Type },
+            // Match by Name.EndsWith (Name ends with "Svc123")
+            ["M.N.O"] = new() { Id = "M.N.O", Name = "MySvc123", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>();
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        // "Svc123" — exact match finds X.Y.FooSvc via EndsWith(".Svc123") — no, X.Y.FooSvc ends with ".FooSvc"
+        // Actually: Id.Equals("Svc123")=no, Id.EndsWith(".Svc123")=no for any of them
+        // So falls through to partial match:
+        //   Name.Equals("Svc123") -> X.Y.FooSvc
+        //   Id.EndsWith("Svc123") -> A.BSvc123
+        //   Name.EndsWith("Svc123") -> M.N.O (MySvc123)
+        var result = engine.Query(new QueryOptions { Pattern = "Svc123", Depth = 0 });
+        Assert.Equal(3, result.MatchedNodes.Count);
+        Assert.Contains(result.MatchedNodes, n => n.Id == "X.Y.FooSvc");
+        Assert.Contains(result.MatchedNodes, n => n.Id == "A.BSvc123");
+        Assert.Contains(result.MatchedNodes, n => n.Id == "M.N.O");
+    }
+
+    [Fact]
+    public void ExactMatch_ReturnedPreferentially_OverPartial()
+    {
+        // Targets L287: Negate expression / Equality mutation on exact match count > 0
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["NS.Exact"] = new() { Id = "NS.Exact", Name = "Exact", Kind = NodeKind.Method },
+            ["NS.ExactExtra"] = new() { Id = "NS.ExactExtra", Name = "ExactExtra", Kind = NodeKind.Method }
+        };
+        var edges = new List<GraphEdge>();
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        // "Exact" matches NS.Exact via EndsWith(".Exact"), so exact path is taken
+        var result = engine.Query(new QueryOptions { Pattern = "Exact", Depth = 0 });
+        Assert.Single(result.MatchedNodes);
+        Assert.Equal("NS.Exact", result.MatchedNodes[0].Id);
+    }
+
+    [Fact]
+    public void Query_ConfidenceAndEdgeTypeFilter_Combined()
+    {
+        // Test interaction of Mode + ConfidenceThreshold + EdgeTypeFilter
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A"] = new() { Id = "A", Name = "A", Kind = NodeKind.Type },
+            ["B"] = new() { Id = "B", Name = "B", Kind = NodeKind.Type },
+            ["C"] = new() { Id = "C", Name = "C", Kind = NodeKind.Type },
+            ["D"] = new() { Id = "D", Name = "D", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A", ToId = "B", Type = EdgeType.Calls, Confidence = EdgeConfidence.Verified },
+            new() { FromId = "A", ToId = "C", Type = EdgeType.Calls, Confidence = EdgeConfidence.Unresolved },
+            new() { FromId = "A", ToId = "D", Type = EdgeType.Inherits, Confidence = EdgeConfidence.Verified }
+        };
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        var result = engine.Query(new QueryOptions
+        {
+            Pattern = "A", Depth = 1, MaxNodes = 100, Rank = false,
+            EdgeTypeFilter = EdgeType.Calls,
+            ConfidenceThreshold = EdgeConfidence.Verified
+        });
+
+        // Only Calls + Verified = A→B
+        Assert.Single(result.Edges);
+        Assert.Equal("B", result.Edges[0].ToId);
+    }
+
+    [Fact]
+    public void Query_ModeAndExternal_Combined()
+    {
+        // Tests Mode + IncludeExternal interaction
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A"] = new() { Id = "A", Name = "A", Kind = NodeKind.Method },
+            ["B"] = new() { Id = "B", Name = "B", Kind = NodeKind.Method },
+            ["C"] = new() { Id = "C", Name = "C", Kind = NodeKind.Type },
+            ["Ext"] = new() { Id = "Ext", Name = "Ext", Kind = NodeKind.Method }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A", ToId = "B", Type = EdgeType.Calls },
+            new() { FromId = "A", ToId = "C", Type = EdgeType.Contains },
+            new() { FromId = "A", ToId = "Ext", Type = EdgeType.Calls, IsExternal = true }
+        };
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        // Focused mode + exclude external: should only traverse Calls edges that are not external
+        var result = engine.Query(new QueryOptions
+        {
+            Pattern = "A", Depth = 1, Mode = QueryMode.Focused,
+            IncludeExternal = false, MaxNodes = 100, Rank = false
+        });
+
+        Assert.True(result.Nodes.ContainsKey("B"));
+        Assert.DoesNotContain("C", result.Nodes.Keys); // Contains not in Focused
+        Assert.DoesNotContain("Ext", result.Nodes.Keys); // External excluded from traversal
+        Assert.All(result.Edges, e => Assert.False(e.IsExternal));
+    }
+
+    [Fact]
+    public void Query_ExternalEdgeFilter_IncludeExternalTrue_KeepsExternalEdges()
+    {
+        // Targets L189-192: external edge filtering in step 8
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A"] = new() { Id = "A", Name = "A", Kind = NodeKind.Method },
+            ["B"] = new() { Id = "B", Name = "B", Kind = NodeKind.Method }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A", ToId = "B", Type = EdgeType.Calls, IsExternal = true },
+            new() { FromId = "A", ToId = "B", Type = EdgeType.References, IsExternal = false }
+        };
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        var result = engine.Query(new QueryOptions
+        {
+            Pattern = "A", Depth = 1, IncludeExternal = true, MaxNodes = 100, Rank = false
+        });
+
+        // Both external and non-external edges should be present
+        Assert.Equal(2, result.Edges.Count);
+        Assert.Contains(result.Edges, e => e.IsExternal);
+        Assert.Contains(result.Edges, e => !e.IsExternal);
+    }
+
+    [Fact]
+    public void Query_RankedTruncation_EdgesFilteredToKeptNodes()
+    {
+        // Ensures edges are filtered after truncation (ranked path)
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["S"] = new() { Id = "S", Name = "S", Kind = NodeKind.Method, ContainingNamespaceId = "P" },
+            ["A"] = new() { Id = "A", Name = "A", Kind = NodeKind.Method, ContainingNamespaceId = "P" },
+            ["B"] = new() { Id = "B", Name = "B", Kind = NodeKind.Method, ContainingNamespaceId = "P" },
+            ["C"] = new() { Id = "C", Name = "C", Kind = NodeKind.Method, ContainingNamespaceId = "P" }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "S", ToId = "A", Type = EdgeType.Calls },
+            new() { FromId = "S", ToId = "B", Type = EdgeType.Calls },
+            new() { FromId = "S", ToId = "C", Type = EdgeType.Calls },
+            new() { FromId = "A", ToId = "B", Type = EdgeType.Calls }
+        };
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        var result = engine.Query(new QueryOptions { Pattern = "S", Depth = 1, MaxNodes = 2, Rank = true });
+
+        Assert.True(result.WasTruncated);
+        // Every edge must have both endpoints in the kept set
+        foreach (var e in result.Edges)
+        {
+            Assert.True(result.Nodes.ContainsKey(e.FromId), $"Edge FromId {e.FromId} not in nodes");
+            Assert.True(result.Nodes.ContainsKey(e.ToId), $"Edge ToId {e.ToId} not in nodes");
+        }
+    }
+
+    [Fact]
+    public void Query_ExternalIds_UsedInRanking()
+    {
+        // Targets L198-199: external ID set built from _edges for ranking
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["S"] = new() { Id = "S", Name = "S", Kind = NodeKind.Method },
+            ["Int"] = new() { Id = "Int", Name = "Int", Kind = NodeKind.Method },
+            ["Ext"] = new() { Id = "Ext", Name = "Ext", Kind = NodeKind.Method }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "S", ToId = "Int", Type = EdgeType.Calls, IsExternal = false },
+            new() { FromId = "S", ToId = "Ext", Type = EdgeType.Calls, IsExternal = true }
+        };
+        var meta = new GraphMetadata { CommitHash = "abc", Branch = "main", GeneratedAt = DateTimeOffset.UtcNow };
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        // With rank=true, internal nodes should be ranked above external
+        var result = engine.Query(new QueryOptions
+        {
+            Pattern = "S", Depth = 1, MaxNodes = 2, Rank = true, IncludeExternal = true
+        });
+
+        Assert.True(result.Nodes.ContainsKey("S"));
+        // Internal node should be preferred over external in ranking
+        Assert.True(result.Nodes.ContainsKey("Int"), "Internal node should be ranked higher than external");
+    }
 }
