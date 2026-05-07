@@ -195,9 +195,48 @@ Get a comprehensive view of a single symbol: its type, file location, signature,
 
 ---
 
+## Query Suggestions
+
+After every `codegraph query` invocation, the CLI prints up to three `💡 Suggested next queries:` lines to **stderr**. These are contextual follow-up commands generated from the result — for example:
+
+```
+💡 Suggested next queries:
+   codegraph query OrderService --depth 2 --format compact
+   codegraph query OrderService --depth 3 --kind calls --format compact
+   codegraph query IOrderService --kind resolves-to --format compact
+```
+
+The suggestions adapt to what was found:
+
+| Condition | Suggestion |
+|-----------|-----------|
+| Result at depth 1 with edges | Deeper traversal at depth 2 |
+| Calls edges present | Full call chain at depth 3 with `--kind calls` |
+| Interface nodes without DI edges | `--kind resolves-to` to find implementations |
+| Inheritance edges present | `--kind inherits --depth 3` to trace hierarchy |
+| Result spans multiple assemblies | Scope to the most relevant assembly with `--project` |
+
+Agents can follow these hints automatically to navigate the graph efficiently without additional prompting. Suggestions are emitted to stderr so they don't pollute piped output.
+
+---
+
 ## Agent Skill Scaffolding
 
 `codegraph init` goes beyond MCP config files — it also writes **agent skill files** that teach each agent how to use CodeGraph effectively. Skill files are plain Markdown (or shell scripts) committed to your repo so every developer and every agent instance gets the same instructions automatically.
+
+### Strategy-Focused Templates
+
+All skill files follow a five-step **decision tree** instead of listing commands:
+
+1. **Orient** — read `.codegraph/REPORT.md` for an architectural overview (zero tool calls)
+2. **Scope** — `codegraph list assemblies` to identify relevant projects
+3. **Query** — `codegraph query <symbol> --depth 1 --format compact` for relationships
+4. **Deepen** — increase `--depth` or add `--kind` filters to follow specific edges
+5. **Detail** — only grep/read source lines when you need a method body
+
+This approach uses roughly 4× fewer tokens than reading source files directly. The strategy is embedded in every generated skill file so agents use it by default.
+
+When you run `codegraph init --solution`, step 1 is bootstrapped immediately: after indexing, the CLI automatically generates `.codegraph/REPORT.md` so agents have an architectural overview available before their very first query.
 
 ### Auto-Detection
 

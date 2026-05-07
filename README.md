@@ -126,9 +126,13 @@ Auto-detects which AI agents are configured in the repo (looks for `.claude/`, `
 | Flag | Description |
 |------|-------------|
 | `--agent <name>` | Skip auto-detection and install for a specific agent: `claude`, `copilot`, `opencode`, `cursor`, `all` |
-| `--solution <path>` | Combine init + index in one step |
+| `--solution <path>` | Combine init + index in one step, then auto-generate `.codegraph/REPORT.md` |
 | `--output <dir>` | Output directory for graph data (default: `.codegraph`) |
 | `--force` | Overwrite existing skill files |
+
+**Step 3 — Auto-generated report** (when `--solution` is provided):
+
+After indexing, `codegraph init --solution` automatically runs `codegraph report` and writes `.codegraph/REPORT.md` — an architectural overview of hub types, assembly boundaries, test coverage, and suggested queries. Agent skill files are written to read this file first ("Orient" step), so agents have instant architectural context on first use without any additional tool calls.
 
 ### `codegraph index`
 
@@ -185,6 +189,10 @@ codegraph query <symbol-pattern> [options]
 | `compact` | Compressed prefix-stripped format, 3–5× smaller than `context` |
 | `text` | Human-readable tabular summary |
 | `json` | Machine-readable full `QueryResult` |
+
+**Query suggestions:**
+
+After each query, the CLI prints `💡 Suggested next queries:` to stderr with up to three contextual follow-up commands — deeper traversal, call-chain exploration, DI wiring, or cross-assembly scoping. AI agents can follow these hints automatically to navigate the graph efficiently without additional prompting.
 
 **Edge kind aliases:**
 
