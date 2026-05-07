@@ -165,14 +165,26 @@ codegraph query <symbol-pattern> [options]
 |------|-------------|---------|
 | `--depth <n>` | BFS traversal depth | `1` |
 | `--kind <type>` | Edge filter (see table below) | All kinds |
+| `--mode <mode>` | Traversal mode: `focused` (high-signal edges only), `structural` (includes containment), `all` | `all` |
 | `--namespace <pattern>` | Namespace filter (supports wildcards) | All namespaces |
 | `--project <name>` | Project filter | All projects |
-| `--format <fmt>` | Output format: `json`, `text`, `context` | `context` |
+| `--format <fmt>` | Output format: `json`, `text`, `context`, `compact` | `context` |
 | `--max-nodes <n>` | Maximum nodes in result | `50` |
 | `--include-external` | Include external assembly dependencies | `false` |
 | `--no-rank` | Disable relevance ranking | (ranking enabled by default) |
+| `--budget <tokens>` | Maximum token budget; output is truncated with a hint when exceeded | (none) |
+| `--no-metrics` | Suppress the compression metrics footer | `false` |
 | `--graph-dir <dir>` | Graph directory | `.codegraph` |
 | `--from <solution>` | Scope query to a specific solution sub-graph (multi-solution only) | All solutions |
+
+**Output formats:**
+
+| Format | Description |
+|--------|-------------|
+| `context` | Markdown-like, optimized for LLM prompts (default) |
+| `compact` | Compressed prefix-stripped format, 3–5× smaller than `context` |
+| `text` | Human-readable tabular summary |
+| `json` | Machine-readable full `QueryResult` |
 
 **Edge kind aliases:**
 
@@ -189,6 +201,78 @@ codegraph query <symbol-pattern> [options]
 | `overrides` | Overrides |
 | `contains` | Contains |
 | `all` | No filter |
+
+### `codegraph list`
+
+Browse the code graph hierarchy — useful for orienting yourself in an unfamiliar codebase.
+
+```
+codegraph list [scope] [options]
+```
+
+| Scope | Description |
+|-------|-------------|
+| `assemblies` | List all assemblies with type and method counts (default) |
+| `types` | List types ranked by connectivity (in/out-degree) |
+| `interfaces` | List interfaces with implementation counts |
+| `namespaces` | List namespaces with type counts |
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--assembly <name>` | Filter by assembly name (applies to `types`, `interfaces`, `namespaces`) | All assemblies |
+| `--top <n>` | Max items to return (`types` scope only) | `20` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+### `codegraph report`
+
+Generate a Markdown analysis report: hub types, assembly boundaries, test coverage, and suggested queries.
+
+```
+codegraph report [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--graph-dir <dir>` | Directory containing `graph.db` | `.codegraph` |
+| `--output, -o <path>` | Output file path | `.codegraph/REPORT.md` |
+
+### `codegraph wiki`
+
+Generate navigable Markdown wiki pages from the code graph. Creates `INDEX.md`, per-assembly pages, `INTERFACES.md`, and `DI-WIRING.md`.
+
+```
+codegraph wiki [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+| `--output, -o <dir>` | Output directory for wiki pages | `.codegraph/wiki` |
+
+### `codegraph stats`
+
+Print graph-level statistics: total nodes and edges, counts by kind and type.
+
+```
+codegraph stats [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+### `codegraph export`
+
+Export the graph from the SQLite database (`graph.db`) back to JSON files (the legacy format). Useful for interoperability or backup.
+
+```
+codegraph export [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--graph-dir <dir>` | Directory containing `graph.db` | `.codegraph` |
+| `--output <dir>` | Output directory for JSON files | `export` |
 
 ### `codegraph diff`
 
@@ -218,7 +302,16 @@ codegraph mcp [--graph-dir <dir>]
 |------|-------------|---------|
 | `--graph-dir <dir>` | Graph directory | `.codegraph` |
 
-The server exposes one tool — `codegraph_query` — with a typed JSON schema. Agents call it like any other tool (no shell commands, no prompt engineering). The server starts on demand via stdio and exits when the agent disconnects.
+The server exposes six tools. Agents call them like any other tool (no shell commands, no prompt engineering). The server starts on demand via stdio and exits when the agent disconnects.
+
+| MCP Tool | Description |
+|----------|-------------|
+| `codegraph_query` | Query the graph by symbol pattern with depth, edge-type, and format options |
+| `codegraph_list` | Browse the graph hierarchy (assemblies, types, interfaces, namespaces) |
+| `codegraph_summary` | Generate an overview report: hub types, assembly boundaries, test coverage |
+| `codegraph_path` | Find the shortest dependency path between two symbols |
+| `codegraph_impact` | Reverse-dependency analysis — assess the blast radius of a change |
+| `codegraph_explain` | Full symbol deep-dive: signature, members, all edges, test coverage |
 
 **Configuration is automatic** — `codegraph init` generates the MCP config files. To add manually:
 
