@@ -44,7 +44,7 @@ namespace System
 
         public static implicit operator Index(int value) => FromStart(value);
 
-        public override string ToString() => IsFromEnd ? $"^{(uint)Value}" : ((uint)Value).ToString();
+        public override string ToString() => IsFromEnd ? $"^{(uint)Value}" : ((uint)Value).ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>Represent a range has start and end indexes.</summary>

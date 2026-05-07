@@ -85,24 +85,25 @@ public class GraphWriter
         // Assign edges to the project of their source node
         foreach (var edge in edges)
         {
-            if (nodeIdToKey.TryGetValue(edge.FromId, out var key) && result.ContainsKey(key))
+            if (nodeIdToKey.TryGetValue(edge.FromId, out var key) && result.TryGetValue(key, out var targetProject))
             {
-                result[key].Edges.Add(edge);
+                targetProject.Edges.Add(edge);
             }
             else
             {
                 // Fallback: assign to first project or _default
                 var fallbackKey = result.Keys.FirstOrDefault() ?? "_default";
-                if (!result.ContainsKey(fallbackKey))
+                if (!result.TryGetValue(fallbackKey, out var fallbackProject))
                 {
-                    result[fallbackKey] = new ProjectGraph
+                    fallbackProject = new ProjectGraph
                     {
                         ProjectOrNamespace = fallbackKey,
                         Nodes = new Dictionary<string, GraphNode>(),
                         Edges = new List<GraphEdge>()
                     };
+                    result[fallbackKey] = fallbackProject;
                 }
-                result[fallbackKey].Edges.Add(edge);
+                fallbackProject.Edges.Add(edge);
             }
         }
 
@@ -143,12 +144,12 @@ public class GraphWriter
         return lastDot > 0 ? fullyQualifiedId.Substring(0, lastDot) : fullyQualifiedId;
     }
 
+    private static readonly HashSet<char> InvalidFileNameChars = new(
+        Path.GetInvalidFileNameChars()
+            .Union(new[] { '<', '>', ':', '"', '|', '?', '*' }));
+
     private static string SanitizeFileName(string name)
     {
-        // Use a fixed set of invalid chars so output is consistent across OS
-        var invalid = new HashSet<char>(
-            Path.GetInvalidFileNameChars()
-                .Union(new[] { '<', '>', ':', '"', '|', '?', '*' }));
-        return string.Concat(name.Select(c => invalid.Contains(c) ? '_' : c));
+        return string.Concat(name.Select(c => InvalidFileNameChars.Contains(c) ? '_' : c));
     }
 }

@@ -12,7 +12,7 @@ public class GraphMerger
     /// Projects present in the partial graph replace their counterparts in the full graph.
     /// Projects not in the partial graph remain unchanged.
     /// </summary>
-    public (Dictionary<string, GraphNode> Nodes, List<GraphEdge> Edges) Merge(
+    public static (Dictionary<string, GraphNode> Nodes, List<GraphEdge> Edges) Merge(
         Dictionary<string, GraphNode> existingNodes,
         List<GraphEdge> existingEdges,
         IEnumerable<ProjectGraph> partialGraphs)

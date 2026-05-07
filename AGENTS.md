@@ -81,9 +81,57 @@ If your agent supports MCP, CodeGraph registers `codegraph_query` as a native to
 ## Development
 
 ```bash
-# Build
+# Build (must pass with zero warnings — TreatWarningsAsErrors is enabled)
 dotnet build CodeGraph.sln
 
-# Test
+# Test (all 461+ tests must pass across net8.0 and net10.0)
 dotnet test CodeGraph.sln
+
+# Mutation testing (run in affected test project directory)
+dotnet tool restore && dotnet stryker
 ```
+
+## Development Standards
+
+### TDD Workflow (Red-Green-Refactor)
+
+1. **Red** — Write a failing test FIRST that describes the expected behavior
+2. **Green** — Write the minimum code to make the test pass
+3. **Refactor** — Clean up while keeping tests green
+
+Every change must include tests. For new features:
+- Unit tests in the matching `tests/CodeGraph.*.Tests/` project
+- Integration tests in `tests/CodeGraph.Integration.Tests/` for end-to-end scenarios
+- Mutation score ≥60% on new code (run `dotnet stryker` in test project dir)
+
+### Architecture Rules
+
+- **Records for data** — All graph model types are immutable records (`GraphNode`, `GraphEdge`, etc.)
+- **No unnecessary dependencies** — Only add NuGet packages when absolutely required and justified
+- **Single Responsibility** — Each pass, filter, formatter has one job
+- **Testable in isolation** — Passes accept a `CSharpCompilation`, filters accept collections, formatters accept `QueryResult`
+- **CLI-first design** — Every feature is a CLI command first. MCP wraps the same library code.
+- **Layer boundaries**: `Indexer → Query → Core`. Never reverse the dependency direction.
+
+### Code Style
+
+- `var` for obvious types, explicit types for complex/non-obvious ones
+- Records everywhere for immutable data
+- XML doc comments on all public APIs (CS1591 is suppressed only in packaged projects)
+- Conventional Commits: `feat:`, `fix:`, `test:`, `refactor:`, `docs:`
+- xUnit with `[Fact]` and `[Theory]`
+- Test naming: `MethodName_Scenario_ExpectedBehavior` or descriptive `Should_*`
+- Nullable reference types enabled — never suppress nullable warnings without justification
+
+### Quality Gates
+
+```bash
+dotnet build CodeGraph.sln   # Zero warnings (TreatWarningsAsErrors)
+dotnet test CodeGraph.sln    # All tests pass
+```
+
+Both must pass before considering any change complete. Do not weaken warnings or suppress analyzers to make code compile.
+
+### Implementation Plan
+
+See `FLEET-PLAN.md` for the comprehensive implementation roadmap with issue references and phase ordering.

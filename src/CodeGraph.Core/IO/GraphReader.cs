@@ -8,7 +8,7 @@ namespace CodeGraph.Core.IO;
 
 public class GraphReader
 {
-    public async Task<(GraphMetadata Metadata, Dictionary<string, GraphNode> Nodes, List<GraphEdge> Edges)> ReadAsync(
+    public static async Task<(GraphMetadata Metadata, Dictionary<string, GraphNode> Nodes, List<GraphEdge> Edges)> ReadAsync(
         string directory)
     {
         var metaPath = Path.Combine(directory, "meta.json");
