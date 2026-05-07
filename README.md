@@ -151,6 +151,7 @@ codegraph index --solution <path.sln|path.slnx> [options]
 | `--skip-build` | Hidden alias for `--skip-restore` | `false` |
 | `--changed-only` | Incremental re-index; only re-index projects with changes since last indexed commit | `false` |
 | `--sequential` | Disable parallel multi-solution indexing (recommended on machines with < 16 GB RAM) | `false` |
+| `--extend <path>` | Path for the unified SQLite database produced after multi-solution indexing. Useful when integrating multiple solution graphs into a shared database. (Multi-solution only) | `<output-dir>/graph.db` |
 | `--verbose` | Enable verbose output | `false` |
 
 ### `codegraph query`
