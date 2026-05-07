@@ -220,6 +220,30 @@ codegraph mcp [--graph-dir <dir>]
 
 The server exposes one tool — `codegraph_query` — with a typed JSON schema. Agents call it like any other tool (no shell commands, no prompt engineering). The server starts on demand via stdio and exits when the agent disconnects.
 
+### `codegraph view`
+
+Generate an interactive 3D graph visualization as a self-contained HTML file and open it in the default browser.
+
+```
+codegraph view [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
+| `--output <path>` | Write HTML to a specific file instead of a temp file | (temp file) |
+| `--max-nodes <n>` | Maximum nodes to render (smart-sampled when exceeded) | `5000` |
+| `--no-open` | Generate HTML but do not open in browser | `false` |
+
+```bash
+codegraph view                              # Open graph in browser
+codegraph view --output graph.html          # Save to file
+codegraph view --max-nodes 2000             # Limit for performance
+codegraph view --graph-dir .codegraph/Api   # View specific sub-graph
+```
+
+See [docs/view.md](docs/view.md) for the full how-to guide, including sidebar controls, node sampling, and CI usage.
+
 **Configuration is automatic** — `codegraph init` generates the MCP config files. To add manually:
 
 ```json
@@ -398,6 +422,7 @@ Stryker generates HTML reports in `StrykerOutput/` with mutation scores per proj
 - [Configuration Reference](docs/configuration.md)
 - [Agent Setup Guide](docs/agent-setup.md)
 - [Graph Diff How-to Guide](docs/diff.md)
+- [Interactive Graph Visualization](docs/view.md)
 
 ---
 
