@@ -47,6 +47,9 @@ public static class WikiGenerator
 	internal static string SanitizeFileName(string name)
 	{
 		var invalid = new HashSet<char>(Path.GetInvalidFileNameChars());
+		// Chars that are valid on Linux but problematic in filenames, URLs, and markdown links
+		foreach (var c in new[] { '<', '>', ':', '"', '|', '?', '*' })
+			invalid.Add(c);
 		return string.Concat(name.Select(c => invalid.Contains(c) ? '_' : c));
 	}
 }
