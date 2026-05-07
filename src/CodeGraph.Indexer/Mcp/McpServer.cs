@@ -249,9 +249,9 @@ internal sealed class McpServer
                     ["format"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Output format",
-                        ["enum"] = new JsonArray("context", "json", "text", "compact"),
-                        ["default"] = "context"
+                        ["description"] = "Output format. compact=minimal tokens (recommended), context=rich detail, json=structured, text=plain",
+                        ["enum"] = new JsonArray("compact", "context", "json", "text"),
+                        ["default"] = "compact"
                     },
                     ["max_nodes"] = new JsonObject
                     {
@@ -274,7 +274,8 @@ internal sealed class McpServer
                     {
                         ["type"] = "string",
                         ["enum"] = new JsonArray("focused", "structural", "all"),
-                        ["description"] = "Query traversal mode. focused=high-signal edges only, structural=includes containment, all=everything (default)"
+                        ["description"] = "Query traversal mode. focused=high-signal edges only (default, recommended), structural=includes containment, all=everything",
+                        ["default"] = "focused"
                     },
                     ["confidence"] = new JsonObject
                     {
@@ -449,7 +450,7 @@ internal sealed class McpServer
             var kind = arguments?["kind"]?.GetValue<string>();
             var ns = arguments?["namespace"]?.GetValue<string>();
             var project = arguments?["project"]?.GetValue<string>();
-            var format = arguments?["format"]?.GetValue<string>() ?? "context";
+            var format = arguments?["format"]?.GetValue<string>() ?? "compact";
             var maxNodes = arguments?["max_nodes"]?.GetValue<int>() ?? 50;
             var includeExternal = arguments?["include_external"]?.GetValue<bool>() ?? false;
             var modeStr = arguments?["mode"]?.GetValue<string>();
@@ -461,7 +462,7 @@ internal sealed class McpServer
                 "focused" => QueryMode.Focused,
                 "structural" => QueryMode.Structural,
                 "all" => QueryMode.All,
-                _ => QueryMode.All
+                _ => QueryMode.Focused
             };
 
             EdgeType? edgeTypeFilter;

@@ -22,6 +22,12 @@ internal static class AgentTemplates
         4. **Deepen** — increase `--depth` or add `--kind` filters to follow specific edges
         5. **Detail** — only grep/view specific source lines when you need method bodies
 
+        Default MCP settings are optimized for token efficiency:
+        - Format defaults to `compact` (~3-5× fewer tokens than `context`)
+        - Mode defaults to `focused` (high-signal edges only)
+        - Use `--format context` when you need full signatures and metadata
+        - Use `--mode all` only for exhaustive analysis
+
         This strategy uses ~4× fewer tokens than reading source files directly.
 
         ## Commands
@@ -43,9 +49,9 @@ internal static class AgentTemplates
         |------|---------|
         | `--depth <n>` | BFS depth (start at 1, increase as needed) |
         | `--kind <type>` | Filter: `calls`, `inherits`, `implements`, `resolves-to`, `covers`, `depends-on` |
-        | `--format compact` | Minimal output — signatures + edges only, ~3-5× fewer tokens |
+        | `--format compact` | Minimal output — signatures + edges only, ~3-5× fewer tokens (MCP default) |
         | `--budget <tokens>` | Hard cap on output token count |
-        | `--mode focused` | Only direct relationships (fewer results, higher relevance) |
+        | `--mode focused` | Only high-signal relationships — calls, inheritance, DI (MCP default) |
         | `--include-external` | Include NuGet/framework dependencies |
 
         ## When to Use CodeGraph vs Grep
@@ -82,6 +88,9 @@ internal static class AgentTemplates
         3. **Query** — `codegraph query <symbol> --depth 1 --format compact`
         4. **Deepen** — increase `--depth` or add `--kind` to follow edges
         5. **Detail** — only grep/view source when you need method bodies
+
+        MCP defaults: `compact` format + `focused` mode (token-optimized).
+        Use `--format context` for full detail, `--mode all` for exhaustive traversal.
 
         ### Quick Reference
 
@@ -205,9 +214,9 @@ internal static class AgentTemplates
         |------|---------|
         | `--depth <n>` | BFS depth (start at 1, increase as needed) |
         | `--kind <type>` | Filter edges: `calls`, `inherits`, `implements`, `resolves-to`, `covers`, `depends-on` |
-        | `--format compact` | Minimal output — signatures + edges only, ~3-5× fewer tokens |
+        | `--format compact` | Minimal output — signatures + edges only, ~3-5× fewer tokens (MCP default) |
         | `--budget <tokens>` | Hard cap on output token count |
-        | `--mode focused` | Only direct relationships (fewer results, higher relevance) |
+        | `--mode focused` | Only high-signal relationships — calls, inheritance, DI (MCP default) |
         | `--include-external` | Include NuGet/framework dependencies |
         | `--namespace <pat>` | Filter by namespace (wildcards ok) |
         | `--project <name>` | Filter by project/assembly |
