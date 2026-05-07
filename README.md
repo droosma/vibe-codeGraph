@@ -290,6 +290,143 @@ codegraph diff [options]
 | `--only <types>` | Comma-separated: `added`, `removed`, `signature-changed`, `added-nodes`, `removed-nodes`, `added-edges`, `removed-edges` | All change types |
 | `--format <fmt>` | Output format: `json`, `text`, `context` | `context` |
 
+### `codegraph list`
+
+Browse the code graph hierarchy — enumerate assemblies, types, interfaces, or namespaces without writing a query.
+
+```
+codegraph list [scope] [options]
+```
+
+| Scope | Description |
+|-------|-------------|
+| `assemblies` | All assemblies with type/method counts **(default)** |
+| `types` | Types ranked by connectivity (in + out degree) |
+| `interfaces` | Interfaces with implementation counts |
+| `namespaces` | Namespaces with type and method counts |
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--assembly <name>` | Filter by assembly name (applies to `types`, `interfaces`, `namespaces`) | All |
+| `--top <n>` | Maximum items to return (applies to `types` only) | `20` |
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph list                              # List all assemblies
+codegraph list types                        # Most-connected types across all assemblies
+codegraph list types --assembly MyApp.Core  # Types in a specific assembly
+codegraph list interfaces --top 10          # Top 10 most-implemented interfaces
+codegraph list namespaces                   # All namespaces
+```
+
+### `codegraph stats`
+
+Print a quick overview of the graph: total node and edge counts, broken down by kind and type.
+
+```
+codegraph stats [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph stats                          # Stats for .codegraph/
+codegraph stats --graph-dir .codegraph-prev  # Stats for an older snapshot
+```
+
+Example output:
+
+```
+CodeGraph Statistics
+  Total nodes: 1 842
+  Total edges: 5 219
+
+Nodes by kind:
+  Method: 982
+  Type: 421
+  Property: 287
+  ...
+
+Edges by type:
+  Calls: 2 104
+  Contains: 1 388
+  References: 901
+  ...
+```
+
+### `codegraph report`
+
+Generate a Markdown report that summarises the graph: hub types (highest connectivity), assembly boundaries, test coverage by assembly, and suggested starter queries.
+
+```
+codegraph report [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--graph-dir <dir>` | Directory containing `graph.db` | `.codegraph` |
+| `--output`, `-o <path>` | Output file path | `.codegraph/REPORT.md` |
+
+```bash
+codegraph report                         # Write .codegraph/REPORT.md
+codegraph report -o docs/report.md       # Write to a custom path
+codegraph report --graph-dir .codegraph-prev  # Report on an older snapshot
+```
+
+> **Tip:** `codegraph index` automatically generates `REPORT.md` after every successful index run, so agents always have a fresh overview on first use.
+
+See [docs/report.md](docs/report.md) for the full guide, including report sections, CI usage, and sharing with GitHub Wiki.
+
+### `codegraph wiki`
+
+Generate a navigable Markdown wiki from the graph. Useful for publishing auto-generated architecture documentation to GitHub Wiki or any docs site.
+
+```
+codegraph wiki [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+| `--output`, `-o <dir>` | Output directory | `.codegraph/wiki` |
+
+The generator creates:
+
+| File | Content |
+|------|---------|
+| `INDEX.md` | Graph summary, assembly list, top hub types |
+| `assemblies/<name>.md` | Per-assembly: types, methods, DI registrations, test coverage |
+| `INTERFACES.md` | All interfaces with their implementations |
+| `DI-WIRING.md` | Dependency-injection registrations and resolved types |
+
+```bash
+codegraph wiki                           # Generate .codegraph/wiki/
+codegraph wiki -o docs/wiki              # Publish to a docs directory
+codegraph wiki --graph-dir .codegraph-prev  # Wiki from an older snapshot
+```
+
+See [docs/wiki.md](docs/wiki.md) for the full guide, including generated file structure, GitHub Wiki publishing, and CI integration.
+
+### `codegraph export`
+
+Export the graph from its SQLite database (`graph.db`) back to JSON files. Useful for tooling that consumes the JSON format or for archiving a snapshot.
+
+```
+codegraph export [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--graph-dir <dir>` | Directory containing `graph.db` | `.codegraph` |
+| `--output <dir>` | Output directory for JSON files | `export` |
+
+```bash
+codegraph export                         # Export .codegraph/graph.db → export/
+codegraph export --output my-snapshot    # Export to a named directory
+```
+
 ### `codegraph mcp`
 
 Start an MCP (Model Context Protocol) stdio server. This is how AI agents discover and use CodeGraph as a native tool.
@@ -516,6 +653,8 @@ Stryker generates HTML reports in `StrykerOutput/` with mutation scores per proj
 - [Agent Setup Guide](docs/agent-setup.md)
 - [Graph Diff How-to Guide](docs/diff.md)
 - [Interactive Graph Visualization](docs/view.md)
+- [Graph Report Reference](docs/report.md)
+- [Wiki Generator Guide](docs/wiki.md)
 
 ---
 
