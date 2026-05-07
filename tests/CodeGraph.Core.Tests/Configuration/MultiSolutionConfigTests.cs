@@ -216,4 +216,93 @@ public class MultiSolutionConfigTests : IDisposable
         Assert.Single(effective);
         Assert.Equal("Legacy.sln", effective[0].Path);
     }
+
+    [Fact]
+    public void Load_SingleSolutionInArray_NoDuplicateCheck()
+    {
+        // With exactly 1 entry, the duplicate check (Solutions.Length > 1) should NOT trigger
+        var configPath = Path.Combine(_testDir, "codegraph.json");
+        var json = """
+        {
+            "solutions": [
+                { "path": "only.sln" }
+            ]
+        }
+        """;
+        File.WriteAllText(configPath, json);
+
+        var config = ConfigLoader.Load(configPath);
+        Assert.Single(config.Solutions);
+        Assert.Equal("only.sln", config.Solutions[0].Path);
+    }
+
+    [Fact]
+    public void Load_DuplicateNamesIgnoringCase_ThrowsError()
+    {
+        // OrdinalIgnoreCase means "Backend" and "backend" are duplicate
+        var configPath = Path.Combine(_testDir, "codegraph.json");
+        var json = """
+        {
+            "solutions": [
+                { "path": "src/Backend.sln" },
+                { "path": "other/backend.sln" }
+            ]
+        }
+        """;
+        File.WriteAllText(configPath, json);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => ConfigLoader.Load(configPath));
+        Assert.Contains("duplicate solution name", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Load_ThreeUniqueSolutions_Succeeds()
+    {
+        var configPath = Path.Combine(_testDir, "codegraph.json");
+        var json = """
+        {
+            "solutions": [
+                { "path": "A.sln" },
+                { "path": "B.sln" },
+                { "path": "C.sln" }
+            ]
+        }
+        """;
+        File.WriteAllText(configPath, json);
+
+        var config = ConfigLoader.Load(configPath);
+        Assert.Equal(3, config.Solutions.Length);
+    }
+
+    [Fact]
+    public void Load_EmptySolution_WithSolutions_DoesNotThrow()
+    {
+        // Solution is null (not set), Solutions has entries → no conflict
+        var configPath = Path.Combine(_testDir, "codegraph.json");
+        var json = """
+        {
+            "solutions": [
+                { "path": "app.sln" }
+            ]
+        }
+        """;
+        File.WriteAllText(configPath, json);
+
+        var config = ConfigLoader.Load(configPath);
+        Assert.Null(config.Solution);
+        Assert.Single(config.Solutions);
+    }
+
+    [Fact]
+    public async Task SaveAsync_CreatesDirectoryIfNeeded()
+    {
+        var nestedDir = Path.Combine(_testDir, "nested", "dir");
+        var configPath = Path.Combine(nestedDir, "codegraph.json");
+
+        await ConfigLoader.SaveAsync(new CodeGraphConfig { Solution = "test.sln" }, configPath);
+
+        Assert.True(File.Exists(configPath));
+        var reloaded = ConfigLoader.Load(configPath);
+        Assert.Equal("test.sln", reloaded.Solution);
+    }
 }

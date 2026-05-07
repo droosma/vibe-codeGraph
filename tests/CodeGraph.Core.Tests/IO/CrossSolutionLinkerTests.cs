@@ -295,4 +295,258 @@ public class CrossSolutionLinkerTests
         Assert.Equal("line 42", newEdges[0].Metadata["call_site"]);
         Assert.Equal("true", newEdges[0].Metadata["cross_solution"]);
     }
+
+    [Fact]
+    public void Link_ExactMatch_SetsIsExternalFalse()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A.Target"] = new() { Id = "A.Target", Name = "Target", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "B.Caller", ToId = "A.Target", Type = EdgeType.Calls, IsExternal = true }
+        };
+
+        var (newEdges, _) = CrossSolutionLinker.Link(nodes, edges);
+
+        Assert.Single(newEdges);
+        Assert.False(newEdges[0].IsExternal);
+    }
+
+    [Fact]
+    public void Link_ExactMatch_SetsConfidenceInferred()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A.Target"] = new() { Id = "A.Target", Name = "Target", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "B.Caller", ToId = "A.Target", Type = EdgeType.Calls, IsExternal = true }
+        };
+
+        var (newEdges, _) = CrossSolutionLinker.Link(nodes, edges);
+
+        Assert.Single(newEdges);
+        Assert.Equal(EdgeConfidence.Inferred, newEdges[0].Confidence);
+    }
+
+    [Fact]
+    public void Link_ExactMatch_SetsResolutionCrossSolution()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A.Target"] = new() { Id = "A.Target", Name = "Target", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "B.Caller", ToId = "A.Target", Type = EdgeType.Calls, IsExternal = true }
+        };
+
+        var (newEdges, _) = CrossSolutionLinker.Link(nodes, edges);
+
+        Assert.Single(newEdges);
+        Assert.Equal("cross-solution", newEdges[0].Resolution);
+    }
+
+    [Fact]
+    public void Link_FuzzyMatch_SetsResolutionCrossSolutionFuzzy()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Internal.Repo"] = new() { Id = "Internal.Repo", Name = "Repo", Kind = NodeKind.Type },
+            ["Other.Caller"] = new() { Id = "Other.Caller", Name = "Caller", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "Other.Caller", ToId = "External.Lib.Repo", Type = EdgeType.Calls, IsExternal = true }
+        };
+
+        var (newEdges, _) = CrossSolutionLinker.Link(nodes, edges);
+
+        Assert.Single(newEdges);
+        Assert.Equal("cross-solution-fuzzy", newEdges[0].Resolution);
+    }
+
+    [Fact]
+    public void Link_FuzzyMatch_SetsOriginalTargetMetadata()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Internal.Repo"] = new() { Id = "Internal.Repo", Name = "Repo", Kind = NodeKind.Type },
+            ["Other.Caller"] = new() { Id = "Other.Caller", Name = "Caller", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "Other.Caller", ToId = "External.Lib.Repo", Type = EdgeType.Calls, IsExternal = true }
+        };
+
+        var (newEdges, _) = CrossSolutionLinker.Link(nodes, edges);
+
+        Assert.Single(newEdges);
+        Assert.Equal("External.Lib.Repo", newEdges[0].Metadata["original_target"]);
+    }
+
+    [Fact]
+    public void Link_FuzzyMatch_PreservesEdgeType()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Internal.Base"] = new() { Id = "Internal.Base", Name = "Base", Kind = NodeKind.Type },
+            ["Other.Child"] = new() { Id = "Other.Child", Name = "Child", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "Other.Child", ToId = "External.Lib.Base", Type = EdgeType.Inherits, IsExternal = true }
+        };
+
+        var (newEdges, _) = CrossSolutionLinker.Link(nodes, edges);
+
+        Assert.Single(newEdges);
+        Assert.Equal(EdgeType.Inherits, newEdges[0].Type);
+    }
+
+    [Fact]
+    public void Link_FuzzyMatch_PreservesFromId()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Internal.Repo"] = new() { Id = "Internal.Repo", Name = "Repo", Kind = NodeKind.Type },
+            ["Other.Caller"] = new() { Id = "Other.Caller", Name = "Caller", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "Other.Caller", ToId = "External.Lib.Repo", Type = EdgeType.Calls, IsExternal = true }
+        };
+
+        var (newEdges, _) = CrossSolutionLinker.Link(nodes, edges);
+
+        Assert.Single(newEdges);
+        Assert.Equal("Other.Caller", newEdges[0].FromId);
+    }
+
+    [Fact]
+    public void Link_FuzzyMatch_SetsIsExternalFalse()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Internal.Repo"] = new() { Id = "Internal.Repo", Name = "Repo", Kind = NodeKind.Type },
+            ["Other.Caller"] = new() { Id = "Other.Caller", Name = "Caller", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "Other.Caller", ToId = "External.Lib.Repo", Type = EdgeType.Calls, IsExternal = true }
+        };
+
+        var (newEdges, _) = CrossSolutionLinker.Link(nodes, edges);
+
+        Assert.Single(newEdges);
+        Assert.False(newEdges[0].IsExternal);
+    }
+
+    [Fact]
+    public void Link_FuzzyMatch_TargetIdWithoutDot_UsesWholeId()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Internal.Data.Repository"] = new() { Id = "Internal.Data.Repository", Name = "Repository", Kind = NodeKind.Type },
+            ["Other.Caller"] = new() { Id = "Other.Caller", Name = "Caller", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "Other.Caller", ToId = "Repository", Type = EdgeType.Calls, IsExternal = true }
+        };
+
+        var (newEdges, _) = CrossSolutionLinker.Link(nodes, edges);
+
+        Assert.Single(newEdges);
+        Assert.Equal("Internal.Data.Repository", newEdges[0].ToId);
+        Assert.Equal("cross-solution-fuzzy", newEdges[0].Resolution);
+    }
+
+    [Fact]
+    public void Link_FuzzyMatch_SelfEdgeFiltered_NoMatch()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A.Service"] = new() { Id = "A.Service", Name = "Service", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A.Service", ToId = "External.Lib.Service", Type = EdgeType.Calls, IsExternal = true }
+        };
+
+        var (newEdges, resolvedIds) = CrossSolutionLinker.Link(nodes, edges);
+
+        Assert.Empty(newEdges);
+        Assert.Empty(resolvedIds);
+    }
+
+    [Fact]
+    public void Link_FuzzyMatch_SelfEdgeFiltered_OtherCandidateMatches()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A.Service"] = new() { Id = "A.Service", Name = "Service", Kind = NodeKind.Type },
+            ["B.Service"] = new() { Id = "B.Service", Name = "Service", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A.Service", ToId = "External.Lib.Service", Type = EdgeType.Calls, IsExternal = true }
+        };
+
+        var (newEdges, _) = CrossSolutionLinker.Link(nodes, edges);
+
+        Assert.Single(newEdges);
+        Assert.Equal("B.Service", newEdges[0].ToId);
+    }
+
+    [Fact]
+    public void Link_ExactMatch_PreservesEdgeType()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A.IService"] = new() { Id = "A.IService", Name = "IService", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "B.Impl", ToId = "A.IService", Type = EdgeType.Implements, IsExternal = true }
+        };
+
+        var (newEdges, _) = CrossSolutionLinker.Link(nodes, edges);
+
+        Assert.Single(newEdges);
+        Assert.Equal(EdgeType.Implements, newEdges[0].Type);
+    }
+
+    [Fact]
+    public void Link_EmptyEdgeList_ReturnsEmpty()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A.Target"] = new() { Id = "A.Target", Name = "Target", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>();
+
+        var (newEdges, resolvedIds) = CrossSolutionLinker.Link(nodes, edges);
+
+        Assert.Empty(newEdges);
+        Assert.Empty(resolvedIds);
+    }
+
+    [Fact]
+    public void Link_EmptyNodeDict_ReturnsEmpty()
+    {
+        var nodes = new Dictionary<string, GraphNode>();
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "B.Caller", ToId = "A.Target", Type = EdgeType.Calls, IsExternal = true }
+        };
+
+        var (newEdges, resolvedIds) = CrossSolutionLinker.Link(nodes, edges);
+
+        Assert.Empty(newEdges);
+        Assert.Empty(resolvedIds);
+    }
 }

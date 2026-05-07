@@ -97,6 +97,346 @@ public class CompactFormatterTests
         Assert.Contains("150", output);
     }
 
+    [Fact]
+    public void Format_NotTruncated_NoWarning()
+    {
+        var result = BuildSimpleResult();
+        var output = CompactFormatter.Format(result);
+        Assert.DoesNotContain("⚠", output);
+    }
+
+    [Fact]
+    public void Format_TargetNodeShownAsHeader()
+    {
+        var result = BuildSimpleResult();
+        var output = CompactFormatter.Format(result);
+        Assert.Contains("PlaceOrder", output);
+    }
+
+    [Fact]
+    public void Format_TargetNodeBlock_ContainsKindAndFile()
+    {
+        var result = BuildSimpleResult();
+        var output = CompactFormatter.Format(result);
+
+        Assert.Contains("[method", output);
+        Assert.Contains("src/Services/OrderService.cs:42-67", output);
+    }
+
+    [Fact]
+    public void Format_RelatedSection_ShowsNonTargetNodes()
+    {
+        var result = BuildSimpleResult();
+        var output = CompactFormatter.Format(result);
+
+        Assert.Contains("## Related", output);
+    }
+
+    [Fact]
+    public void Format_NoRelatedNodes_OmitsRelatedSection()
+    {
+        var target = new GraphNode
+        {
+            Id = "Only.Node", Name = "Node",
+            Kind = NodeKind.Method, Accessibility = Accessibility.Public
+        };
+        var result = new QueryResult
+        {
+            TargetNode = target,
+            MatchedNodes = new List<GraphNode> { target },
+            Nodes = new Dictionary<string, GraphNode> { [target.Id] = target },
+            Edges = new List<GraphEdge>(),
+            Metadata = new GraphMetadata { SchemaVersion = 1, GeneratedAt = DateTime.UtcNow, Solution = "T.sln", SolutionName = "T", CommitHash = "abc", Branch = "main", ProjectsIndexed = Array.Empty<string>() },
+            WasTruncated = false, TotalMatchCount = 1
+        };
+        var output = CompactFormatter.Format(result);
+        Assert.DoesNotContain("## Related", output);
+    }
+
+    [Fact]
+    public void Format_EdgeConfidenceInferred_ShowsAnnotation()
+    {
+        var target = new GraphNode
+        {
+            Id = "A.Run", Name = "Run", Kind = NodeKind.Method, Accessibility = Accessibility.Public
+        };
+        var dep = new GraphNode
+        {
+            Id = "B.Helper", Name = "Helper", Kind = NodeKind.Method, Accessibility = Accessibility.Public
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A.Run", ToId = "B.Helper", Type = EdgeType.Calls, Confidence = EdgeConfidence.Inferred }
+        };
+        var result = new QueryResult
+        {
+            TargetNode = target,
+            MatchedNodes = new List<GraphNode> { target },
+            Nodes = new Dictionary<string, GraphNode> { [target.Id] = target, [dep.Id] = dep },
+            Edges = edges,
+            Metadata = new GraphMetadata { SchemaVersion = 1, GeneratedAt = DateTime.UtcNow, Solution = "T.sln", SolutionName = "T", CommitHash = "abc", Branch = "main", ProjectsIndexed = Array.Empty<string>() },
+            WasTruncated = false, TotalMatchCount = 1
+        };
+        var output = CompactFormatter.Format(result);
+        Assert.Contains("[inferred]", output);
+    }
+
+    [Fact]
+    public void Format_EdgeConfidenceVerified_NoAnnotation()
+    {
+        var result = BuildSimpleResult();
+        var output = CompactFormatter.Format(result);
+        Assert.DoesNotContain("[verified]", output);
+    }
+
+    [Fact]
+    public void Format_DocComment_ShownUnderNode()
+    {
+        var target = new GraphNode
+        {
+            Id = "A.Run", Name = "Run", Kind = NodeKind.Method,
+            DocComment = "Does important stuff.", Accessibility = Accessibility.Public
+        };
+        var result = new QueryResult
+        {
+            TargetNode = target,
+            MatchedNodes = new List<GraphNode> { target },
+            Nodes = new Dictionary<string, GraphNode> { [target.Id] = target },
+            Edges = new List<GraphEdge>(),
+            Metadata = new GraphMetadata { SchemaVersion = 1, GeneratedAt = DateTime.UtcNow, Solution = "T.sln", SolutionName = "T", CommitHash = "abc", Branch = "main", ProjectsIndexed = Array.Empty<string>() },
+            WasTruncated = false, TotalMatchCount = 1
+        };
+        var output = CompactFormatter.Format(result);
+        Assert.Contains("Does important stuff.", output);
+    }
+
+    [Fact]
+    public void Format_IncomingEdgeFromTarget_NotDuplicated()
+    {
+        // When an edge is between two targets, incoming section should skip it
+        var target1 = new GraphNode
+        {
+            Id = "A.Run", Name = "Run", Kind = NodeKind.Method, Accessibility = Accessibility.Public
+        };
+        var target2 = new GraphNode
+        {
+            Id = "A.Helper", Name = "Helper", Kind = NodeKind.Method, Accessibility = Accessibility.Public
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A.Run", ToId = "A.Helper", Type = EdgeType.Calls }
+        };
+        var result = new QueryResult
+        {
+            TargetNode = null,
+            MatchedNodes = new List<GraphNode> { target1, target2 },
+            Nodes = new Dictionary<string, GraphNode> { [target1.Id] = target1, [target2.Id] = target2 },
+            Edges = edges,
+            Metadata = new GraphMetadata { SchemaVersion = 1, GeneratedAt = DateTime.UtcNow, Solution = "T.sln", SolutionName = "T", CommitHash = "abc", Branch = "main", ProjectsIndexed = Array.Empty<string>() },
+            WasTruncated = false, TotalMatchCount = 2
+        };
+        var output = CompactFormatter.Format(result);
+
+        // The outgoing edge for A.Run → A.Helper should show
+        Assert.Contains("→ calls:", output);
+        // But A.Helper should NOT show incoming from A.Run (since A.Run is a target)
+        Assert.DoesNotContain("← calls:", output);
+    }
+
+    [Fact]
+    public void Format_CompactNodeInRelated_ShowsKindInBrackets()
+    {
+        var result = BuildSimpleResult();
+        var output = CompactFormatter.Format(result);
+        var lines = output.Split('\n');
+
+        // Related nodes should use "- name [kind]" format
+        var relatedLines = lines.Where(l => l.StartsWith("- ")).ToList();
+        Assert.True(relatedLines.Count > 0);
+        Assert.All(relatedLines, l => Assert.Contains("[method]", l));
+    }
+
+    [Fact]
+    public void Format_MultipleEdgeTypes_AllFormatted()
+    {
+        var target = new GraphNode
+        {
+            Id = "A.Type", Name = "Type", Kind = NodeKind.Type, Accessibility = Accessibility.Public
+        };
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            [target.Id] = target,
+            ["B.Base"] = new GraphNode { Id = "B.Base", Name = "Base", Kind = NodeKind.Type, Accessibility = Accessibility.Public },
+            ["C.IFace"] = new GraphNode { Id = "C.IFace", Name = "IFace", Kind = NodeKind.Type, Accessibility = Accessibility.Public }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A.Type", ToId = "B.Base", Type = EdgeType.Inherits },
+            new() { FromId = "A.Type", ToId = "C.IFace", Type = EdgeType.Implements }
+        };
+        var result = new QueryResult
+        {
+            TargetNode = target,
+            MatchedNodes = new List<GraphNode> { target },
+            Nodes = nodes, Edges = edges,
+            Metadata = new GraphMetadata { SchemaVersion = 1, GeneratedAt = DateTime.UtcNow, Solution = "T.sln", SolutionName = "T", CommitHash = "abc", Branch = "main", ProjectsIndexed = Array.Empty<string>() },
+            WasTruncated = false, TotalMatchCount = 1
+        };
+        var output = CompactFormatter.Format(result);
+
+        Assert.Contains("→ inherits:", output);
+        Assert.Contains("→ implements:", output);
+    }
+
+    [Fact]
+    public void Format_TargetNodeNull_UsesFirstMatchedNodeId()
+    {
+        var node = new GraphNode
+        {
+            Id = "First.Match", Name = "Match", Kind = NodeKind.Method, Accessibility = Accessibility.Public
+        };
+        var result = new QueryResult
+        {
+            TargetNode = null,
+            MatchedNodes = new List<GraphNode> { node },
+            Nodes = new Dictionary<string, GraphNode> { [node.Id] = node },
+            Edges = new List<GraphEdge>(),
+            Metadata = new GraphMetadata { SchemaVersion = 1, GeneratedAt = DateTime.UtcNow, Solution = "T.sln", SolutionName = "T", CommitHash = "abc", Branch = "main", ProjectsIndexed = Array.Empty<string>() },
+            WasTruncated = false, TotalMatchCount = 1
+        };
+        var output = CompactFormatter.Format(result);
+        Assert.Contains("# First.Match", output);
+    }
+
+    [Fact]
+    public void Format_NoTargetNoMatches_FallsBackToQuery()
+    {
+        var result = new QueryResult
+        {
+            TargetNode = null,
+            MatchedNodes = new List<GraphNode>(),
+            Nodes = new Dictionary<string, GraphNode>(),
+            Edges = new List<GraphEdge>(),
+            Metadata = new GraphMetadata { SchemaVersion = 1, GeneratedAt = DateTime.UtcNow, Solution = "T.sln", SolutionName = "T", CommitHash = "abc", Branch = "main", ProjectsIndexed = Array.Empty<string>() },
+            WasTruncated = false, TotalMatchCount = 0
+        };
+        var output = CompactFormatter.Format(result);
+        Assert.Contains("# query", output);
+    }
+
+    [Fact]
+    public void Format_OutputIsTrimmed()
+    {
+        var result = BuildSimpleResult();
+        var output = CompactFormatter.Format(result);
+        Assert.Equal(output, output.TrimEnd());
+    }
+
+    [Fact]
+    public void DetectCommonPrefix_EmptyCollection_ReturnsEmpty()
+    {
+        var prefix = CompactFormatter.DetectCommonPrefix(Enumerable.Empty<string>());
+        Assert.Equal(string.Empty, prefix);
+    }
+
+    [Fact]
+    public void DetectCommonPrefix_PartialSegmentMatch_TrimsToLastDot()
+    {
+        // "A.B.Cx" and "A.B.Cy" share "A.B.C" but that's not a full segment → "A.B."
+        var ids = new[] { "A.B.Cx", "A.B.Cy" };
+        var prefix = CompactFormatter.DetectCommonPrefix(ids);
+        Assert.Equal("A.B.", prefix);
+    }
+
+    [Fact]
+    public void StripPrefix_EmptyPrefix_ReturnsOriginal()
+    {
+        var result = CompactFormatter.StripPrefix("Some.Id", "");
+        Assert.Equal("Some.Id", result);
+    }
+
+    [Fact]
+    public void StripPrefix_NullPrefix_ReturnsOriginal()
+    {
+        var result = CompactFormatter.StripPrefix("Some.Id", null!);
+        Assert.Equal("Some.Id", result);
+    }
+
+    [Theory]
+    [InlineData(EdgeType.Calls, "calls")]
+    [InlineData(EdgeType.Inherits, "inherits")]
+    [InlineData(EdgeType.Implements, "implements")]
+    [InlineData(EdgeType.DependsOn, "depends-on")]
+    [InlineData(EdgeType.ResolvesTo, "resolves-to")]
+    [InlineData(EdgeType.Covers, "covers")]
+    [InlineData(EdgeType.CoveredBy, "covered-by")]
+    [InlineData(EdgeType.References, "references")]
+    [InlineData(EdgeType.Contains, "contains")]
+    [InlineData(EdgeType.Overrides, "overrides")]
+    public void Format_EdgeType_FormattedCorrectly(EdgeType edgeType, string expected)
+    {
+        var target = new GraphNode
+        {
+            Id = "A", Name = "A", Kind = NodeKind.Method, Accessibility = Accessibility.Public
+        };
+        var dep = new GraphNode
+        {
+            Id = "B", Name = "B", Kind = NodeKind.Method, Accessibility = Accessibility.Public
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A", ToId = "B", Type = edgeType }
+        };
+        var result = new QueryResult
+        {
+            TargetNode = target,
+            MatchedNodes = new List<GraphNode> { target },
+            Nodes = new Dictionary<string, GraphNode> { ["A"] = target, ["B"] = dep },
+            Edges = edges,
+            Metadata = new GraphMetadata { SchemaVersion = 1, GeneratedAt = DateTime.UtcNow, Solution = "T.sln", SolutionName = "T", CommitHash = "abc", Branch = "main", ProjectsIndexed = Array.Empty<string>() },
+            WasTruncated = false, TotalMatchCount = 1
+        };
+        var output = CompactFormatter.Format(result);
+        Assert.Contains($"→ {expected}:", output);
+    }
+
+    [Fact]
+    public void Format_EdgeConfidenceUnresolved_ShowsAnnotation()
+    {
+        var target = new GraphNode
+        {
+            Id = "A", Name = "A", Kind = NodeKind.Method, Accessibility = Accessibility.Public
+        };
+        var dep = new GraphNode
+        {
+            Id = "B", Name = "B", Kind = NodeKind.Method, Accessibility = Accessibility.Public
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A", ToId = "B", Type = EdgeType.Calls, Confidence = EdgeConfidence.Unresolved }
+        };
+        var result = new QueryResult
+        {
+            TargetNode = target,
+            MatchedNodes = new List<GraphNode> { target },
+            Nodes = new Dictionary<string, GraphNode> { ["A"] = target, ["B"] = dep },
+            Edges = edges,
+            Metadata = new GraphMetadata { SchemaVersion = 1, GeneratedAt = DateTime.UtcNow, Solution = "T.sln", SolutionName = "T", CommitHash = "abc", Branch = "main", ProjectsIndexed = Array.Empty<string>() },
+            WasTruncated = false, TotalMatchCount = 1
+        };
+        var output = CompactFormatter.Format(result);
+        Assert.Contains("[unresolved]", output);
+    }
+
+    [Fact]
+    public void Format_IncomingEdgeFromNonTarget_Shown()
+    {
+        var result = BuildSimpleResult();
+        var output = CompactFormatter.Format(result);
+        Assert.Contains("← calls:", output);
+        Assert.Contains("OrderController.Post", output);
+    }
+
     private static QueryResult BuildSimpleResult()
     {
         var target = new GraphNode

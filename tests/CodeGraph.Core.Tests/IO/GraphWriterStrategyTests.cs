@@ -342,4 +342,91 @@ public class GraphWriterStrategyTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_outputDir, "Lib.json")));
         Assert.False(File.Exists(Path.Combine(_outputDir, "_external.json")));
     }
+
+    [Fact]
+    public async Task WriteAsync_EdgeFromUnknownSource_NoExistingProjects_CreatesFallback()
+    {
+        // No nodes at all — edge must go to a fallback project
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "Orphan.Source", ToId = "Orphan.Target", Type = EdgeType.Calls }
+        };
+
+        var writer = new GraphWriter(SplitFileStrategy.ByProject);
+        await writer.WriteAsync(_outputDir, Array.Empty<GraphNode>(), edges, MakeMetadata());
+
+        // meta.json always written
+        Assert.True(File.Exists(Path.Combine(_outputDir, "meta.json")));
+    }
+
+    [Fact]
+    public async Task WriteAsync_ByAssembly_EmptyAssemblyNoMetadata_FallsBackToProject()
+    {
+        var nodes = new List<GraphNode>
+        {
+            new()
+            {
+                Id = "MyProj.MyClass",
+                Name = "MyClass",
+                Kind = NodeKind.Type,
+                FilePath = "src/MyClass.cs",
+                AssemblyName = ""
+            }
+        };
+
+        var writer = new GraphWriter(SplitFileStrategy.ByAssembly);
+        await writer.WriteAsync(_outputDir, nodes, Array.Empty<GraphEdge>(), MakeMetadata());
+
+        // AssemblyName is empty but FilePath is non-empty, so not _external
+        // Falls back to ExtractProject("MyProj.MyClass") = "MyProj"
+        Assert.True(File.Exists(Path.Combine(_outputDir, "MyProj.json")));
+        Assert.False(File.Exists(Path.Combine(_outputDir, "_external.json")));
+    }
+
+    [Fact]
+    public async Task WriteAsync_ByProject_VerifiesNodeContentInJson()
+    {
+        var nodes = new List<GraphNode>
+        {
+            new() { Id = "ProjX.Service", Name = "Service", Kind = NodeKind.Type, FilePath = "src/Service.cs", StartLine = 5, EndLine = 50 }
+        };
+
+        var writer = new GraphWriter(SplitFileStrategy.ByProject);
+        await writer.WriteAsync(_outputDir, nodes, Array.Empty<GraphEdge>(), MakeMetadata());
+
+        var json = await File.ReadAllTextAsync(Path.Combine(_outputDir, "ProjX.json"));
+        var pg = JsonSerializer.Deserialize<ProjectGraph>(json, GraphSerializationOptions.Default)!;
+
+        Assert.Single(pg.Nodes);
+        Assert.Equal("ProjX.Service", pg.Nodes.First().Key);
+        Assert.Equal("Service", pg.Nodes.First().Value.Name);
+        Assert.Equal(5, pg.Nodes.First().Value.StartLine);
+        Assert.Equal(50, pg.Nodes.First().Value.EndLine);
+    }
+
+    [Fact]
+    public async Task WriteAsync_ByNamespace_EdgeAssignedToSourceNamespace()
+    {
+        var nodes = new List<GraphNode>
+        {
+            new() { Id = "A.B.Method1", Name = "Method1", Kind = NodeKind.Method },
+            new() { Id = "C.D.Method2", Name = "Method2", Kind = NodeKind.Method },
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "A.B.Method1", ToId = "C.D.Method2", Type = EdgeType.Calls }
+        };
+
+        var writer = new GraphWriter(SplitFileStrategy.ByNamespace);
+        await writer.WriteAsync(_outputDir, nodes, edges, MakeMetadata());
+
+        var abJson = await File.ReadAllTextAsync(Path.Combine(_outputDir, "A.B.json"));
+        var ab = JsonSerializer.Deserialize<ProjectGraph>(abJson, GraphSerializationOptions.Default)!;
+        Assert.Single(ab.Edges);
+        Assert.Equal("A.B.Method1", ab.Edges[0].FromId);
+
+        var cdJson = await File.ReadAllTextAsync(Path.Combine(_outputDir, "C.D.json"));
+        var cd = JsonSerializer.Deserialize<ProjectGraph>(cdJson, GraphSerializationOptions.Default)!;
+        Assert.Empty(cd.Edges);
+    }
 }

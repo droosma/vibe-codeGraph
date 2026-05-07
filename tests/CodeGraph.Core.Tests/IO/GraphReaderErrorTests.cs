@@ -145,4 +145,108 @@ public class GraphReaderErrorTests : IDisposable
         Assert.Equal(2, nodes.Count);
         Assert.Single(edges);
     }
+
+    [Fact]
+    public async Task ReadAsync_MalformedProjectJson_ThrowsJsonException()
+    {
+        var meta = new GraphMetadata { SchemaVersion = GraphSchema.CurrentVersion };
+        await File.WriteAllTextAsync(
+            Path.Combine(_testDir, "meta.json"),
+            JsonSerializer.Serialize(meta, GraphSerializationOptions.Default));
+
+        await File.WriteAllTextAsync(Path.Combine(_testDir, "broken.json"), "{ invalid json!!! }");
+
+        await Assert.ThrowsAsync<JsonException>(() => GraphReader.ReadAsync(_testDir));
+    }
+
+    [Fact]
+    public async Task ReadAsync_EmptyProjectJson_SkipsGracefully()
+    {
+        var meta = new GraphMetadata { SchemaVersion = GraphSchema.CurrentVersion };
+        await File.WriteAllTextAsync(
+            Path.Combine(_testDir, "meta.json"),
+            JsonSerializer.Serialize(meta, GraphSerializationOptions.Default));
+
+        // Empty JSON object — valid but has empty nodes/edges
+        await File.WriteAllTextAsync(Path.Combine(_testDir, "empty.json"), "{}");
+
+        var (_, nodes, edges) = await GraphReader.ReadAsync(_testDir);
+
+        Assert.Empty(nodes);
+        Assert.Empty(edges);
+    }
+
+    [Fact]
+    public async Task ReadAsync_MetadataFieldsPreserved()
+    {
+        var meta = new GraphMetadata
+        {
+            SchemaVersion = GraphSchema.CurrentVersion,
+            CommitHash = "deadbeef",
+            Branch = "feature/test",
+            IndexerVersion = "2.5.0",
+            Solution = "MyApp.sln",
+            SolutionName = "MyApp",
+            ProjectsIndexed = new[] { "P1", "P2", "P3" }
+        };
+        await File.WriteAllTextAsync(
+            Path.Combine(_testDir, "meta.json"),
+            JsonSerializer.Serialize(meta, GraphSerializationOptions.Default));
+
+        var (readMeta, _, _) = await GraphReader.ReadAsync(_testDir);
+
+        Assert.Equal("deadbeef", readMeta.CommitHash);
+        Assert.Equal("feature/test", readMeta.Branch);
+        Assert.Equal("2.5.0", readMeta.IndexerVersion);
+        Assert.Equal("MyApp.sln", readMeta.Solution);
+        Assert.Equal("MyApp", readMeta.SolutionName);
+        Assert.Equal(new[] { "P1", "P2", "P3" }, readMeta.ProjectsIndexed);
+    }
+
+    [Fact]
+    public async Task ReadAsync_EdgePropertiesPreserved()
+    {
+        var meta = new GraphMetadata { SchemaVersion = GraphSchema.CurrentVersion };
+        await File.WriteAllTextAsync(
+            Path.Combine(_testDir, "meta.json"),
+            JsonSerializer.Serialize(meta, GraphSerializationOptions.Default));
+
+        var pg = new ProjectGraph
+        {
+            ProjectOrNamespace = "Test",
+            Nodes = new Dictionary<string, GraphNode>
+            {
+                ["A"] = new() { Id = "A", Name = "A", Kind = NodeKind.Type },
+                ["B"] = new() { Id = "B", Name = "B", Kind = NodeKind.Type }
+            },
+            Edges = new List<GraphEdge>
+            {
+                new()
+                {
+                    FromId = "A", ToId = "B", Type = EdgeType.Implements,
+                    IsExternal = true, PackageSource = "NuGet",
+                    SourceLink = "https://src", Resolution = "resolved",
+                    Confidence = EdgeConfidence.Unresolved,
+                    Metadata = new Dictionary<string, string> { ["key1"] = "val1" }
+                }
+            }
+        };
+        await File.WriteAllTextAsync(
+            Path.Combine(_testDir, "Test.json"),
+            JsonSerializer.Serialize(pg, GraphSerializationOptions.Default));
+
+        var (_, _, edges) = await GraphReader.ReadAsync(_testDir);
+
+        Assert.Single(edges);
+        var e = edges[0];
+        Assert.Equal("A", e.FromId);
+        Assert.Equal("B", e.ToId);
+        Assert.Equal(EdgeType.Implements, e.Type);
+        Assert.True(e.IsExternal);
+        Assert.Equal("NuGet", e.PackageSource);
+        Assert.Equal("https://src", e.SourceLink);
+        Assert.Equal("resolved", e.Resolution);
+        Assert.Equal(EdgeConfidence.Unresolved, e.Confidence);
+        Assert.Equal("val1", e.Metadata["key1"]);
+    }
 }

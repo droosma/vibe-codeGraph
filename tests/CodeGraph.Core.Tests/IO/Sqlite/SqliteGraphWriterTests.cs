@@ -484,4 +484,471 @@ public class SqliteGraphWriterTests : IDisposable
         var (_, _, readEdges) = await SqliteGraphReader.ReadAsync(_dbPath);
         Assert.Empty(readEdges);
     }
+
+    [Fact]
+    public async Task WriteAndRead_NodeProperties_EachFieldDistinct()
+    {
+        var node = new GraphNode
+        {
+            Id = "Unique.Node.Id",
+            Name = "DistinctName",
+            Kind = NodeKind.Property,
+            FilePath = "/path/to/file.cs",
+            StartLine = 42,
+            EndLine = 99,
+            Signature = "public int DistinctSignature { get; }",
+            DocComment = "This is a doc comment",
+            ContainingTypeId = "Container.Type.Id",
+            ContainingNamespaceId = "Container.Namespace.Id",
+            Accessibility = Accessibility.ProtectedInternal,
+            AssemblyName = "DistinctAssembly"
+        };
+
+        var writer = new SqliteGraphWriter();
+        await writer.WriteAsync(_dbPath, new[] { node }, Array.Empty<GraphEdge>(), MakeMetadata());
+
+        var (_, readNodes, _) = await SqliteGraphReader.ReadAsync(_dbPath);
+        var n = readNodes["Unique.Node.Id"];
+
+        Assert.Equal("Unique.Node.Id", n.Id);
+        Assert.Equal("DistinctName", n.Name);
+        Assert.Equal(NodeKind.Property, n.Kind);
+        Assert.Equal("/path/to/file.cs", n.FilePath);
+        Assert.Equal(42, n.StartLine);
+        Assert.Equal(99, n.EndLine);
+        Assert.NotEqual(n.StartLine, n.EndLine);
+        Assert.Equal("public int DistinctSignature { get; }", n.Signature);
+        Assert.Equal("This is a doc comment", n.DocComment);
+        Assert.NotEqual(n.Signature, n.DocComment);
+        Assert.Equal("Container.Type.Id", n.ContainingTypeId);
+        Assert.Equal("Container.Namespace.Id", n.ContainingNamespaceId);
+        Assert.NotEqual(n.ContainingTypeId, n.ContainingNamespaceId);
+        Assert.Equal(Accessibility.ProtectedInternal, n.Accessibility);
+        Assert.Equal("DistinctAssembly", n.AssemblyName);
+    }
+
+    [Fact]
+    public async Task WriteAndRead_EdgeProperties_AllFieldsPopulated()
+    {
+        var nodes = new[]
+        {
+            new GraphNode { Id = "Src", Name = "Src", Kind = NodeKind.Type },
+            new GraphNode { Id = "Tgt", Name = "Tgt", Kind = NodeKind.Type }
+        };
+        var edge = new GraphEdge
+        {
+            FromId = "Src",
+            ToId = "Tgt",
+            Type = EdgeType.Implements,
+            IsExternal = true,
+            PackageSource = "NuGetPkg",
+            SourceLink = "https://link",
+            Resolution = "resolved-target",
+            Confidence = EdgeConfidence.Inferred
+        };
+
+        var writer = new SqliteGraphWriter();
+        await writer.WriteAsync(_dbPath, nodes, new[] { edge }, MakeMetadata());
+
+        var (_, _, readEdges) = await SqliteGraphReader.ReadAsync(_dbPath);
+        var e = Assert.Single(readEdges);
+
+        Assert.Equal("Src", e.FromId);
+        Assert.Equal("Tgt", e.ToId);
+        Assert.Equal(EdgeType.Implements, e.Type);
+        Assert.True(e.IsExternal);
+        Assert.Equal("NuGetPkg", e.PackageSource);
+        Assert.Equal("https://link", e.SourceLink);
+        Assert.Equal("resolved-target", e.Resolution);
+        Assert.Equal(EdgeConfidence.Inferred, e.Confidence);
+        // Verify nullable strings are distinct and not swapped
+        Assert.NotEqual(e.PackageSource, e.SourceLink);
+        Assert.NotEqual(e.PackageSource, e.Resolution);
+        Assert.NotEqual(e.SourceLink, e.Resolution);
+    }
+
+    [Fact]
+    public async Task WriteAndRead_EdgeIsExternal_FalseStoredAsZero()
+    {
+        var nodes = new[]
+        {
+            new GraphNode { Id = "X", Name = "X", Kind = NodeKind.Type },
+            new GraphNode { Id = "Y", Name = "Y", Kind = NodeKind.Type }
+        };
+        var edge = new GraphEdge
+        {
+            FromId = "X",
+            ToId = "Y",
+            Type = EdgeType.Calls,
+            IsExternal = false
+        };
+
+        var writer = new SqliteGraphWriter();
+        await writer.WriteAsync(_dbPath, nodes, new[] { edge }, MakeMetadata());
+
+        var (_, _, readEdges) = await SqliteGraphReader.ReadAsync(_dbPath);
+        var e = Assert.Single(readEdges);
+        Assert.False(e.IsExternal);
+    }
+
+    [Theory]
+    [InlineData(EdgeConfidence.Verified)]
+    [InlineData(EdgeConfidence.Inferred)]
+    [InlineData(EdgeConfidence.Unresolved)]
+    public async Task WriteAndRead_AllEdgeConfidenceLevels_Roundtrip(EdgeConfidence confidence)
+    {
+        var nodes = new[]
+        {
+            new GraphNode { Id = "C1", Name = "C1", Kind = NodeKind.Type },
+            new GraphNode { Id = "C2", Name = "C2", Kind = NodeKind.Type }
+        };
+        var edge = new GraphEdge
+        {
+            FromId = "C1",
+            ToId = "C2",
+            Type = EdgeType.DependsOn,
+            Confidence = confidence
+        };
+
+        var writer = new SqliteGraphWriter();
+        await writer.WriteAsync(_dbPath, nodes, new[] { edge }, MakeMetadata());
+
+        var (_, _, readEdges) = await SqliteGraphReader.ReadAsync(_dbPath);
+        var e = Assert.Single(readEdges);
+        Assert.Equal(confidence, e.Confidence);
+    }
+
+    [Fact]
+    public async Task WriteAndRead_NullableFields_RoundtripCorrectly()
+    {
+        var nodeWithNulls = new GraphNode
+        {
+            Id = "Null.Node",
+            Name = "NullNode",
+            Kind = NodeKind.Type,
+            DocComment = null,
+            ContainingTypeId = null,
+            ContainingNamespaceId = null
+        };
+        var nodeWithValues = new GraphNode
+        {
+            Id = "Full.Node",
+            Name = "FullNode",
+            Kind = NodeKind.Method,
+            DocComment = "Has doc",
+            ContainingTypeId = "Parent.Type",
+            ContainingNamespaceId = "Parent.Ns"
+        };
+
+        var writer = new SqliteGraphWriter();
+        await writer.WriteAsync(_dbPath, new[] { nodeWithNulls, nodeWithValues }, Array.Empty<GraphEdge>(), MakeMetadata());
+
+        var (_, readNodes, _) = await SqliteGraphReader.ReadAsync(_dbPath);
+
+        var nNull = readNodes["Null.Node"];
+        Assert.Null(nNull.DocComment);
+        Assert.Null(nNull.ContainingTypeId);
+        Assert.Null(nNull.ContainingNamespaceId);
+
+        var nFull = readNodes["Full.Node"];
+        Assert.Equal("Has doc", nFull.DocComment);
+        Assert.Equal("Parent.Type", nFull.ContainingTypeId);
+        Assert.Equal("Parent.Ns", nFull.ContainingNamespaceId);
+    }
+
+    [Fact]
+    public async Task WriteAndRead_NullableEdgeFields_RoundtripCorrectly()
+    {
+        var nodes = new[]
+        {
+            new GraphNode { Id = "E1", Name = "E1", Kind = NodeKind.Type },
+            new GraphNode { Id = "E2", Name = "E2", Kind = NodeKind.Type }
+        };
+        var edgeNulls = new GraphEdge
+        {
+            FromId = "E1",
+            ToId = "E2",
+            Type = EdgeType.Calls,
+            PackageSource = null,
+            SourceLink = null,
+            Resolution = null
+        };
+        var edgeFull = new GraphEdge
+        {
+            FromId = "E2",
+            ToId = "E1",
+            Type = EdgeType.DependsOn,
+            PackageSource = "MyPkg",
+            SourceLink = "https://src",
+            Resolution = "resolved"
+        };
+
+        var writer = new SqliteGraphWriter();
+        await writer.WriteAsync(_dbPath, nodes, new[] { edgeNulls, edgeFull }, MakeMetadata());
+
+        var (_, _, readEdges) = await SqliteGraphReader.ReadAsync(_dbPath);
+        Assert.Equal(2, readEdges.Count);
+
+        var eNull = readEdges.First(e => e.Type == EdgeType.Calls);
+        Assert.Null(eNull.PackageSource);
+        Assert.Null(eNull.SourceLink);
+        Assert.Null(eNull.Resolution);
+
+        var eFull = readEdges.First(e => e.Type == EdgeType.DependsOn);
+        Assert.Equal("MyPkg", eFull.PackageSource);
+        Assert.Equal("https://src", eFull.SourceLink);
+        Assert.Equal("resolved", eFull.Resolution);
+    }
+
+    [Fact]
+    public async Task WriteAndRead_EdgeWithNoMetadata_RoundtripsWithEmptyMetadata()
+    {
+        var nodes = new[]
+        {
+            new GraphNode { Id = "M1", Name = "M1", Kind = NodeKind.Type },
+            new GraphNode { Id = "M2", Name = "M2", Kind = NodeKind.Type }
+        };
+        var edge = new GraphEdge
+        {
+            FromId = "M1",
+            ToId = "M2",
+            Type = EdgeType.Contains,
+            Metadata = new Dictionary<string, string>()
+        };
+
+        var writer = new SqliteGraphWriter();
+        await writer.WriteAsync(_dbPath, nodes, new[] { edge }, MakeMetadata());
+
+        var (_, _, readEdges) = await SqliteGraphReader.ReadAsync(_dbPath);
+        var e = Assert.Single(readEdges);
+        Assert.Empty(e.Metadata);
+    }
+
+    [Fact]
+    public async Task WriteAndRead_EdgeWithMultipleMetadata_AllPreserved()
+    {
+        var nodes = new[]
+        {
+            new GraphNode { Id = "MM1", Name = "MM1", Kind = NodeKind.Type },
+            new GraphNode { Id = "MM2", Name = "MM2", Kind = NodeKind.Type }
+        };
+        var edge = new GraphEdge
+        {
+            FromId = "MM1",
+            ToId = "MM2",
+            Type = EdgeType.Calls,
+            Metadata = new Dictionary<string, string>
+            {
+                ["key1"] = "value1",
+                ["key2"] = "value2",
+                ["key3"] = "value3"
+            }
+        };
+
+        var writer = new SqliteGraphWriter();
+        await writer.WriteAsync(_dbPath, nodes, new[] { edge }, MakeMetadata());
+
+        var (_, _, readEdges) = await SqliteGraphReader.ReadAsync(_dbPath);
+        var e = Assert.Single(readEdges);
+        Assert.Equal(3, e.Metadata.Count);
+        Assert.Equal("value1", e.Metadata["key1"]);
+        Assert.Equal("value2", e.Metadata["key2"]);
+        Assert.Equal("value3", e.Metadata["key3"]);
+    }
+
+    [Fact]
+    public async Task WriteAndRead_MetadataStats_RoundtripCorrectly()
+    {
+        var metadata = new GraphMetadata
+        {
+            SchemaVersion = 1,
+            CommitHash = "stats-test",
+            Branch = "main",
+            GeneratedAt = DateTimeOffset.UtcNow,
+            IndexerVersion = "1.0.0",
+            Solution = "Stats.sln",
+            SolutionName = "Stats",
+            ProjectsIndexed = new[] { "P1" },
+            Stats = new Dictionary<string, int>
+            {
+                ["nodes"] = 10,
+                ["edges"] = 5,
+                ["types"] = 3
+            }
+        };
+
+        var writer = new SqliteGraphWriter();
+        await writer.WriteAsync(_dbPath, Array.Empty<GraphNode>(), Array.Empty<GraphEdge>(), metadata);
+
+        var (readMeta, _, _) = await SqliteGraphReader.ReadAsync(_dbPath);
+        Assert.Equal(3, readMeta.Stats.Count);
+        Assert.Equal(10, readMeta.Stats["nodes"]);
+        Assert.Equal(5, readMeta.Stats["edges"]);
+        Assert.Equal(3, readMeta.Stats["types"]);
+    }
+
+    [Fact]
+    public async Task WriteAndRead_MetadataGeneratedAt_PreservedExactly()
+    {
+        var exact = new DateTimeOffset(2024, 6, 15, 14, 30, 45, TimeSpan.FromHours(5));
+        var metadata = new GraphMetadata
+        {
+            SchemaVersion = 1,
+            CommitHash = "time-test",
+            Branch = "main",
+            GeneratedAt = exact,
+            IndexerVersion = "1.0.0",
+            Solution = "Time.sln",
+            SolutionName = "Time",
+            ProjectsIndexed = new[] { "P1" }
+        };
+
+        var writer = new SqliteGraphWriter();
+        await writer.WriteAsync(_dbPath, Array.Empty<GraphNode>(), Array.Empty<GraphEdge>(), metadata);
+
+        var (readMeta, _, _) = await SqliteGraphReader.ReadAsync(_dbPath);
+        Assert.Equal(exact, readMeta.GeneratedAt);
+    }
+
+    [Fact]
+    public async Task WriteAndRead_MetadataProjectsIndexed_PreservedExactly()
+    {
+        var projects = new[] { "Alpha.csproj", "Beta.csproj", "Gamma.csproj" };
+        var metadata = new GraphMetadata
+        {
+            SchemaVersion = 1,
+            CommitHash = "proj-test",
+            Branch = "main",
+            GeneratedAt = DateTimeOffset.UtcNow,
+            IndexerVersion = "1.0.0",
+            Solution = "Multi.sln",
+            SolutionName = "Multi",
+            ProjectsIndexed = projects
+        };
+
+        var writer = new SqliteGraphWriter();
+        await writer.WriteAsync(_dbPath, Array.Empty<GraphNode>(), Array.Empty<GraphEdge>(), metadata);
+
+        var (readMeta, _, _) = await SqliteGraphReader.ReadAsync(_dbPath);
+        Assert.Equal(3, readMeta.ProjectsIndexed.Length);
+        Assert.Equal("Alpha.csproj", readMeta.ProjectsIndexed[0]);
+        Assert.Equal("Beta.csproj", readMeta.ProjectsIndexed[1]);
+        Assert.Equal("Gamma.csproj", readMeta.ProjectsIndexed[2]);
+    }
+
+    [Fact]
+    public async Task AppendAsync_SolutionMetadata_NotDuplicated()
+    {
+        var writer = new SqliteGraphWriter();
+        var nodes = new[] { new GraphNode { Id = "Dup.Node", Name = "Node", Kind = NodeKind.Type } };
+
+        await writer.AppendAsync(_dbPath, nodes, Array.Empty<GraphEdge>(), "SameSolution");
+        await writer.AppendAsync(_dbPath, nodes, Array.Empty<GraphEdge>(), "SameSolution");
+
+        var connStr = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly,
+            Pooling = false
+        }.ToString();
+        using var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr);
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT value FROM metadata WHERE key = 'solutions'";
+        var json = (string)(await cmd.ExecuteScalarAsync())!;
+        var solutions = System.Text.Json.JsonSerializer.Deserialize<List<string>>(json)!;
+
+        Assert.Single(solutions);
+        Assert.Equal("SameSolution", solutions[0]);
+    }
+
+    [Fact]
+    public async Task AppendAsync_PurgeCleansEdgeMetadata()
+    {
+        var writer = new SqliteGraphWriter();
+        var nodes = new[] { new GraphNode { Id = "P.Node", Name = "Node", Kind = NodeKind.Type } };
+        var edgesV1 = new[]
+        {
+            new GraphEdge
+            {
+                FromId = "P.Node",
+                ToId = "External.Dep",
+                Type = EdgeType.Calls,
+                IsExternal = true,
+                Metadata = new Dictionary<string, string> { ["old_key"] = "old_value" }
+            }
+        };
+
+        await writer.AppendAsync(_dbPath, nodes, edgesV1, "PurgeSol");
+
+        // Re-index with a different edge that has no metadata
+        var edgesV2 = new[]
+        {
+            new GraphEdge
+            {
+                FromId = "P.Node",
+                ToId = "External.Other",
+                Type = EdgeType.DependsOn,
+                IsExternal = true
+            }
+        };
+        await writer.AppendAsync(_dbPath, nodes, edgesV2, "PurgeSol");
+
+        var (_, _, readEdges) = await SqliteGraphReader.ReadAsync(_dbPath);
+        Assert.Single(readEdges);
+        Assert.Equal(EdgeType.DependsOn, readEdges[0].Type);
+        Assert.Empty(readEdges[0].Metadata);
+
+        // Also verify no orphaned edge_metadata rows remain
+        var connStr = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly,
+            Pooling = false
+        }.ToString();
+        using var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr);
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM edge_metadata";
+        var count = (long)(await cmd.ExecuteScalarAsync())!;
+        Assert.Equal(0, count);
+    }
+
+    [Fact]
+    public async Task AppendAsync_PurgeWithNoExistingData_Succeeds()
+    {
+        var writer = new SqliteGraphWriter();
+        var nodes = new[] { new GraphNode { Id = "Fresh.Node", Name = "Fresh", Kind = NodeKind.Type } };
+
+        // Should not throw when appending to a brand new db with no pre-existing data for this solution
+        await writer.AppendAsync(_dbPath, nodes, Array.Empty<GraphEdge>(), "BrandNewSolution");
+
+        var (_, readNodes, _) = await SqliteGraphReader.ReadAsync(_dbPath);
+        Assert.Single(readNodes);
+        Assert.True(readNodes.ContainsKey("Fresh.Node"));
+    }
+
+    [Fact]
+    public async Task WriteAndRead_NodeContainingTypeAndNamespace_DistinctValues()
+    {
+        var node = new GraphNode
+        {
+            Id = "Swap.Test",
+            Name = "SwapTest",
+            Kind = NodeKind.Method,
+            ContainingTypeId = "Type.Id",
+            ContainingNamespaceId = "Ns.Id"
+        };
+
+        var writer = new SqliteGraphWriter();
+        await writer.WriteAsync(_dbPath, new[] { node }, Array.Empty<GraphEdge>(), MakeMetadata());
+
+        var (_, readNodes, _) = await SqliteGraphReader.ReadAsync(_dbPath);
+        var n = readNodes["Swap.Test"];
+
+        Assert.Equal("Type.Id", n.ContainingTypeId);
+        Assert.Equal("Ns.Id", n.ContainingNamespaceId);
+        // Explicitly verify they aren't swapped
+        Assert.NotEqual(n.ContainingTypeId, n.ContainingNamespaceId);
+    }
 }
