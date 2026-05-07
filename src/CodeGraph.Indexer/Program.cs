@@ -1090,6 +1090,88 @@ static async Task<int> RunExportAsync(string[] args)
     return 0;
 }
 
+static async Task<int> RunViewAsync(string[] args)
+{
+    var graphDir = ".codegraph";
+    string? outputPath = null;
+    var maxNodes = 5000;
+    var noOpen = false;
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--graph-dir" when i + 1 < args.Length:
+                graphDir = args[++i];
+                break;
+            case "--output" when i + 1 < args.Length:
+                outputPath = args[++i];
+                break;
+            case "--max-nodes" when i + 1 < args.Length:
+                if (!int.TryParse(args[++i], out maxNodes) || maxNodes < 1)
+                {
+                    Console.Error.WriteLine("Error: --max-nodes must be a positive integer.");
+                    return 1;
+                }
+                break;
+            case "--no-open":
+                noOpen = true;
+                break;
+            case "-h" or "--help":
+                PrintViewUsage();
+                return 0;
+        }
+    }
+
+    string html;
+    try
+    {
+        var generator = new HtmlGraphGenerator(graphDir, maxNodes);
+        html = await generator.GenerateAsync();
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
+        return 1;
+    }
+
+    string filePath;
+    if (outputPath is not null)
+    {
+        var dir = Path.GetDirectoryName(outputPath);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+        filePath = outputPath;
+    }
+    else
+    {
+        filePath = Path.Combine(Path.GetTempPath(), $"codegraph-{Guid.NewGuid():N}.html");
+    }
+
+    await File.WriteAllTextAsync(filePath, html);
+    Console.WriteLine($"Graph visualization written to {filePath}");
+
+    if (!noOpen)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = filePath,
+                UseShellExecute = true
+            };
+            Process.Start(psi);
+        }
+        catch
+        {
+            Console.WriteLine("Could not open browser automatically. Open the file manually.");
+        }
+    }
+
+    return 0;
+}
+
 static async Task<int> RunInitAsync(string[] args)
 {
     string? outputDir = null;
@@ -1562,6 +1644,30 @@ static void PrintExportUsage()
           codegraph export                                    # Export from .codegraph/graph.db to export/
           codegraph export --output my-export                 # Export to my-export/
           codegraph export --graph-dir .codegraph --output .  # Export JSON alongside graph.db
+        """);
+}
+
+static void PrintViewUsage()
+{
+    Console.WriteLine("""
+        Usage: codegraph view [options]
+
+        Generates an interactive 3D graph visualization as a self-contained HTML file
+        and opens it in the default browser.
+
+        Options:
+          --graph-dir <path>   Directory containing graph data (default: .codegraph)
+          --output <path>      Save HTML to a specific file (default: temp file)
+          --max-nodes <n>      Maximum nodes to render, smart-sampled when exceeded (default: 5000)
+          --no-open            Generate HTML but do not open in browser
+          --help, -h           Show this help
+
+        Examples:
+          codegraph view                              # Open graph in browser
+          codegraph view --output graph.html          # Save to file
+          codegraph view --max-nodes 2000             # Limit for performance
+          codegraph view --graph-dir .codegraph/Api   # View specific sub-graph
+          codegraph view --output report.html --no-open  # CI: generate without opening
         """);
 }
 

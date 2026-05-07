@@ -202,78 +202,6 @@ codegraph query <symbol-pattern> [options]
 | `contains` | Contains |
 | `all` | No filter |
 
-### `codegraph list`
-
-Browse the code graph hierarchy — useful for orienting yourself in an unfamiliar codebase.
-
-```
-codegraph list [scope] [options]
-```
-
-| Scope | Description |
-|-------|-------------|
-| `assemblies` | List all assemblies with type and method counts (default) |
-| `types` | List types ranked by connectivity (in/out-degree) |
-| `interfaces` | List interfaces with implementation counts |
-| `namespaces` | List namespaces with type counts |
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--assembly <name>` | Filter by assembly name (applies to `types`, `interfaces`, `namespaces`) | All assemblies |
-| `--top <n>` | Max items to return (`types` scope only) | `20` |
-| `--graph-dir <dir>` | Graph directory | `.codegraph` |
-
-### `codegraph report`
-
-Generate a Markdown analysis report: hub types, assembly boundaries, test coverage, and suggested queries.
-
-```
-codegraph report [options]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--graph-dir <dir>` | Directory containing `graph.db` | `.codegraph` |
-| `--output, -o <path>` | Output file path | `.codegraph/REPORT.md` |
-
-### `codegraph wiki`
-
-Generate navigable Markdown wiki pages from the code graph. Creates `INDEX.md`, per-assembly pages, `INTERFACES.md`, and `DI-WIRING.md`.
-
-```
-codegraph wiki [options]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--graph-dir <dir>` | Graph directory | `.codegraph` |
-| `--output, -o <dir>` | Output directory for wiki pages | `.codegraph/wiki` |
-
-### `codegraph stats`
-
-Print graph-level statistics: total nodes and edges, counts by kind and type.
-
-```
-codegraph stats [options]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--graph-dir <dir>` | Graph directory | `.codegraph` |
-
-### `codegraph export`
-
-Export the graph from the SQLite database (`graph.db`) back to JSON files (the legacy format). Useful for interoperability or backup.
-
-```
-codegraph export [options]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--graph-dir <dir>` | Directory containing `graph.db` | `.codegraph` |
-| `--output <dir>` | Output directory for JSON files | `export` |
-
 ### `codegraph diff`
 
 Compare two graph snapshots and report structural changes.
@@ -289,6 +217,8 @@ codegraph diff [options]
 | `--ref <git-ref>` | Use `.codegraph-<ref>` as base snapshot | (none) |
 | `--only <types>` | Comma-separated: `added`, `removed`, `signature-changed`, `added-nodes`, `removed-nodes`, `added-edges`, `removed-edges` | All change types |
 | `--format <fmt>` | Output format: `json`, `text`, `context` | `context` |
+
+See [docs/diff.md](docs/diff.md) for the full how-to guide.
 
 ### `codegraph list`
 
@@ -318,6 +248,8 @@ codegraph list types --assembly MyApp.Core  # Types in a specific assembly
 codegraph list interfaces --top 10          # Top 10 most-implemented interfaces
 codegraph list namespaces                   # All namespaces
 ```
+
+See [docs/list.md](docs/list.md) for the full guide, including output format details and orientation workflows.
 
 ### `codegraph stats`
 
@@ -355,6 +287,8 @@ Edges by type:
   References: 901
   ...
 ```
+
+See [docs/stats.md](docs/stats.md) for common workflows including CI monitoring and snapshot comparison.
 
 ### `codegraph report`
 
@@ -427,6 +361,8 @@ codegraph export                         # Export .codegraph/graph.db → export
 codegraph export --output my-snapshot    # Export to a named directory
 ```
 
+See [docs/export.md](docs/export.md) for the full guide, including archiving, CI artifact publishing, and jq examples.
+
 ### `codegraph mcp`
 
 Start an MCP (Model Context Protocol) stdio server. This is how AI agents discover and use CodeGraph as a native tool.
@@ -449,6 +385,8 @@ The server exposes six tools. Agents call them like any other tool (no shell com
 | `codegraph_path` | Find the shortest dependency path between two symbols |
 | `codegraph_impact` | Reverse-dependency analysis — assess the blast radius of a change |
 | `codegraph_explain` | Full symbol deep-dive: signature, members, all edges, test coverage |
+
+See [docs/mcp.md](docs/mcp.md) for the full guide, including per-agent configuration and troubleshooting.
 
 ### `codegraph view`
 
@@ -651,6 +589,10 @@ Stryker generates HTML reports in `StrykerOutput/` with mutation scores per proj
 - [Graph Schema Reference](docs/graph-schema.md)
 - [Configuration Reference](docs/configuration.md)
 - [Agent Setup Guide](docs/agent-setup.md)
+- [MCP Server Guide](docs/mcp.md)
+- [Graph List How-to Guide](docs/list.md)
+- [Graph Stats Reference](docs/stats.md)
+- [Graph Export Guide](docs/export.md)
 - [Graph Diff How-to Guide](docs/diff.md)
 - [Interactive Graph Visualization](docs/view.md)
 - [Graph Report Reference](docs/report.md)
