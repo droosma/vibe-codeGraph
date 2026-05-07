@@ -337,7 +337,8 @@ public class SemanticPass
                 FromId = fromId,
                 ToId = toId,
                 Type = type,
-                IsExternal = IsExternal(targetSymbol)
+                IsExternal = IsExternal(targetSymbol),
+                Confidence = EdgeConfidence.Verified
             });
         }
     }

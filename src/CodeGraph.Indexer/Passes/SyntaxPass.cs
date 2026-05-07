@@ -156,7 +156,8 @@ public class SyntaxPass
                 {
                     FromId = GetSymbolId(symbol.ContainingType),
                     ToId = graphNode.Id,
-                    Type = EdgeType.Contains
+                    Type = EdgeType.Contains,
+                    Confidence = EdgeConfidence.Verified
                 });
             }
             else if (symbol.ContainingNamespace is { IsGlobalNamespace: false })
@@ -182,7 +183,8 @@ public class SyntaxPass
                 {
                     FromId = nsId,
                     ToId = graphNode.Id,
-                    Type = EdgeType.Contains
+                    Type = EdgeType.Contains,
+                    Confidence = EdgeConfidence.Verified
                 });
             }
         }
@@ -206,7 +208,8 @@ public class SyntaxPass
                 {
                     FromId = GetSymbolId(symbol.ContainingType),
                     ToId = memberId,
-                    Type = EdgeType.Contains
+                    Type = EdgeType.Contains,
+                    Confidence = EdgeConfidence.Verified
                 });
             }
         }

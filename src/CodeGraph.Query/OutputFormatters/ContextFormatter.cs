@@ -141,5 +141,8 @@ public static class ContextFormatter
 
         if (edge?.Resolution is not null)
             sb.AppendLine($"  Resolution: {edge.Resolution}");
+
+        if (edge?.Confidence is not null and not EdgeConfidence.Verified)
+            sb.AppendLine($"  Confidence: {edge.Confidence}");
     }
 }

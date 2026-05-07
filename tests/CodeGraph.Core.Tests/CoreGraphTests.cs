@@ -228,8 +228,7 @@ public class GraphReaderTests
             var writer = new GraphWriter();
             await writer.WriteAsync(outputDir, nodes, edges, metadata);
 
-            var reader = new GraphReader();
-            var (readMeta, readNodes, readEdges) = await reader.ReadAsync(outputDir);
+            var (readMeta, readNodes, readEdges) = await GraphReader.ReadAsync(outputDir);
 
             Assert.Equal(GraphSchema.CurrentVersion, readMeta.SchemaVersion);
             Assert.Equal("def", readMeta.CommitHash);
@@ -252,8 +251,7 @@ public class GraphReaderTests
         Directory.CreateDirectory(emptyDir);
         try
         {
-            var reader = new GraphReader();
-            await Assert.ThrowsAsync<FileNotFoundException>(() => reader.ReadAsync(emptyDir));
+            await Assert.ThrowsAsync<FileNotFoundException>(() => GraphReader.ReadAsync(emptyDir));
         }
         finally
         {
@@ -297,8 +295,7 @@ public class GraphMergerTests
             }
         };
 
-        var merger = new GraphMerger();
-        var (mergedNodes, mergedEdges) = merger.Merge(existingNodes, existingEdges, partialGraphs);
+        var (mergedNodes, mergedEdges) = GraphMerger.Merge(existingNodes, existingEdges, partialGraphs);
 
         // ProjectA nodes replaced: ClassA + NewMethod (OldMethod gone)
         Assert.Equal(3, mergedNodes.Count);

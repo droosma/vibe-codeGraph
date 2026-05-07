@@ -9,6 +9,7 @@ public record GraphEdge
     public string? PackageSource { get; init; }
     public string? SourceLink { get; init; }
     public string? Resolution { get; init; }
+    public EdgeConfidence Confidence { get; init; } = EdgeConfidence.Verified;
     public Dictionary<string, string> Metadata { get; init; } = new();
 }
 
@@ -24,4 +25,14 @@ public enum EdgeType
     CoveredBy,
     References,
     Overrides
+}
+
+public enum EdgeConfidence
+{
+    /// <summary>Edge was confirmed by Roslyn semantic analysis</summary>
+    Verified,
+    /// <summary>Edge was inferred (e.g., single DI implementation)</summary>
+    Inferred,
+    /// <summary>Edge target could not be fully resolved</summary>
+    Unresolved
 }

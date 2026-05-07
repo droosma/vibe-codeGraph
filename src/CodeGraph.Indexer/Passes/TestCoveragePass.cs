@@ -87,6 +87,7 @@ public class TestCoveragePass
                             ToId = targetId,
                             Type = EdgeType.Covers,
                             IsExternal = true,
+                            Confidence = EdgeConfidence.Verified,
                             Metadata = metadata
                         });
                     }
@@ -100,6 +101,7 @@ public class TestCoveragePass
                             ToId = testMethodId,
                             Type = EdgeType.CoveredBy,
                             IsExternal = true,
+                            Confidence = EdgeConfidence.Verified,
                             Metadata = new Dictionary<string, string>(metadata)
                         });
                     }

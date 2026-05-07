@@ -33,8 +33,7 @@ public class GraphMergerExtendedTests
             }
         };
 
-        var merger = new GraphMerger();
-        var (mergedNodes, mergedEdges) = merger.Merge(existingNodes, existingEdges, partialGraphs);
+        var (mergedNodes, mergedEdges) = GraphMerger.Merge(existingNodes, existingEdges, partialGraphs);
 
         Assert.Single(mergedNodes);
         Assert.Equal("NoDotIdUpdated", mergedNodes["NoDotId"].Name);
@@ -54,8 +53,7 @@ public class GraphMergerExtendedTests
             new() { FromId = "A.B", ToId = "C.D", Type = EdgeType.Calls },
         };
 
-        var merger = new GraphMerger();
-        var (mergedNodes, mergedEdges) = merger.Merge(existingNodes, existingEdges, Array.Empty<ProjectGraph>());
+        var (mergedNodes, mergedEdges) = GraphMerger.Merge(existingNodes, existingEdges, Array.Empty<ProjectGraph>());
 
         Assert.Single(mergedNodes);
         Assert.Single(mergedEdges);
@@ -88,8 +86,7 @@ public class GraphMergerExtendedTests
             }
         };
 
-        var merger = new GraphMerger();
-        var (mergedNodes, mergedEdges) = merger.Merge(existingNodes, existingEdges, partialGraphs);
+        var (mergedNodes, mergedEdges) = GraphMerger.Merge(existingNodes, existingEdges, partialGraphs);
 
         Assert.Equal(2, mergedNodes.Count);
         Assert.Contains("ProjA.New", mergedNodes.Keys);

@@ -23,8 +23,7 @@ public class GraphReaderErrorTests : IDisposable
     [Fact]
     public async Task ReadAsync_MissingMetaJson_ThrowsFileNotFound()
     {
-        var reader = new GraphReader();
-        var ex = await Assert.ThrowsAsync<FileNotFoundException>(() => reader.ReadAsync(_testDir));
+        var ex = await Assert.ThrowsAsync<FileNotFoundException>(() => GraphReader.ReadAsync(_testDir));
         Assert.Contains("meta.json", ex.Message);
     }
 
@@ -35,8 +34,7 @@ public class GraphReaderErrorTests : IDisposable
         var metaJson = JsonSerializer.Serialize(meta, GraphSerializationOptions.Default);
         await File.WriteAllTextAsync(Path.Combine(_testDir, "meta.json"), metaJson);
 
-        var reader = new GraphReader();
-        await Assert.ThrowsAsync<InvalidOperationException>(() => reader.ReadAsync(_testDir));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => GraphReader.ReadAsync(_testDir));
     }
 
     [Fact]
@@ -48,8 +46,7 @@ public class GraphReaderErrorTests : IDisposable
 
         await File.WriteAllTextAsync(Path.Combine(_testDir, "project1.json"), "null");
 
-        var reader = new GraphReader();
-        var (_, nodes, edges) = await reader.ReadAsync(_testDir);
+        var (_, nodes, edges) = await GraphReader.ReadAsync(_testDir);
 
         Assert.Empty(nodes);
         Assert.Empty(edges);
@@ -85,8 +82,7 @@ public class GraphReaderErrorTests : IDisposable
             Path.Combine(_testDir, "TestProj.json"),
             JsonSerializer.Serialize(pg, GraphSerializationOptions.Default));
 
-        var reader = new GraphReader();
-        var (readMeta, nodes, edges) = await reader.ReadAsync(_testDir);
+        var (readMeta, nodes, edges) = await GraphReader.ReadAsync(_testDir);
 
         Assert.Equal("test123", readMeta.CommitHash);
         Assert.Equal("main", readMeta.Branch);
@@ -102,8 +98,7 @@ public class GraphReaderErrorTests : IDisposable
             Path.Combine(_testDir, "meta.json"),
             JsonSerializer.Serialize(meta, GraphSerializationOptions.Default));
 
-        var reader = new GraphReader();
-        var (_, nodes, _) = await reader.ReadAsync(_testDir);
+        var (_, nodes, _) = await GraphReader.ReadAsync(_testDir);
         Assert.Empty(nodes);
     }
 
@@ -145,8 +140,7 @@ public class GraphReaderErrorTests : IDisposable
             Path.Combine(_testDir, "Proj2.json"),
             JsonSerializer.Serialize(pg2, GraphSerializationOptions.Default));
 
-        var reader = new GraphReader();
-        var (_, nodes, edges) = await reader.ReadAsync(_testDir);
+        var (_, nodes, edges) = await GraphReader.ReadAsync(_testDir);
 
         Assert.Equal(2, nodes.Count);
         Assert.Single(edges);

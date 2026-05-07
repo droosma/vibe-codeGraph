@@ -179,6 +179,7 @@ public class DiPass
                 FromId = fromId,
                 ToId = toId,
                 Type = EdgeType.ResolvesTo,
+                Confidence = EdgeConfidence.Verified,
                 Metadata = new Dictionary<string, string>
                 {
                     ["lifetime"] = lifetime,
