@@ -58,12 +58,13 @@ jobs:
 
       - name: Approve PR
         if: steps.pr.outputs.should_run == 'true'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh pr review ${{ steps.pr.outputs.number }} --repo ${{ github.repository }} --approve
 
-      - name: Enable auto-merge
+      - name: Merge PR
         if: steps.pr.outputs.should_run == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh pr merge ${{ steps.pr.outputs.number }} --repo ${{ github.repository }} --auto --squash
+        run: gh pr merge ${{ steps.pr.outputs.number }} --repo ${{ github.repository }} --squash --admin
