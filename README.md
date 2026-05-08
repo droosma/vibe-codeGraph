@@ -202,6 +202,49 @@ codegraph query <symbol-pattern> [options]
 | `contains` | Contains |
 | `all` | No filter |
 
+### `codegraph compare`
+
+Compare two symbols structurally — shared interfaces, shared base types, shared dependencies, and unique relationships for each.
+
+```
+codegraph compare <symbolA> <symbolB> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--depth <n>` | BFS traversal depth | `1` |
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph compare OrderService PaymentService
+codegraph compare OrderService PaymentService --depth 2
+codegraph compare IOrderRepository ISqlRepository
+```
+
+See [docs/compare.md](docs/compare.md) for the full guide, including output format details and architecture-review workflows.
+
+### `codegraph search`
+
+Search for symbols by name, namespace, or file path using case-insensitive substring matching. The fastest way to find a fully-qualified identifier before querying.
+
+```
+codegraph search <query> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--top <n>` | Maximum results to return | `20` |
+| `--kind <kind>` | Filter by kind: `type`, `method`, `namespace`, `property`, `field` | All kinds |
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph search Order                       # All symbols containing "Order"
+codegraph search Order --kind type           # Only types
+codegraph search Repository --top 10
+```
+
+See [docs/search.md](docs/search.md) for the full guide.
+
 ### `codegraph diff`
 
 Compare two graph snapshots and report structural changes.
@@ -219,6 +262,35 @@ codegraph diff [options]
 | `--format <fmt>` | Output format: `json`, `text`, `context` | `context` |
 
 See [docs/diff.md](docs/diff.md) for the full how-to guide.
+
+### `codegraph snapshot`
+
+Save, list, and delete named graph snapshots. Snapshots are the building block for `codegraph diff` — save before a change, re-index after, then diff the two.
+
+```
+codegraph snapshot <save|list|delete> [name] [options]
+```
+
+| Sub-command | Description |
+|-------------|-------------|
+| `save <name>` | Save the current graph as a named snapshot |
+| `list` | Print all saved snapshots |
+| `delete <name>` | Delete a named snapshot |
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph snapshot save before-refactor
+codegraph snapshot list
+codegraph snapshot delete before-refactor
+
+# Then diff against the snapshot:
+codegraph diff --base .codegraph-snapshots/before-refactor
+```
+
+See [docs/snapshot.md](docs/snapshot.md) for full workflows.
 
 ### `codegraph list`
 
@@ -411,6 +483,98 @@ codegraph view --graph-dir .codegraph/Api   # View specific sub-graph
 ```
 
 See [docs/view.md](docs/view.md) for the full how-to guide, including sidebar controls, node sampling, and CI usage.
+
+### `codegraph test-impact`
+
+Analyze test coverage for a symbol — direct tests, indirect tests (through call chains), and uncovered callers.
+
+```
+codegraph test-impact <symbol> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--depth <n>` | Traversal depth for indirect coverage | `3` |
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph test-impact OrderService           # Which tests cover OrderService?
+codegraph test-impact OrderService --depth 5 # Include deeper indirect paths
+```
+
+See [docs/test-impact.md](docs/test-impact.md) for the full guide, including pre-change risk assessment and CI test-selection workflows.
+
+### `codegraph packages`
+
+Analyze NuGet package usage across your indexed solution — which packages each project references, usage counts, and version conflicts.
+
+```
+codegraph packages [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--project <name>` | Scope to a specific project | All projects |
+| `--package <name>` | Show details for a specific package | All packages |
+| `--format <fmt>` | Output format: `text` or `json` | `text` |
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph packages                              # All packages, all projects
+codegraph packages --package Newtonsoft.Json    # Who uses it and how?
+codegraph packages --format json > audit.json   # JSON export
+```
+
+See [docs/packages.md](docs/packages.md) for full workflows, including dependency audits and version conflict resolution.
+
+### `codegraph benchmark`
+
+Run named query scenarios and report timing statistics (min, max, median, mean) alongside result sizes (nodes, edges, token estimates).
+
+```
+codegraph benchmark [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--scenarios <path>` | Path to JSON scenarios file | Built-in defaults |
+| `--iterations <n>` | Runs per scenario | `5` |
+| `--format <fmt>` | Output format: `text` (Markdown table) or `json` | `text` |
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph benchmark                              # Built-in scenarios, 5 iterations
+codegraph benchmark --iterations 20              # More stable measurements
+codegraph benchmark --format json > results.json
+```
+
+See [docs/benchmark.md](docs/benchmark.md) for custom scenario files and CI performance-gate workflows.
+
+### `codegraph daemon`
+
+Run a persistent background process that keeps the graph loaded in memory, serving queries over a named pipe. Eliminates graph-loading latency for interactive agent sessions.
+
+```
+codegraph daemon <start|stop|status> [options]
+```
+
+| Sub-command | Description |
+|-------------|-------------|
+| `start` | Start the background daemon |
+| `stop` | Stop the running daemon |
+| `status` | Print daemon status (PID, pipe name) |
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--graph-dir <path>` | Graph directory the daemon watches | `.codegraph` |
+
+```bash
+codegraph daemon start    # Start in foreground (or background with &)
+codegraph daemon status   # Is it running?
+codegraph daemon stop     # Shut it down
+```
+
+See [docs/daemon.md](docs/daemon.md) for editor-integration and session-workflow patterns.
 
 **Configuration is automatic** — `codegraph init` generates the MCP config files. To add manually:
 
