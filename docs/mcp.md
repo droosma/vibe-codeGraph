@@ -38,16 +38,35 @@ codegraph mcp [options]
 
 ## Exposed MCP Tools
 
-The server exposes six tools. Agents call them like any other tool:
+The server exposes 13 tools. Agents call them like any other tool — no shell commands or prompt engineering required:
+
+### Query & Discovery
 
 | MCP Tool | Description |
 |----------|-------------|
 | `codegraph_query` | Query the graph by symbol pattern with depth, edge-type, and format options |
+| `codegraph_search` | Search for symbols by name, namespace, or file path. Best for discovery when you don't know exact names |
 | `codegraph_list` | Browse the graph hierarchy — assemblies, types, interfaces, namespaces |
+| `codegraph_file` | Find all symbols defined in a file path (partial match OK, e.g., `OrderService.cs`) |
+| `codegraph_batch` | Query multiple symbols in one call. More efficient than separate queries |
+
+### Analysis
+
+| MCP Tool | Description |
+|----------|-------------|
 | `codegraph_summary` | Generate an overview report: hub types, assembly boundaries, test coverage |
 | `codegraph_path` | Find the shortest dependency path between two symbols |
 | `codegraph_impact` | Reverse-dependency analysis — assess the blast radius of a change |
 | `codegraph_explain` | Full symbol deep-dive: signature, members, all edges, test coverage |
+| `codegraph_compare` | Compare two symbols structurally — shared interfaces, unique dependencies, differences |
+| `codegraph_test_impact` | Analyze test coverage for a symbol: direct tests, indirect tests, `dotnet test --filter` |
+
+### Change Analysis
+
+| MCP Tool | Description |
+|----------|-------------|
+| `codegraph_diff` | Compare two graph snapshots to find structural changes (added/removed types and edges) |
+| `codegraph_packages` | Analyze NuGet package usage across the solution; detect version conflicts |
 
 These tools wrap the same library code used by the CLI commands — there is no difference in capability.
 

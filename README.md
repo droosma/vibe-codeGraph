@@ -375,16 +375,23 @@ codegraph mcp [--graph-dir <dir>]
 |------|-------------|---------|
 | `--graph-dir <dir>` | Graph directory | `.codegraph` |
 
-The server exposes six tools. Agents call them like any other tool (no shell commands, no prompt engineering). The server starts on demand via stdio and exits when the agent disconnects.
+The server exposes 13 tools. Agents call them like any other tool (no shell commands, no prompt engineering). The server starts on demand via stdio and exits when the agent disconnects.
 
 | MCP Tool | Description |
 |----------|-------------|
 | `codegraph_query` | Query the graph by symbol pattern with depth, edge-type, and format options |
+| `codegraph_search` | Search for symbols by name, namespace, or file path |
 | `codegraph_list` | Browse the graph hierarchy (assemblies, types, interfaces, namespaces) |
+| `codegraph_file` | Find all symbols defined in a file path |
+| `codegraph_batch` | Query multiple symbols in one call |
 | `codegraph_summary` | Generate an overview report: hub types, assembly boundaries, test coverage |
 | `codegraph_path` | Find the shortest dependency path between two symbols |
 | `codegraph_impact` | Reverse-dependency analysis — assess the blast radius of a change |
 | `codegraph_explain` | Full symbol deep-dive: signature, members, all edges, test coverage |
+| `codegraph_compare` | Compare two symbols structurally |
+| `codegraph_test_impact` | Analyze test coverage: direct tests, indirect tests, `dotnet test --filter` |
+| `codegraph_diff` | Compare two graph snapshots to find structural changes |
+| `codegraph_packages` | Analyze NuGet package usage; detect version conflicts |
 
 See [docs/mcp.md](docs/mcp.md) for the full guide, including per-agent configuration and troubleshooting.
 
@@ -411,6 +418,117 @@ codegraph view --graph-dir .codegraph/Api   # View specific sub-graph
 ```
 
 See [docs/view.md](docs/view.md) for the full how-to guide, including sidebar controls, node sampling, and CI usage.
+
+### `codegraph test-impact`
+
+Analyze test coverage for a symbol — shows direct tests, indirect tests (via call chains), uncovered callers, and a ready-to-run `dotnet test --filter` expression.
+
+```
+codegraph test-impact <symbol> [--depth N] [--graph-dir <dir>]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<symbol>` | Symbol name or pattern | *(required)* |
+| `--depth <n>` | Backward BFS traversal depth for indirect coverage | `3` |
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph test-impact OrderService.PlaceOrder         # Show tests for a method
+codegraph test-impact PaymentService --depth 5        # Deeper indirect search
+```
+
+See [docs/test-impact.md](docs/test-impact.md) for the full guide, including CI integration and coverage gap workflows.
+
+### `codegraph snapshot`
+
+Save, list, and delete named copies of the graph directory for later comparison with `codegraph diff`.
+
+```
+codegraph snapshot <save|list|delete> [name] [--graph-dir <dir>]
+```
+
+| Sub-command | Description |
+|-------------|-------------|
+| `save <name>` | Copy the current graph to `.codegraph-snapshots/<name>/` |
+| `list` | List all stored snapshots |
+| `delete <name>` | Remove a named snapshot |
+
+```bash
+codegraph snapshot save before-refactor    # Save current graph
+codegraph snapshot list                    # Show all snapshots
+codegraph diff --base .codegraph-snapshots/before-refactor  # Diff it later
+codegraph snapshot delete before-refactor  # Clean up
+```
+
+See [docs/snapshot.md](docs/snapshot.md) for the full guide, including CI and `.gitignore` recommendations.
+
+### `codegraph packages`
+
+Analyze NuGet package usage across the solution — per-project summaries, reference counts, and version conflict detection.
+
+```
+codegraph packages [--project <name>] [--package <name>] [--format json] [--graph-dir <dir>]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--project <name>` | Filter to a specific project | All |
+| `--package <name>` | Filter to a specific package | All |
+| `--format json` | JSON output | Text |
+
+```bash
+codegraph packages                          # All projects and packages
+codegraph packages --project MyApp.Api      # One project only
+codegraph packages --package Newtonsoft.Json  # All usages of one package
+codegraph packages --format json            # Machine-readable
+```
+
+See [docs/packages.md](docs/packages.md) for the full guide, including conflict detection and CI scripting.
+
+### `codegraph benchmark`
+
+Run query-performance scenarios against the indexed graph and report average, min, and max execution times.
+
+```
+codegraph benchmark [--scenarios <path>] [--iterations N] [--format json] [--graph-dir <dir>]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--scenarios <path>` | JSON file describing scenarios | Built-in scenarios |
+| `--iterations <n>` | Runs per scenario | `5` |
+| `--format json` | JSON output | Markdown |
+
+```bash
+codegraph benchmark                         # Run built-in scenarios
+codegraph benchmark --iterations 20         # More stable averages
+codegraph benchmark --format json > results.json  # For CI artifacts
+```
+
+See [docs/benchmark.md](docs/benchmark.md) for the full guide, including custom scenarios and CI integration.
+
+### `codegraph daemon`
+
+Start a persistent background process that loads the graph once and answers queries over a named pipe, eliminating the ~700 ms cold-start on every CLI invocation.
+
+```
+codegraph daemon <start|stop|status> [--graph-dir <dir>]
+```
+
+| Sub-command | Description |
+|-------------|-------------|
+| `start` | Start the daemon |
+| `stop` | Stop the running daemon |
+| `status` | Print PID and pipe name if running |
+
+```bash
+codegraph daemon start &                    # Start in background
+codegraph daemon status                     # Check it's running
+codegraph daemon stop                       # Shut down
+```
+
+See [docs/daemon.md](docs/daemon.md) for the full guide, including when to use the daemon vs. MCP mode.
 
 **Configuration is automatic** — `codegraph init` generates the MCP config files. To add manually:
 
@@ -594,6 +712,11 @@ Stryker generates HTML reports in `StrykerOutput/` with mutation scores per proj
 - [Graph Stats Reference](docs/stats.md)
 - [Graph Export Guide](docs/export.md)
 - [Graph Diff How-to Guide](docs/diff.md)
+- [Snapshot Management Guide](docs/snapshot.md)
+- [Test Impact Analysis Guide](docs/test-impact.md)
+- [NuGet Package Analysis Guide](docs/packages.md)
+- [Benchmark Guide](docs/benchmark.md)
+- [Daemon Guide](docs/daemon.md)
 - [Interactive Graph Visualization](docs/view.md)
 - [Graph Report Reference](docs/report.md)
 - [Wiki Generator Guide](docs/wiki.md)
