@@ -1410,4 +1410,104 @@ public class QueryEngineTests
         // Internal node should be preferred over external in ranking
         Assert.True(result.Nodes.ContainsKey("Int"), "Internal node should be ranked higher than external");
     }
+
+    // ── FindByFilePath tests ──
+
+    [Fact]
+    public void FindByFilePath_ExactMatch_FindsNodes()
+    {
+        var (nodes, edges, meta) = BuildTestGraph();
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        var results = engine.FindByFilePath("src/Services/OrderService.cs");
+
+        Assert.True(results.Count >= 1);
+        Assert.All(results, n => Assert.Contains("OrderService", n.Id));
+    }
+
+    [Fact]
+    public void FindByFilePath_PartialMatch_FindsNodes()
+    {
+        var (nodes, edges, meta) = BuildTestGraph();
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        var results = engine.FindByFilePath("OrderService.cs");
+
+        Assert.True(results.Count >= 1);
+        Assert.All(results, n => Assert.Equal("src/Services/OrderService.cs", n.FilePath));
+    }
+
+    [Fact]
+    public void FindByFilePath_WithKindFilter_FiltersResults()
+    {
+        var (nodes, edges, meta) = BuildTestGraph();
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        var typeResults = engine.FindByFilePath("OrderService.cs", NodeKind.Type);
+        var methodResults = engine.FindByFilePath("OrderService.cs", NodeKind.Method);
+
+        Assert.All(typeResults, n => Assert.Equal(NodeKind.Type, n.Kind));
+        Assert.All(methodResults, n => Assert.Equal(NodeKind.Method, n.Kind));
+    }
+
+    [Fact]
+    public void FindByFilePath_NonExistentFile_ReturnsEmpty()
+    {
+        var (nodes, edges, meta) = BuildTestGraph();
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        var results = engine.FindByFilePath("nonexistent/File.cs");
+
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void FindByFilePath_EmptyPath_ReturnsEmpty()
+    {
+        var (nodes, edges, meta) = BuildTestGraph();
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        var results = engine.FindByFilePath("");
+
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void FindByFilePath_BackslashNormalization_Works()
+    {
+        var (nodes, edges, meta) = BuildTestGraph();
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        var results = engine.FindByFilePath("src\\Services\\OrderService.cs");
+
+        Assert.True(results.Count >= 1);
+    }
+
+    // ── LooksLikeFilePath tests ──
+
+    [Theory]
+    [InlineData("src/OrderService.cs", true)]
+    [InlineData("OrderService.cs", true)]
+    [InlineData("src\\Services\\OrderService.cs", true)]
+    [InlineData("OrderService", false)]
+    [InlineData("type:OrderService", false)]
+    [InlineData("IOrder*", false)]
+    public void LooksLikeFilePath_DetectsCorrectly(string pattern, bool expected)
+    {
+        var result = QueryEngine.LooksLikeFilePath(pattern);
+        Assert.Equal(expected, result);
+    }
+
+    // ── Public Nodes/Edges/Metadata properties ──
+
+    [Fact]
+    public void PublicProperties_ExposeInternalData()
+    {
+        var (nodes, edges, meta) = BuildTestGraph();
+        var engine = new QueryEngine(nodes, edges, meta);
+
+        Assert.Same(nodes, engine.Nodes);
+        Assert.Same(edges, engine.Edges);
+        Assert.Same(meta, engine.Metadata);
+    }
 }

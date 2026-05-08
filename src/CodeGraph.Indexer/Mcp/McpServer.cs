@@ -1,8 +1,6 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using CodeGraph.Core.IO;
-using CodeGraph.Core.IO.Sqlite;
 using CodeGraph.Core.Models;
 using CodeGraph.Query;
 using CodeGraph.Query.Filters;
@@ -21,6 +19,7 @@ internal sealed class McpServer
     private readonly string _graphDir;
     private QueryEngine? _engine;
     private string? _lastSolutionFilter;
+    private readonly QuerySessionTracker _sessionTracker = new();
 
     internal McpServer(string graphDir)
     {
@@ -407,9 +406,74 @@ internal sealed class McpServer
             }
         };
 
+        var fileTool = new JsonObject
+        {
+            ["name"] = "codegraph_file",
+            ["description"] = "Find all symbols defined in a file path. Use when you know the file but not the symbol names.",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["path"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "File path (partial match OK, e.g., 'OrderService.cs')"
+                    },
+                    ["kind"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["enum"] = new JsonArray("type", "method", "all"),
+                        ["description"] = "Filter by node kind (default: type)"
+                    }
+                },
+                ["required"] = new JsonArray("path")
+            }
+        };
+
+        var batchTool = new JsonObject
+        {
+            ["name"] = "codegraph_batch",
+            ["description"] = "Query multiple symbols in one call. Returns combined results with shared context. More efficient than separate queries.",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["symbols"] = new JsonObject
+                    {
+                        ["type"] = "array",
+                        ["items"] = new JsonObject { ["type"] = "string" },
+                        ["description"] = "List of symbol names/patterns to query"
+                    },
+                    ["depth"] = new JsonObject
+                    {
+                        ["type"] = "integer",
+                        ["description"] = "Traversal depth (default: 1)",
+                        ["default"] = 1
+                    },
+                    ["format"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["enum"] = new JsonArray("compact", "context", "json", "text"),
+                        ["description"] = "Output format (default: compact)",
+                        ["default"] = "compact"
+                    },
+                    ["mode"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["enum"] = new JsonArray("focused", "structural", "all"),
+                        ["description"] = "Query traversal mode (default: focused)",
+                        ["default"] = "focused"
+                    }
+                },
+                ["required"] = new JsonArray("symbols")
+            }
+        };
+
         var result = new JsonObject
         {
-            ["tools"] = new JsonArray(tool, listTool, summaryTool, pathTool, impactTool, explainTool)
+            ["tools"] = new JsonArray(tool, listTool, summaryTool, pathTool, impactTool, explainTool, fileTool, batchTool)
         };
         return CreateResponse(id, result);
     }
@@ -427,6 +491,10 @@ internal sealed class McpServer
             return await HandleImpactCallAsync(id, parameters);
         if (toolName == "codegraph_explain")
             return await HandleExplainCallAsync(id, parameters);
+        if (toolName == "codegraph_file")
+            return await HandleFileCallAsync(id, parameters);
+        if (toolName == "codegraph_batch")
+            return await HandleBatchCallAsync(id, parameters);
         if (toolName != "codegraph_query")
             return CreateError(id, -32602, $"Unknown tool: {toolName}");
 
@@ -438,12 +506,23 @@ internal sealed class McpServer
         try
         {
             var solutionFilter = arguments?["solution"]?.GetValue<string>();
+            var engine = await GetOrLoadEngineAsync(solutionFilter);
 
-            // Reload engine if solution filter changed or on first load
-            if (_engine is null || solutionFilter != _lastSolutionFilter)
+            // If symbol looks like a file path, resolve to symbols first
+            string pattern;
+            if (QueryEngine.LooksLikeFilePath(symbol))
             {
-                _engine = await QueryEngine.LoadAsync(_graphDir, solutionFilter);
-                _lastSolutionFilter = solutionFilter;
+                var fileNodes = engine.FindByFilePath(symbol);
+                if (fileNodes.Count == 0)
+                    return CreateToolResult(id, $"No symbols found in file '{symbol}'.", true);
+                if (fileNodes.Count == 1)
+                    pattern = fileNodes[0].Id;
+                else
+                    pattern = "*" + Path.GetFileNameWithoutExtension(symbol) + "*";
+            }
+            else
+            {
+                pattern = symbol;
             }
 
             var depth = arguments?["depth"]?.GetValue<int>() ?? 1;
@@ -493,7 +572,7 @@ internal sealed class McpServer
 
             var options = new QueryOptions
             {
-                Pattern = symbol,
+                Pattern = pattern,
                 Depth = depth,
                 EdgeTypeFilter = edgeTypeFilter,
                 NamespaceFilter = ns,
@@ -504,13 +583,22 @@ internal sealed class McpServer
                 Format = outputFormat,
                 Mode = queryMode,
                 Budget = budget,
-                ConfidenceThreshold = minConfidence
+                ConfidenceThreshold = minConfidence,
+                IgnoreCase = true
             };
 
-            var result = _engine.Query(options);
+            var result = engine.Query(options);
+
+            // Record query in session tracker
+            _sessionTracker.Record(symbol, depth, result.MatchedNodes.Count);
 
             if (result.MatchedNodes.Count == 0)
-                return CreateToolResult(id, $"No nodes found matching '{symbol}'.", true);
+            {
+                var msg = $"No nodes found matching '{symbol}'.";
+                if (result.Suggestions.Count > 0)
+                    msg += $"\nDid you mean: {string.Join(", ", result.Suggestions)}";
+                return CreateToolResult(id, msg, true);
+            }
 
             var queryDesc = $"{symbol} --depth {depth} --kind {kind ?? "all"}";
             var output = outputFormat switch
@@ -525,6 +613,15 @@ internal sealed class McpServer
 
             var metrics = CompressionCalculator.Calculate(result, output);
             output = MetricsFormatter.AppendMetrics(output, metrics);
+
+            // Append cost metadata
+            output += $"\n[Cost: {metrics.NodeCount} nodes, {metrics.EdgeCount} edges, ~{metrics.OutputTokens} tokens]";
+
+            // Append session-aware suggestions
+            var suggestions = QuerySuggestionGenerator.Generate(result, options, session: _sessionTracker);
+            var hints = QuerySuggestionGenerator.FormatHints(suggestions);
+            if (!string.IsNullOrEmpty(hints))
+                output += hints;
 
             return CreateToolResult(id, output, false);
         }
@@ -549,8 +646,8 @@ internal sealed class McpServer
 
         try
         {
-            var (nodes, edges) = await LoadGraphDataAsync();
-            var finder = new PathFinder(nodes, edges);
+            var engine = await GetOrLoadEngineAsync();
+            var finder = new PathFinder(engine.Nodes, engine.Edges);
             var maxDepth = arguments?["maxDepth"]?.GetValue<int>() ?? 10;
             var result = finder.FindPath(from, to, maxDepth);
 
@@ -579,8 +676,8 @@ internal sealed class McpServer
 
         try
         {
-            var (nodes, edges) = await LoadGraphDataAsync();
-            var analyzer = new ImpactAnalyzer(nodes, edges);
+            var engine = await GetOrLoadEngineAsync();
+            var analyzer = new ImpactAnalyzer(engine.Nodes, engine.Edges);
             var depth = arguments?["depth"]?.GetValue<int>() ?? 3;
             var result = analyzer.Analyze(symbol, depth);
 
@@ -606,8 +703,8 @@ internal sealed class McpServer
 
         try
         {
-            var (nodes, edges) = await LoadGraphDataAsync();
-            var explainer = new SymbolExplainer(nodes, edges);
+            var engine = await GetOrLoadEngineAsync();
+            var explainer = new SymbolExplainer(engine.Nodes, engine.Edges);
             var result = explainer.Explain(symbol);
 
             if (result is null)
@@ -625,17 +722,166 @@ internal sealed class McpServer
         }
     }
 
-    private async Task<(Dictionary<string, GraphNode> Nodes, List<GraphEdge> Edges)> LoadGraphDataAsync()
+    private async Task<JsonNode> HandleFileCallAsync(JsonNode? id, JsonNode? parameters)
     {
-        var dbPath = Path.Combine(_graphDir, "graph.db");
-        if (File.Exists(dbPath))
-        {
-            var (_, nodes, edges) = await SqliteGraphReader.ReadAsync(dbPath);
-            return (nodes, edges);
-        }
+        var arguments = parameters?["arguments"];
+        var path = arguments?["path"]?.GetValue<string>();
 
-        var result = await GraphReader.ReadAsync(_graphDir);
-        return (result.Nodes, result.Edges);
+        if (string.IsNullOrEmpty(path))
+            return CreateToolError(id, "Missing required parameter: path");
+
+        try
+        {
+            var engine = await GetOrLoadEngineAsync();
+            var kindStr = arguments?["kind"]?.GetValue<string>() ?? "type";
+
+            NodeKind? kindFilter = kindStr.ToLowerInvariant() switch
+            {
+                "type" => NodeKind.Type,
+                "method" => NodeKind.Method,
+                "all" => null,
+                _ => NodeKind.Type
+            };
+
+            var nodes = engine.FindByFilePath(path, kindFilter);
+
+            if (nodes.Count == 0)
+                return CreateToolResult(id, $"No symbols found in file '{path}'.", true);
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"Symbols in '{path}' ({nodes.Count} found):");
+            sb.AppendLine();
+            foreach (var node in nodes.OrderBy(n => n.StartLine))
+            {
+                sb.AppendLine($"  {node.Kind}: {node.Id}");
+                if (!string.IsNullOrEmpty(node.Signature))
+                    sb.AppendLine($"    sig: {node.Signature}");
+                sb.AppendLine($"    lines: {node.StartLine}-{node.EndLine}");
+            }
+
+            return CreateToolResult(id, sb.ToString().TrimEnd(), false);
+        }
+        catch (FileNotFoundException ex)
+        {
+            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
+        }
+        catch (Exception ex)
+        {
+            return CreateToolError(id, ex.Message);
+        }
+    }
+
+    private async Task<JsonNode> HandleBatchCallAsync(JsonNode? id, JsonNode? parameters)
+    {
+        var arguments = parameters?["arguments"];
+        var symbolsNode = arguments?["symbols"]?.AsArray();
+
+        if (symbolsNode is null || symbolsNode.Count == 0)
+            return CreateToolError(id, "Missing required parameter: symbols (must be a non-empty array)");
+
+        try
+        {
+            var engine = await GetOrLoadEngineAsync();
+            var depth = arguments?["depth"]?.GetValue<int>() ?? 1;
+            var formatStr = arguments?["format"]?.GetValue<string>() ?? "compact";
+            var modeStr = arguments?["mode"]?.GetValue<string>();
+
+            var queryMode = modeStr?.ToLowerInvariant() switch
+            {
+                "focused" => QueryMode.Focused,
+                "structural" => QueryMode.Structural,
+                "all" => QueryMode.All,
+                _ => QueryMode.Focused
+            };
+
+            var outputFormat = formatStr.ToLowerInvariant() switch
+            {
+                "json" => OutputFormat.Json,
+                "text" => OutputFormat.Text,
+                "compact" => OutputFormat.Compact,
+                _ => OutputFormat.Context
+            };
+
+            // Run each symbol query against the same loaded engine, merge results
+            var mergedNodes = new Dictionary<string, GraphNode>();
+            var mergedEdges = new List<GraphEdge>();
+            var matchedNodes = new List<GraphNode>();
+            var edgeSet = new HashSet<(string, string, EdgeType)>();
+
+            foreach (var symbolNode in symbolsNode)
+            {
+                var sym = symbolNode?.GetValue<string>();
+                if (string.IsNullOrEmpty(sym)) continue;
+
+                var options = new QueryOptions
+                {
+                    Pattern = sym,
+                    Depth = depth,
+                    MaxNodes = 50,
+                    Rank = true,
+                    Mode = queryMode,
+                    Format = outputFormat
+                };
+
+                var result = engine.Query(options);
+                matchedNodes.AddRange(result.MatchedNodes);
+
+                foreach (var kvp in result.Nodes)
+                    mergedNodes.TryAdd(kvp.Key, kvp.Value);
+
+                foreach (var edge in result.Edges)
+                {
+                    var key = (edge.FromId, edge.ToId, edge.Type);
+                    if (edgeSet.Add(key))
+                        mergedEdges.Add(edge);
+                }
+            }
+
+            if (matchedNodes.Count == 0)
+            {
+                var symbols = string.Join(", ", symbolsNode.Select(s => s?.GetValue<string>()));
+                return CreateToolResult(id, $"No nodes found matching any of: {symbols}", true);
+            }
+
+            var mergedResult = new QueryResult
+            {
+                MatchedNodes = matchedNodes.DistinctBy(n => n.Id).ToList(),
+                Nodes = mergedNodes,
+                Edges = mergedEdges,
+                Metadata = engine.Metadata,
+                TotalMatchCount = matchedNodes.Count
+            };
+
+            var symbolsList = string.Join(", ", symbolsNode.Select(s => s?.GetValue<string>()));
+            var queryDesc = $"batch [{symbolsList}] --depth {depth}";
+            var output = outputFormat switch
+            {
+                OutputFormat.Json => JsonFormatter.Format(mergedResult),
+                OutputFormat.Text => TextFormatter.Format(mergedResult),
+                OutputFormat.Compact => CompactFormatter.Format(mergedResult),
+                _ => ContextFormatter.Format(mergedResult, queryDesc)
+            };
+
+            return CreateToolResult(id, output, false);
+        }
+        catch (FileNotFoundException ex)
+        {
+            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
+        }
+        catch (Exception ex)
+        {
+            return CreateToolError(id, ex.Message);
+        }
+    }
+
+    private async Task<QueryEngine> GetOrLoadEngineAsync(string? solutionFilter = null)
+    {
+        if (_engine is null || solutionFilter != _lastSolutionFilter)
+        {
+            _engine = await QueryEngine.LoadAsync(_graphDir, solutionFilter);
+            _lastSolutionFilter = solutionFilter;
+        }
+        return _engine;
     }
 
     private async Task<JsonNode> HandleListCallAsync(JsonNode? id, JsonNode? parameters)
@@ -647,24 +893,8 @@ internal sealed class McpServer
 
         try
         {
-            var dbPath = Path.Combine(_graphDir, "graph.db");
-            Dictionary<string, GraphNode> nodes;
-            List<GraphEdge> edges;
-
-            if (File.Exists(dbPath))
-            {
-                var (_, n, e) = await SqliteGraphReader.ReadAsync(dbPath);
-                nodes = n;
-                edges = e;
-            }
-            else
-            {
-                var (_, n, e) = await GraphReader.ReadAsync(_graphDir);
-                nodes = n;
-                edges = e;
-            }
-
-            var list = new ListEngine(nodes, edges);
+            var engine = await GetOrLoadEngineAsync();
+            var list = new ListEngine(engine.Nodes, engine.Edges);
             var sb = new StringBuilder();
 
             switch (scope)
@@ -721,27 +951,8 @@ internal sealed class McpServer
     {
         try
         {
-            var dbPath = Path.Combine(_graphDir, "graph.db");
-            Dictionary<string, GraphNode> nodes;
-            List<GraphEdge> edges;
-            GraphMetadata metadata;
-
-            if (File.Exists(dbPath))
-            {
-                var (m, n, e) = await SqliteGraphReader.ReadAsync(dbPath);
-                metadata = m;
-                nodes = n;
-                edges = e;
-            }
-            else
-            {
-                var (m, n, e) = await GraphReader.ReadAsync(_graphDir);
-                metadata = m;
-                nodes = n;
-                edges = e;
-            }
-
-            var report = ReportGenerator.Generate(nodes, edges, metadata);
+            var engine = await GetOrLoadEngineAsync();
+            var report = ReportGenerator.Generate(engine.Nodes, engine.Edges, engine.Metadata);
             return CreateToolResult(id, report, false);
         }
         catch (FileNotFoundException ex)

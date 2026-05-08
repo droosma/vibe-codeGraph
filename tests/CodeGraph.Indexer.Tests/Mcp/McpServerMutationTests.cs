@@ -680,7 +680,7 @@ public class McpServerMutationTests : IDisposable
         var response = await server.HandleMessageAsync(request);
 
         var tools = response!["result"]!["tools"]!.AsArray();
-        Assert.Equal(6, tools.Count);
+        Assert.Equal(8, tools.Count);
     }
 
     // ── tools/list tool names are exact ──

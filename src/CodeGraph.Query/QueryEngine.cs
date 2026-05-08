@@ -54,9 +54,13 @@ public class QueryEngine
 
     public List<GraphNode> FindByFilePath(string path, NodeKind? kindFilter = null)
     {
+        if (string.IsNullOrWhiteSpace(path))
+            return [];
+
+        var normalized = path.Replace('\\', '/');
         var results = _nodes.Values.Where(n =>
-            n.FilePath.Contains(path, StringComparison.OrdinalIgnoreCase) ||
-            n.FilePath.EndsWith(path, StringComparison.OrdinalIgnoreCase));
+            n.FilePath.Replace('\\', '/').Contains(normalized, StringComparison.OrdinalIgnoreCase) ||
+            n.FilePath.Replace('\\', '/').EndsWith(normalized, StringComparison.OrdinalIgnoreCase));
 
         if (kindFilter.HasValue)
             results = results.Where(n => n.Kind == kindFilter.Value);

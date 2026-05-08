@@ -48,6 +48,7 @@ static async Task<int> RunAsync(string[] args)
     var rank = !HasFlag(argList, "--no-rank");
     var graphDir = GetOption(argList, "--graph-dir", ".codegraph");
     var fromSolution = GetOption(argList, "--from", (string?)null);
+    var filePath = GetOption(argList, "--file", (string?)null);
     var confidenceStr = GetOption(argList, "--confidence", (string?)null);
 
     var outputFormat = format?.ToLowerInvariant() switch
@@ -89,6 +90,28 @@ static async Task<int> RunAsync(string[] args)
 
     // Staleness check
     CheckStaleness(graphDir);
+
+    // Handle --file query
+    if (filePath is not null)
+    {
+        var fileNodes = engine.FindByFilePath(filePath);
+        if (fileNodes.Count == 0)
+        {
+            Console.Error.WriteLine($"No nodes found in file '{filePath}'.");
+            return 1;
+        }
+
+        var fileResult = new QueryResult { MatchedNodes = fileNodes };
+        var fileOutput = outputFormat switch
+        {
+            OutputFormat.Json => JsonFormatter.Format(fileResult),
+            OutputFormat.Text => TextFormatter.Format(fileResult),
+            OutputFormat.Context => ContextFormatter.Format(fileResult, $"file:{filePath}"),
+            _ => ContextFormatter.Format(fileResult, $"file:{filePath}")
+        };
+        Console.WriteLine(fileOutput);
+        return 0;
+    }
 
     EdgeConfidence? minConfidence = confidenceStr?.ToLowerInvariant() switch
     {
@@ -325,6 +348,7 @@ static void PrintUsage()
           --confidence <level> Minimum confidence: verified, inferred, unresolved (default: all)
           --graph-dir <path>   Graph directory (default: .codegraph)
           --from <solution>    Query only the specified solution sub-graph (multi-solution)
+          --file <path>        Query by file path instead of symbol pattern
 
         Path options:
           --max-depth <n>      Maximum search depth (default: 10)

@@ -293,7 +293,7 @@ public class McpServerTests : IDisposable
     // ── tools/list ──
 
     [Fact]
-    public async Task ToolsList_Returns6Tools()
+    public async Task ToolsList_Returns8Tools()
     {
         var server = CreateServer();
         var request = MakeRequest("tools/list", id: JsonValue.Create(2));
@@ -302,7 +302,7 @@ public class McpServerTests : IDisposable
 
         Assert.NotNull(response);
         var tools = response!["result"]!["tools"]!.AsArray();
-        Assert.Equal(6, tools.Count);
+        Assert.Equal(8, tools.Count);
     }
 
     [Fact]
@@ -322,6 +322,8 @@ public class McpServerTests : IDisposable
         Assert.Contains("codegraph_path", names);
         Assert.Contains("codegraph_impact", names);
         Assert.Contains("codegraph_explain", names);
+        Assert.Contains("codegraph_file", names);
+        Assert.Contains("codegraph_batch", names);
     }
 
     [Fact]
@@ -1516,5 +1518,272 @@ public class McpServerTests : IDisposable
         var response = await server.HandleMessageAsync(request);
 
         Assert.NotNull(response);
+    }
+
+    // ── codegraph_file tool tests ──
+
+    [Fact]
+    public async Task ToolsCall_File_MissingPath_ReturnsError()
+    {
+        var server = CreateServer();
+        var request = MakeRequest("tools/call", id: JsonValue.Create(3),
+            @params: new JsonObject
+            {
+                ["name"] = "codegraph_file",
+                ["arguments"] = new JsonObject()
+            });
+
+        var response = await server.HandleMessageAsync(request);
+
+        Assert.NotNull(response);
+        var result = response!["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("path", text);
+    }
+
+    [Fact]
+    public async Task ToolsCall_File_ValidPath_ReturnsSymbols()
+    {
+        await WriteGraphDataAsync();
+        var server = CreateServer();
+        var request = MakeRequest("tools/call", id: JsonValue.Create(10),
+            @params: new JsonObject
+            {
+                ["name"] = "codegraph_file",
+                ["arguments"] = new JsonObject { ["path"] = "src/OrderService.cs" }
+            });
+
+        var response = await server.HandleMessageAsync(request);
+
+        Assert.NotNull(response);
+        var result = response!["result"]!;
+        Assert.False(result["isError"]!.GetValue<bool>());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("OrderService", text);
+    }
+
+    [Fact]
+    public async Task ToolsCall_File_PartialPath_ReturnsSymbols()
+    {
+        await WriteGraphDataAsync();
+        var server = CreateServer();
+        var request = MakeRequest("tools/call", id: JsonValue.Create(10),
+            @params: new JsonObject
+            {
+                ["name"] = "codegraph_file",
+                ["arguments"] = new JsonObject { ["path"] = "OrderService.cs" }
+            });
+
+        var response = await server.HandleMessageAsync(request);
+
+        Assert.NotNull(response);
+        var result = response!["result"]!;
+        Assert.False(result["isError"]!.GetValue<bool>());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("OrderService", text);
+    }
+
+    [Fact]
+    public async Task ToolsCall_File_WithKindFilter_ReturnsFilteredSymbols()
+    {
+        await WriteGraphDataAsync();
+        var server = CreateServer();
+        var request = MakeRequest("tools/call", id: JsonValue.Create(10),
+            @params: new JsonObject
+            {
+                ["name"] = "codegraph_file",
+                ["arguments"] = new JsonObject
+                {
+                    ["path"] = "OrderService.cs",
+                    ["kind"] = "method"
+                }
+            });
+
+        var response = await server.HandleMessageAsync(request);
+
+        Assert.NotNull(response);
+        var result = response!["result"]!;
+        Assert.False(result["isError"]!.GetValue<bool>());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("PlaceOrder", text);
+    }
+
+    [Fact]
+    public async Task ToolsCall_File_NonexistentPath_ReturnsError()
+    {
+        await WriteGraphDataAsync();
+        var server = CreateServer();
+        var request = MakeRequest("tools/call", id: JsonValue.Create(10),
+            @params: new JsonObject
+            {
+                ["name"] = "codegraph_file",
+                ["arguments"] = new JsonObject { ["path"] = "nonexistent/File.cs" }
+            });
+
+        var response = await server.HandleMessageAsync(request);
+
+        Assert.NotNull(response);
+        var result = response!["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("No symbols found", text);
+    }
+
+    // ── codegraph_batch tool tests ──
+
+    [Fact]
+    public async Task ToolsCall_Batch_MissingSymbols_ReturnsError()
+    {
+        var server = CreateServer();
+        var request = MakeRequest("tools/call", id: JsonValue.Create(3),
+            @params: new JsonObject
+            {
+                ["name"] = "codegraph_batch",
+                ["arguments"] = new JsonObject()
+            });
+
+        var response = await server.HandleMessageAsync(request);
+
+        Assert.NotNull(response);
+        var result = response!["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("symbols", text);
+    }
+
+    [Fact]
+    public async Task ToolsCall_Batch_ValidSymbols_ReturnsMergedResults()
+    {
+        await WriteGraphDataAsync();
+        var server = CreateServer();
+        var request = MakeRequest("tools/call", id: JsonValue.Create(10),
+            @params: new JsonObject
+            {
+                ["name"] = "codegraph_batch",
+                ["arguments"] = new JsonObject
+                {
+                    ["symbols"] = new JsonArray("OrderService", "IOrderRepository")
+                }
+            });
+
+        var response = await server.HandleMessageAsync(request);
+
+        Assert.NotNull(response);
+        var result = response!["result"]!;
+        Assert.False(result["isError"]!.GetValue<bool>());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("OrderService", text);
+        Assert.Contains("IOrderRepository", text);
+    }
+
+    [Fact]
+    public async Task ToolsCall_Batch_NoMatches_ReturnsError()
+    {
+        await WriteGraphDataAsync();
+        var server = CreateServer();
+        var request = MakeRequest("tools/call", id: JsonValue.Create(10),
+            @params: new JsonObject
+            {
+                ["name"] = "codegraph_batch",
+                ["arguments"] = new JsonObject
+                {
+                    ["symbols"] = new JsonArray("NonExistent1", "NonExistent2")
+                }
+            });
+
+        var response = await server.HandleMessageAsync(request);
+
+        Assert.NotNull(response);
+        var result = response!["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("No nodes found", text);
+    }
+
+    [Fact]
+    public async Task ToolsCall_Batch_WithFormat_ReturnsResult()
+    {
+        await WriteGraphDataAsync();
+        var server = CreateServer();
+        var request = MakeRequest("tools/call", id: JsonValue.Create(10),
+            @params: new JsonObject
+            {
+                ["name"] = "codegraph_batch",
+                ["arguments"] = new JsonObject
+                {
+                    ["symbols"] = new JsonArray("OrderService"),
+                    ["format"] = "json",
+                    ["depth"] = 1
+                }
+            });
+
+        var response = await server.HandleMessageAsync(request);
+
+        Assert.NotNull(response);
+        var result = response!["result"]!;
+        Assert.False(result["isError"]!.GetValue<bool>());
+    }
+
+    // ── codegraph_query file path support ──
+
+    [Fact]
+    public async Task ToolsCall_Query_FilePathSymbol_ResolvesToSymbols()
+    {
+        await WriteGraphDataAsync();
+        var server = CreateServer();
+        var request = MakeRequest("tools/call", id: JsonValue.Create(10),
+            @params: new JsonObject
+            {
+                ["name"] = "codegraph_query",
+                ["arguments"] = new JsonObject { ["symbol"] = "src/OrderService.cs" }
+            });
+
+        var response = await server.HandleMessageAsync(request);
+
+        Assert.NotNull(response);
+        var result = response!["result"]!;
+        Assert.False(result["isError"]!.GetValue<bool>());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("OrderService", text);
+    }
+
+    // ── shared graph cache tests ──
+
+    [Fact]
+    public async Task SharedCache_MultipleToolCalls_ReuseEngine()
+    {
+        await WriteGraphDataAsync();
+        var server = CreateServer();
+
+        // First call loads the engine
+        var request1 = MakeRequest("tools/call", id: JsonValue.Create(10),
+            @params: new JsonObject
+            {
+                ["name"] = "codegraph_query",
+                ["arguments"] = new JsonObject { ["symbol"] = "OrderService" }
+            });
+        var response1 = await server.HandleMessageAsync(request1);
+        Assert.False(response1!["result"]!["isError"]!.GetValue<bool>());
+
+        // Second call reuses the same engine (different tool)
+        var request2 = MakeRequest("tools/call", id: JsonValue.Create(11),
+            @params: new JsonObject
+            {
+                ["name"] = "codegraph_explain",
+                ["arguments"] = new JsonObject { ["symbol"] = "OrderService" }
+            });
+        var response2 = await server.HandleMessageAsync(request2);
+        Assert.False(response2!["result"]!["isError"]!.GetValue<bool>());
+
+        // Third call also reuses the cache (path tool)
+        var request3 = MakeRequest("tools/call", id: JsonValue.Create(12),
+            @params: new JsonObject
+            {
+                ["name"] = "codegraph_impact",
+                ["arguments"] = new JsonObject { ["symbol"] = "OrderService" }
+            });
+        var response3 = await server.HandleMessageAsync(request3);
+        Assert.False(response3!["result"]!["isError"]!.GetValue<bool>());
     }
 }
