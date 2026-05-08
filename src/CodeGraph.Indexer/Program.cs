@@ -1134,7 +1134,7 @@ static async Task<int> RunViewAsync(string[] args)
             case "--graph-dir" when i + 1 < args.Length:
                 graphDir = args[++i];
                 break;
-            case "--output" when i + 1 < args.Length:
+            case "--output" or "-o" when i + 1 < args.Length:
                 outputPath = args[++i];
                 break;
             case "--max-nodes" when i + 1 < args.Length:
@@ -1166,18 +1166,10 @@ static async Task<int> RunViewAsync(string[] args)
         return 1;
     }
 
-    string filePath;
-    if (outputPath is not null)
-    {
-        var dir = Path.GetDirectoryName(outputPath);
-        if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
-        filePath = outputPath;
-    }
-    else
-    {
-        filePath = Path.Combine(Path.GetTempPath(), $"codegraph-{Guid.NewGuid():N}.html");
-    }
+    var filePath = outputPath ?? Path.Combine(graphDir, "graph.html");
+    var outputDir = Path.GetDirectoryName(filePath);
+    if (!string.IsNullOrEmpty(outputDir))
+        Directory.CreateDirectory(outputDir);
 
     await File.WriteAllTextAsync(filePath, html);
     Console.WriteLine($"Graph visualization written to {filePath}");
