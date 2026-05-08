@@ -54,16 +54,18 @@ internal static class AgentTemplates
         | `--mode focused` | Only high-signal relationships — calls, inheritance, DI (MCP default) |
         | `--include-external` | Include NuGet/framework dependencies |
 
-        ## When to Use CodeGraph vs Grep
+        ## When to Use Each Tool
 
-        | Question Type | Use CodeGraph | Use Grep |
-        |--------------|---------------|----------|
-        | "What calls X?" | ✅ `--kind calls` | ❌ |
-        | "What implements IFoo?" | ✅ `--kind resolves-to` | ❌ |
-        | "How is X wired in DI?" | ✅ `--kind resolves-to` | ❌ |
-        | "What does the method body do?" | ❌ | ✅ view specific lines |
-        | "Find all TODO comments" | ❌ | ✅ grep |
-        | "What's the architecture?" | ✅ `list` + `report` | ❌ |
+        | Question pattern | Use |
+        |-----------------|-----|
+        | "What calls/implements/depends on X?" | `codegraph query` |
+        | "Find things related to <domain>" | `codegraph list types --assembly <name>` |
+        | "How are A and B connected?" | `codegraph path --from A --to B` |
+        | "What breaks if I change X?" | `codegraph impact <symbol>` |
+        | "What's the overall architecture?" | `codegraph summary` (or read REPORT.md) |
+        | "Tell me everything about X" | `codegraph explain <symbol>` |
+        | "What does this method body do?" | `grep`/`view` source files |
+        | "Find all TODO/FIXME comments" | `grep` |
         """;
 
     public const string ClaudeQueryWrapperSh = """
@@ -102,14 +104,17 @@ internal static class AgentTemplates
         codegraph report                                        # generate full report
         ```
 
-        ### When to Use CodeGraph vs Grep
+        ### When to Use Each Tool
 
-        | Question | Tool |
-        |----------|------|
-        | What calls X? / What does X depend on? | `codegraph query` |
-        | What implements interface Y? | `codegraph query Y --kind resolves-to` |
-        | What's the project architecture? | `codegraph list` + `codegraph report` |
-        | What does the method body do? | `grep` / `view` (read source) |
+        | Question pattern | Use |
+        |-----------------|-----|
+        | "What calls/implements/depends on X?" | `codegraph query` |
+        | "Find things related to <domain>" | `codegraph list types --assembly <name>` |
+        | "How are A and B connected?" | `codegraph path --from A --to B` |
+        | "What breaks if I change X?" | `codegraph impact <symbol>` |
+        | "What's the overall architecture?" | `codegraph summary` (or read REPORT.md) |
+        | "What does this method body do?" | `grep`/`view` source files |
+        | "Find all TODO/FIXME comments" | `grep` |
         """;
 
     public const string OpenCodeAgentsSection = """
@@ -189,6 +194,19 @@ internal static class AgentTemplates
         4. **Deepen** — increase `--depth` or add `--kind` filters to follow specific edges
         5. **Detail** — only grep/view specific source lines when you need method bodies
 
+        ## When to Use Each Tool
+
+        | Question pattern | Use |
+        |-----------------|-----|
+        | "What calls/implements/depends on X?" | `codegraph query` |
+        | "Find things related to <domain>" | `codegraph list types --assembly <name>` |
+        | "How are A and B connected?" | `codegraph path --from A --to B` |
+        | "What breaks if I change X?" | `codegraph impact <symbol>` |
+        | "What's the overall architecture?" | `codegraph summary` (or read REPORT.md) |
+        | "Tell me everything about X" | `codegraph explain <symbol>` |
+        | "What does this method body do?" | `grep`/`view` source files |
+        | "Find all TODO/FIXME comments" | `grep` |
+
         ## Commands
 
         ```bash
@@ -220,18 +238,6 @@ internal static class AgentTemplates
         | `--include-external` | Include NuGet/framework dependencies |
         | `--namespace <pat>` | Filter by namespace (wildcards ok) |
         | `--project <name>` | Filter by project/assembly |
-
-        ## When to Use CodeGraph vs Grep
-
-        | Question Type | Use CodeGraph | Use Grep/View |
-        |--------------|---------------|---------------|
-        | What calls method X? | ✅ `--kind calls` | ❌ |
-        | What implements IFoo? | ✅ `--kind resolves-to` | ❌ |
-        | How is X wired in DI? | ✅ `--kind resolves-to` | ❌ |
-        | What's the architecture? | ✅ `list` + `report` | ❌ |
-        | Type hierarchy of X? | ✅ `--kind inherits` | ❌ |
-        | What does the method body do? | ❌ | ✅ read source |
-        | Find string literals / comments | ❌ | ✅ grep |
 
         ## Rebuilding the Graph
 

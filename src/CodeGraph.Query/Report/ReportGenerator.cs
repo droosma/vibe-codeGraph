@@ -35,6 +35,25 @@ public static class ReportGenerator
             sb.AppendLine($"| {c.Assembly} | {c.NodeCount} | {c.InternalEdges} | {c.ExternalEdges} |");
         sb.AppendLine();
 
+        var domainClusters = DomainClusterAnalyzer.Detect(nodes, edges);
+        if (domainClusters.Count > 1)
+        {
+            sb.AppendLine("## Domain Clusters");
+            sb.AppendLine();
+            sb.AppendLine("| Domain | Assemblies | Key Types | Cross-domain connections |");
+            sb.AppendLine("|--------|-----------|-----------|------------------------|");
+            foreach (var dc in domainClusters)
+            {
+                var assemblies = string.Join(", ", dc.Assemblies);
+                var keyTypes = dc.KeyTypes.Count > 0 ? string.Join(", ", dc.KeyTypes) : "—";
+                var crossDomain = dc.CrossDomainConnections.Count > 0
+                    ? string.Join(", ", dc.CrossDomainConnections.Select(c => $"→ {c.TargetDomain} ({c.EdgeCount})"))
+                    : "—";
+                sb.AppendLine($"| {dc.Name} | {assemblies} | {keyTypes} | {crossDomain} |");
+            }
+            sb.AppendLine();
+        }
+
         var coverage = CoverageAnalyzer.Analyze(nodes, edges);
         if (coverage.Any(c => c.CoveredTypes > 0))
         {

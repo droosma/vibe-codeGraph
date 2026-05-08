@@ -5,7 +5,7 @@ namespace CodeGraph.Query.OutputFormatters;
 
 public static class CompactFormatter
 {
-    public static string Format(QueryResult result)
+    public static string Format(QueryResult result, bool includeSource = false)
     {
         var sb = new StringBuilder();
 
@@ -31,7 +31,7 @@ public static class CompactFormatter
             if (!result.Nodes.TryGetValue(targetId, out var targetNode))
                 continue;
 
-            AppendNodeBlock(sb, targetNode, targetIds, result, prefix);
+            AppendNodeBlock(sb, targetNode, targetIds, result, prefix, includeSource);
         }
 
         // Format remaining nodes (non-target matched)
@@ -65,7 +65,7 @@ public static class CompactFormatter
         return sb.ToString().TrimEnd();
     }
 
-    private static void AppendNodeBlock(StringBuilder sb, GraphNode node, HashSet<string> targetIds, QueryResult result, string prefix)
+    private static void AppendNodeBlock(StringBuilder sb, GraphNode node, HashSet<string> targetIds, QueryResult result, string prefix, bool includeSource)
     {
         // Node header: Name [kind, file:lines]
         var shortId = StripPrefix(node.Id, prefix);
@@ -76,6 +76,9 @@ public static class CompactFormatter
 
         if (!string.IsNullOrEmpty(node.DocComment))
             sb.AppendLine($"  {node.DocComment}");
+
+        if (includeSource)
+            AppendSourceSnippet(sb, node);
 
         // Group outgoing edges by type
         var outgoing = result.Edges
@@ -114,6 +117,46 @@ public static class CompactFormatter
         }
 
         sb.AppendLine();
+    }
+
+    private static void AppendSourceSnippet(StringBuilder sb, GraphNode node)
+    {
+        if (string.IsNullOrEmpty(node.FilePath) || node.StartLine <= 0 || node.EndLine <= 0)
+            return;
+
+        try
+        {
+            if (!File.Exists(node.FilePath))
+                return;
+
+            var lines = File.ReadLines(node.FilePath)
+                .Skip(node.StartLine - 1)
+                .Take(node.EndLine - node.StartLine + 1)
+                .ToList();
+
+            if (lines.Count == 0)
+                return;
+
+            sb.AppendLine("  ```csharp");
+            const int maxLines = 20;
+            const int previewLines = 15;
+            if (lines.Count <= maxLines)
+            {
+                foreach (var line in lines)
+                    sb.AppendLine($"  {line}");
+            }
+            else
+            {
+                foreach (var line in lines.Take(previewLines))
+                    sb.AppendLine($"  {line}");
+                sb.AppendLine($"  // ... ({lines.Count - previewLines} more lines)");
+            }
+            sb.AppendLine("  ```");
+        }
+        catch
+        {
+            // File read failure is non-fatal
+        }
     }
 
     private static void AppendCompactNode(StringBuilder sb, GraphNode node, string prefix)

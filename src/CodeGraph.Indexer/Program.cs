@@ -33,7 +33,9 @@ static async Task<int> RunAsync(string[] args)
         "index" => await RunIndexAsync(args),
         "init" => await RunInitAsync(args),
         "query" => await RunQueryAsync(args),
+        "compare" => await RunCompareAsync(args),
         "list" => await RunListAsync(args),
+        "search" => await RunSearchAsync(args),
         "diff" => await RunDiffAsync(args),
         "export" => await RunExportAsync(args),
         "report" => await RunReportAsync(args),
@@ -80,6 +82,7 @@ static async Task<int> RunQueryAsync(string[] args)
     var mode = GetOption(argList, "--mode", "all");
     var maxNodes = GetOption(argList, "--max-nodes", 50);
     var includeExternal = HasFlag(argList, "--include-external");
+    var includeSource = HasFlag(argList, "--include-source");
     var rank = !HasFlag(argList, "--no-rank");
     var noMetrics = HasFlag(argList, "--no-metrics");
     var graphDir = GetOption(argList, "--graph-dir", ".codegraph");
@@ -161,9 +164,9 @@ static async Task<int> RunQueryAsync(string[] args)
     {
         OutputFormat.Json => JsonFormatter.Format(result),
         OutputFormat.Text => TextFormatter.Format(result),
-        OutputFormat.Context => ContextFormatter.Format(result, queryDesc),
-        OutputFormat.Compact => CompactFormatter.Format(result),
-        _ => ContextFormatter.Format(result, queryDesc)
+        OutputFormat.Context => ContextFormatter.Format(result, queryDesc, includeSource),
+        OutputFormat.Compact => CompactFormatter.Format(result, includeSource),
+        _ => ContextFormatter.Format(result, queryDesc, includeSource)
     };
 
     output = BudgetTruncator.Apply(output, budget);
@@ -182,6 +185,28 @@ static async Task<int> RunQueryAsync(string[] args)
     if (!string.IsNullOrEmpty(hints))
         Console.Error.WriteLine(hints);
 
+    return 0;
+}
+
+static async Task<int> RunCompareAsync(string[] args)
+{
+    var argList = args.Skip(1).ToList();
+
+    if (argList.Count < 2 || HasFlag(argList, "-h") || HasFlag(argList, "--help"))
+    {
+        PrintCompareUsage();
+        return 1;
+    }
+
+    var symbolA = argList[0];
+    var symbolB = argList[1];
+    var depth = GetOption(argList, "--depth", 1);
+    var graphDir = GetOption(argList, "--graph-dir", ".codegraph");
+
+    var engine = await QueryEngine.LoadAsync(graphDir);
+    var result = engine.Compare(symbolA, symbolB, depth);
+    var output = CompareFormatter.Format(result);
+    Console.WriteLine(output);
     return 0;
 }
 
@@ -213,7 +238,9 @@ static async Task<int> RunListAsync(string[] args)
         argList.RemoveAt(0);
 
     var assemblyFilter = GetOption(argList, "--assembly", (string?)null);
-    var top = GetOption(argList, "--top", 20);
+    var top = GetOption(argList, "--top", 50);
+    var skip = GetOption(argList, "--skip", 0);
+    var filter = GetOption(argList, "--filter", (string?)null);
     var graphDir = GetOption(argList, "--graph-dir", ".codegraph");
 
     Dictionary<string, GraphNode> nodes;
@@ -255,11 +282,13 @@ static async Task<int> RunListAsync(string[] args)
             break;
 
         case "types":
-            var types = list.ListTypes(assemblyFilter, top);
+            var result = list.ListTypes(assemblyFilter, top, skip, filter);
             Console.WriteLine($"{"Type",-50} {"In",4} {"Out",4} {"Assembly",-20}");
             Console.WriteLine(new string('-', 80));
-            foreach (var t in types)
+            foreach (var t in result.Types)
                 Console.WriteLine($"{t.Name,-50} {t.InDegree,4} {t.OutDegree,4} {t.Assembly,-20}");
+            var endIndex = Math.Min(skip + top, result.TotalCount);
+            Console.WriteLine($"\nShowing {skip + 1}-{endIndex} of {result.TotalCount:N0} types. Use --skip {endIndex} for next page.");
             break;
 
         case "interfaces":
@@ -281,6 +310,63 @@ static async Task<int> RunListAsync(string[] args)
         default:
             Console.Error.WriteLine($"Unknown list scope: {scope}. Use: assemblies, types, interfaces, namespaces");
             return 1;
+    }
+
+    return 0;
+}
+
+static async Task<int> RunSearchAsync(string[] args)
+{
+    var argList = args.Skip(1).ToList();
+
+    if (argList.Count == 0 || argList[0] is "-h" or "--help")
+    {
+        PrintSearchUsage();
+        return argList.Count == 0 ? 1 : 0;
+    }
+
+    var query = argList[0];
+    argList.RemoveAt(0);
+
+    var top = GetOption(argList, "--top", 20);
+    var kindStr = GetOption(argList, "--kind", (string?)null);
+    var graphDir = GetOption(argList, "--graph-dir", ".codegraph");
+
+    NodeKind? kindFilter = kindStr?.ToLowerInvariant() switch
+    {
+        "type" => NodeKind.Type,
+        "method" => NodeKind.Method,
+        "namespace" => NodeKind.Namespace,
+        "property" => NodeKind.Property,
+        "field" => NodeKind.Field,
+        _ => null
+    };
+
+    try
+    {
+        var engine = await QueryEngine.LoadAsync(graphDir);
+        var results = engine.Search(query, top, kindFilter);
+
+        if (results.Count == 0)
+        {
+            Console.WriteLine($"No results for '{query}'.");
+            return 0;
+        }
+
+        foreach (var node in results)
+        {
+            var ns = node.ContainingNamespaceId ?? "";
+            var filePart = !string.IsNullOrEmpty(node.FilePath) ? $" ({node.FilePath})" : "";
+            Console.WriteLine($"[{node.Kind}] {node.Name}  ns={ns}{filePart}");
+        }
+
+        Console.WriteLine($"\n{results.Count} result(s) for '{query}'.");
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
+        return 1;
     }
 
     return 0;
@@ -1506,7 +1592,9 @@ static void PrintUsage()
     Console.WriteLine("  codegraph init [--agent <name>] [--solution <path.sln>] [--force]");
     Console.WriteLine("  codegraph index --solution <path.sln> [options]");
     Console.WriteLine("  codegraph query <symbol> [options]");
+    Console.WriteLine("  codegraph compare <symbolA> <symbolB> [options]");
     Console.WriteLine("  codegraph list [scope] [options]");
+    Console.WriteLine("  codegraph search <query> [--top N] [--kind type]");
     Console.WriteLine("  codegraph diff [options]");
     Console.WriteLine("  codegraph export [--graph-dir <dir>] [--output <dir>]");
     Console.WriteLine("  codegraph report [--graph-dir <dir>] [--output <path>]");
@@ -1519,7 +1607,9 @@ static void PrintUsage()
     Console.WriteLine("  init                     Initialize config, MCP, and agent skill files");
     Console.WriteLine("  index                    Build the code graph from a solution");
     Console.WriteLine("  query                    Query the code graph for symbols and relationships");
+    Console.WriteLine("  compare                  Compare two symbols structurally");
     Console.WriteLine("  list                     Browse the code graph hierarchy (assemblies, types, etc.)");
+    Console.WriteLine("  search                   Search for symbols by name, namespace, or file path");
     Console.WriteLine("  diff                     Compare graph snapshots and report structural changes");
     Console.WriteLine("  export                   Export graph from SQLite database to JSON files");
     Console.WriteLine("  report                   Generate a markdown report analyzing the graph");
@@ -1544,7 +1634,24 @@ static void PrintListUsage()
 
         Options:
           --assembly <name>      Filter by assembly name (types, interfaces, namespaces)
-          --top <n>              Max items to return (default: 20, types only)
+          --top <n>              Max items to return (default: 50, types only)
+          --skip <n>             Skip N results for pagination (types only)
+          --filter <pattern>     Filter by name substring, case-insensitive (types only)
+          --graph-dir <path>     Graph directory (default: .codegraph)
+        """);
+}
+
+static void PrintSearchUsage()
+{
+    Console.WriteLine("""
+        Usage: codegraph search <query> [options]
+
+        Searches across type names, namespace names, file paths, and method names
+        using case-insensitive substring matching.
+
+        Options:
+          --top <n>              Max results to return (default: 20)
+          --kind <kind>          Filter by node kind: type, method, namespace, property, field
           --graph-dir <path>     Graph directory (default: .codegraph)
         """);
 }
@@ -1686,11 +1793,26 @@ static void PrintQueryUsage()
           --format <fmt>       json | text | context (default: context)
           --max-nodes <n>      Cap output size (default: 50)
           --include-external   Include external dependency nodes
+          --include-source     Embed source code snippets in output
           --no-rank            Disable result ranking
           --graph-dir <path>   Graph directory (default: .codegraph)
           --from <solution>    Query only the specified solution sub-graph (multi-solution)
           --budget <tokens>    Maximum token budget for output (truncates with hint)
           --no-metrics         Suppress the compression metrics footer
+        """);
+}
+
+static void PrintCompareUsage()
+{
+    Console.WriteLine("""
+        Usage: codegraph compare <symbolA> <symbolB> [options]
+
+        Compare two symbols structurally. Shows shared interfaces, base types,
+        dependencies, and unique relationships for each symbol.
+
+        Options:
+          --depth <n>          Traversal depth (default: 1)
+          --graph-dir <path>   Graph directory (default: .codegraph)
         """);
 }
 

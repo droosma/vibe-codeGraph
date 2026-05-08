@@ -30,15 +30,18 @@ public class ListEngine
 			.ToList();
 	}
 
-	/// <summary>List types, optionally filtered by assembly.</summary>
-	public List<TypeInfo> ListTypes(string? assemblyFilter = null, int top = 20)
+	/// <summary>List types, optionally filtered by assembly, with pagination and name filtering.</summary>
+	public ListTypesResult ListTypes(string? assemblyFilter = null, int top = 20, int skip = 0, string? filter = null)
 	{
 		var types = _nodes.Values.Where(n => n.Kind == NodeKind.Type);
 
 		if (!string.IsNullOrEmpty(assemblyFilter))
 			types = types.Where(n => n.AssemblyName.Equals(assemblyFilter, StringComparison.OrdinalIgnoreCase));
 
-		return types.Select(t => new TypeInfo
+		if (!string.IsNullOrEmpty(filter))
+			types = types.Where(n => n.Name.Contains(filter, StringComparison.OrdinalIgnoreCase));
+
+		var ranked = types.Select(t => new TypeInfo
 			{
 				Id = t.Id,
 				Name = t.Name,
@@ -47,8 +50,18 @@ public class ListEngine
 				OutDegree = _edges.Count(e => e.FromId == t.Id)
 			})
 			.OrderByDescending(t => t.InDegree + t.OutDegree)
-			.Take(top)
 			.ToList();
+
+		var totalCount = ranked.Count;
+		var page = ranked.Skip(skip).Take(top).ToList();
+
+		return new ListTypesResult
+		{
+			Types = page,
+			TotalCount = totalCount,
+			Skip = skip,
+			Top = top
+		};
 	}
 
 	/// <summary>List all interfaces with implementation counts.</summary>
@@ -124,4 +137,12 @@ public record NamespaceInfo
 	public int TypeCount { get; init; }
 	public int MethodCount { get; init; }
 	public int TotalCount { get; init; }
+}
+
+public record ListTypesResult
+{
+	public List<TypeInfo> Types { get; init; } = [];
+	public int TotalCount { get; init; }
+	public int Skip { get; init; }
+	public int Top { get; init; }
 }

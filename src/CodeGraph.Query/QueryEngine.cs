@@ -46,6 +46,31 @@ public class QueryEngine
     public List<GraphEdge> Edges => _edges;
     public GraphMetadata Metadata => _metadata;
 
+    /// <summary>
+    /// Search across all nodes by name, ID, file path, or namespace using case-insensitive substring matching.
+    /// Results prioritize types over other kinds, then shorter names (more relevant).
+    /// </summary>
+    public List<GraphNode> Search(string query, int maxResults = 20, NodeKind? kindFilter = null)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return [];
+
+        var results = _nodes.Values
+            .Where(n => n.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                        n.Id.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                        (n.FilePath?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                        (n.ContainingNamespaceId?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false));
+
+        if (kindFilter.HasValue)
+            results = results.Where(n => n.Kind == kindFilter.Value);
+
+        return results
+            .OrderByDescending(n => n.Kind == NodeKind.Type ? 1 : 0)
+            .ThenBy(n => n.Name.Length)
+            .Take(maxResults)
+            .ToList();
+    }
+
     public static bool LooksLikeFilePath(string value)
     {
         if (string.IsNullOrEmpty(value)) return false;
@@ -358,6 +383,77 @@ public class QueryEngine
         return new QueryCostEstimate(nodeCount, edgeCount, tokensCompact, tokensContext);
     }
 
+    /// <summary>
+    /// Compare two symbols structurally. Shows shared interfaces/bases, unique dependencies,
+    /// different edge patterns, and structural similarities/differences.
+    /// </summary>
+    public CompareResult Compare(string patternA, string patternB, int depth = 1)
+    {
+        var nodesA = FindMatchingNodes(patternA);
+        var nodesB = FindMatchingNodes(patternB);
+
+        var nodeA = nodesA.FirstOrDefault();
+        var nodeB = nodesB.FirstOrDefault();
+
+        if (nodeA is null && nodeB is null)
+            return new CompareResult(null, null, [], [], [], [], []);
+
+        // Gather edges for each symbol at the given depth
+        var seedIdsA = nodesA.Select(n => n.Id).ToList();
+        var seedIdsB = nodesB.Select(n => n.Id).ToList();
+
+        var reachableA = DepthFilter.Traverse(seedIdsA, _outgoing, _incoming, depth, false, null);
+        var reachableB = DepthFilter.Traverse(seedIdsB, _outgoing, _incoming, depth, false, null);
+
+        var edgesA = _edges
+            .Where(e => reachableA.Contains(e.FromId) && reachableA.Contains(e.ToId))
+            .ToList();
+        var edgesB = _edges
+            .Where(e => reachableB.Contains(e.FromId) && reachableB.Contains(e.ToId))
+            .ToList();
+
+        // Normalize edges for comparison: compare by (Type, ToId) for outgoing from seeds
+        var outgoingA = edgesA
+            .Where(e => seedIdsA.Contains(e.FromId))
+            .ToList();
+        var outgoingB = edgesB
+            .Where(e => seedIdsB.Contains(e.FromId))
+            .ToList();
+
+        // Edges are "shared" if they have the same target and type
+        var edgeKeyA = outgoingA.Select(e => (e.Type, e.ToId)).ToHashSet();
+        var edgeKeyB = outgoingB.Select(e => (e.Type, e.ToId)).ToHashSet();
+
+        var sharedKeys = edgeKeyA.Intersect(edgeKeyB).ToHashSet();
+        var sharedEdges = outgoingA.Where(e => sharedKeys.Contains((e.Type, e.ToId))).ToList();
+        var uniqueToA = outgoingA.Where(e => !sharedKeys.Contains((e.Type, e.ToId))).ToList();
+        var uniqueToB = outgoingB.Where(e => !sharedKeys.Contains((e.Type, e.ToId))).ToList();
+
+        // Find shared interfaces (both implement the same interface)
+        var interfacesA = edgesA
+            .Where(e => e.Type == EdgeType.Implements && seedIdsA.Contains(e.FromId))
+            .Select(e => e.ToId)
+            .ToHashSet();
+        var interfacesB = edgesB
+            .Where(e => e.Type == EdgeType.Implements && seedIdsB.Contains(e.FromId))
+            .Select(e => e.ToId)
+            .ToHashSet();
+        var sharedInterfaces = interfacesA.Intersect(interfacesB).OrderBy(x => x).ToList();
+
+        // Find shared base classes
+        var basesA = edgesA
+            .Where(e => e.Type == EdgeType.Inherits && seedIdsA.Contains(e.FromId))
+            .Select(e => e.ToId)
+            .ToHashSet();
+        var basesB = edgesB
+            .Where(e => e.Type == EdgeType.Inherits && seedIdsB.Contains(e.FromId))
+            .Select(e => e.ToId)
+            .ToHashSet();
+        var sharedBases = basesA.Intersect(basesB).OrderBy(x => x).ToList();
+
+        return new CompareResult(nodeA, nodeB, sharedEdges, uniqueToA, uniqueToB, sharedInterfaces, sharedBases);
+    }
+
     private List<GraphNode> FindMatchingNodes(string pattern)
     {
         if (string.IsNullOrWhiteSpace(pattern))
@@ -483,3 +579,12 @@ public record QueryResult
     public int TotalMatchCount { get; init; }
     public List<string> Suggestions { get; init; } = new();
 }
+
+public record CompareResult(
+    GraphNode? NodeA,
+    GraphNode? NodeB,
+    List<GraphEdge> SharedEdges,
+    List<GraphEdge> UniqueToA,
+    List<GraphEdge> UniqueToB,
+    List<string> SharedInterfaces,
+    List<string> SharedBases);

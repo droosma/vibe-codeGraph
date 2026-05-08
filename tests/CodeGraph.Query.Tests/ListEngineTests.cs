@@ -88,8 +88,8 @@ public class ListEngineTests
 
 		var result = engine.ListTypes(top: 100);
 
-		Assert.Equal(4, result.Count);
-		Assert.All(result, t => Assert.NotEmpty(t.Name));
+		Assert.Equal(4, result.Types.Count);
+		Assert.All(result.Types, t => Assert.NotEmpty(t.Name));
 	}
 
 	[Fact]
@@ -100,8 +100,8 @@ public class ListEngineTests
 
 		var result = engine.ListTypes(assemblyFilter: "MyApp.Data", top: 100);
 
-		Assert.Equal(2, result.Count);
-		Assert.All(result, t => Assert.Equal("MyApp.Data", t.Assembly));
+		Assert.Equal(2, result.Types.Count);
+		Assert.All(result.Types, t => Assert.Equal("MyApp.Data", t.Assembly));
 	}
 
 	[Fact]
@@ -112,7 +112,7 @@ public class ListEngineTests
 
 		var result = engine.ListTypes(top: 2);
 
-		Assert.Equal(2, result.Count);
+		Assert.Equal(2, result.Types.Count);
 	}
 
 	[Fact]
@@ -178,7 +178,7 @@ public class ListEngineTests
 		var engine = new ListEngine(nodes, edges);
 
 		Assert.Empty(engine.ListAssemblies());
-		Assert.Empty(engine.ListTypes());
+		Assert.Empty(engine.ListTypes().Types);
 		Assert.Empty(engine.ListInterfaces());
 		Assert.Empty(engine.ListNamespaces());
 	}
@@ -235,11 +235,11 @@ public class ListEngineTests
 		var result = engine.ListTypes(top: 100);
 
 		// Both have total degree 2, but let's verify they are both present with correct degrees
-		var highDeg = result.Single(t => t.Name == "HighDeg");
+		var highDeg = result.Types.Single(t => t.Name == "HighDeg");
 		Assert.Equal(0, highDeg.InDegree);
 		Assert.Equal(2, highDeg.OutDegree);
 
-		var lowDeg = result.Single(t => t.Name == "LowDeg");
+		var lowDeg = result.Types.Single(t => t.Name == "LowDeg");
 		Assert.Equal(2, lowDeg.InDegree);
 		Assert.Equal(0, lowDeg.OutDegree);
 	}
@@ -257,7 +257,7 @@ public class ListEngineTests
 
 		var result = engine.ListTypes();
 
-		Assert.Equal(20, result.Count);
+		Assert.Equal(20, result.Types.Count);
 	}
 
 	[Fact]
@@ -268,8 +268,8 @@ public class ListEngineTests
 
 		var result = engine.ListTypes(assemblyFilter: "myapp.data", top: 100);
 
-		Assert.Equal(2, result.Count);
-		Assert.All(result, t => Assert.Equal("MyApp.Data", t.Assembly));
+		Assert.Equal(2, result.Types.Count);
+		Assert.All(result.Types, t => Assert.Equal("MyApp.Data", t.Assembly));
 	}
 
 	[Fact]
@@ -280,7 +280,7 @@ public class ListEngineTests
 
 		var result = engine.ListTypes(top: 100);
 
-		var orderService = result.Single(t => t.Name == "OrderService");
+		var orderService = result.Types.Single(t => t.Name == "OrderService");
 		Assert.Equal("MyApp.Services.OrderService", orderService.Id);
 		Assert.Equal("MyApp.Services", orderService.Assembly);
 	}
@@ -434,7 +434,7 @@ public class ListEngineTests
 
 		var result = engine.ListTypes(top: 0);
 
-		Assert.Empty(result);
+		Assert.Empty(result.Types);
 	}
 
 	[Fact]
@@ -445,6 +445,96 @@ public class ListEngineTests
 
 		var result = engine.ListTypes(top: 1);
 
-		Assert.Single(result);
+		Assert.Single(result.Types);
+	}
+
+	[Fact]
+	public void ListTypes_SkipPagination_ReturnsCorrectPage()
+	{
+		var nodes = new Dictionary<string, GraphNode>();
+		for (int i = 0; i < 10; i++)
+		{
+			var id = $"T{i}";
+			nodes[id] = new GraphNode { Id = id, Name = $"Type{i}", Kind = NodeKind.Type, AssemblyName = "Asm" };
+		}
+		var engine = new ListEngine(nodes, new List<GraphEdge>());
+
+		var page1 = engine.ListTypes(top: 3, skip: 0);
+		var page2 = engine.ListTypes(top: 3, skip: 3);
+
+		Assert.Equal(3, page1.Types.Count);
+		Assert.Equal(3, page2.Types.Count);
+		Assert.Equal(10, page1.TotalCount);
+		Assert.Equal(10, page2.TotalCount);
+		Assert.Equal(0, page1.Skip);
+		Assert.Equal(3, page2.Skip);
+		// Pages should not overlap
+		Assert.Empty(page1.Types.Select(t => t.Id).Intersect(page2.Types.Select(t => t.Id)));
+	}
+
+	[Fact]
+	public void ListTypes_FilterByName_ReturnsMatchingTypes()
+	{
+		var (nodes, edges) = BuildTestGraph();
+		var engine = new ListEngine(nodes, edges);
+
+		var result = engine.ListTypes(filter: "Order", top: 100);
+
+		Assert.Equal(4, result.Types.Count);
+		Assert.All(result.Types, t => Assert.Contains("Order", t.Name));
+	}
+
+	[Fact]
+	public void ListTypes_FilterIsCaseInsensitive()
+	{
+		var (nodes, edges) = BuildTestGraph();
+		var engine = new ListEngine(nodes, edges);
+
+		var result = engine.ListTypes(filter: "order", top: 100);
+
+		Assert.Equal(4, result.Types.Count);
+	}
+
+	[Fact]
+	public void ListTypes_FilterWithNoMatch_ReturnsEmpty()
+	{
+		var (nodes, edges) = BuildTestGraph();
+		var engine = new ListEngine(nodes, edges);
+
+		var result = engine.ListTypes(filter: "ZZZnonexistent", top: 100);
+
+		Assert.Empty(result.Types);
+		Assert.Equal(0, result.TotalCount);
+	}
+
+	[Fact]
+	public void ListTypes_PaginationFooterValues_AreCorrect()
+	{
+		var nodes = new Dictionary<string, GraphNode>();
+		for (int i = 0; i < 100; i++)
+		{
+			var id = $"T{i}";
+			nodes[id] = new GraphNode { Id = id, Name = $"Type{i}", Kind = NodeKind.Type, AssemblyName = "Asm" };
+		}
+		var engine = new ListEngine(nodes, new List<GraphEdge>());
+
+		var result = engine.ListTypes(top: 50, skip: 0);
+
+		Assert.Equal(50, result.Types.Count);
+		Assert.Equal(100, result.TotalCount);
+		Assert.Equal(0, result.Skip);
+		Assert.Equal(50, result.Top);
+	}
+
+	[Fact]
+	public void ListTypes_SkipBeyondTotal_ReturnsEmpty()
+	{
+		var (nodes, edges) = BuildTestGraph();
+		var engine = new ListEngine(nodes, edges);
+
+		var result = engine.ListTypes(top: 10, skip: 1000);
+
+		Assert.Empty(result.Types);
+		Assert.Equal(4, result.TotalCount);
 	}
 }

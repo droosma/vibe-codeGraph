@@ -293,7 +293,7 @@ public class McpServerTests : IDisposable
     // ── tools/list ──
 
     [Fact]
-    public async Task ToolsList_Returns8Tools()
+    public async Task ToolsList_Returns10Tools()
     {
         var server = CreateServer();
         var request = MakeRequest("tools/list", id: JsonValue.Create(2));
@@ -302,7 +302,7 @@ public class McpServerTests : IDisposable
 
         Assert.NotNull(response);
         var tools = response!["result"]!["tools"]!.AsArray();
-        Assert.Equal(8, tools.Count);
+        Assert.Equal(10, tools.Count);
     }
 
     [Fact]
@@ -319,11 +319,26 @@ public class McpServerTests : IDisposable
         Assert.Contains("codegraph_query", names);
         Assert.Contains("codegraph_list", names);
         Assert.Contains("codegraph_summary", names);
+        Assert.Contains("codegraph_search", names);
         Assert.Contains("codegraph_path", names);
         Assert.Contains("codegraph_impact", names);
         Assert.Contains("codegraph_explain", names);
         Assert.Contains("codegraph_file", names);
         Assert.Contains("codegraph_batch", names);
+        Assert.Contains("codegraph_compare", names);
+    }
+
+    [Fact]
+    public async Task ToolsList_SummaryToolIsFirst()
+    {
+        var server = CreateServer();
+        var request = MakeRequest("tools/list", id: JsonValue.Create(2));
+
+        var response = await server.HandleMessageAsync(request);
+
+        var tools = response!["result"]!["tools"]!.AsArray();
+        var firstName = tools[0]!["name"]!.GetValue<string>();
+        Assert.Equal("codegraph_summary", firstName);
     }
 
     [Fact]

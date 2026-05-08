@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeGraph.Core.Models;
@@ -212,7 +212,7 @@ internal sealed class McpServer
         var tool = new JsonObject
         {
             ["name"] = "codegraph_query",
-            ["description"] = "Query the semantic code graph for symbol relationships, call chains, dependencies, implementations, DI wiring, and test coverage. Use this instead of grep/search for structural code questions.",
+            ["description"] = "Query the code graph for structural relationships (calls, implements, DI wiring, inheritance). TIP: Start with codegraph_summary for orientation, then use this for specific symbols. BEST FOR: 'What calls X?', 'What implements Y?', 'How is Z wired in DI?' NOT FOR: Reading method bodies, finding string literals, broad text search — use file reading/grep for those.",
             ["inputSchema"] = new JsonObject
             {
                 ["type"] = "object",
@@ -286,6 +286,12 @@ internal sealed class McpServer
                     {
                         ["type"] = "integer",
                         ["description"] = "Maximum token budget for output. Output is truncated with a hint when exceeded."
+                    },
+                    ["include_source"] = new JsonObject
+                    {
+                        ["type"] = "boolean",
+                        ["description"] = "Embed source code snippets (up to 20 lines) for each node in the output",
+                        ["default"] = false
                     }
                 },
                 ["required"] = new JsonArray("symbol")
@@ -295,7 +301,7 @@ internal sealed class McpServer
         var listTool = new JsonObject
         {
             ["name"] = "codegraph_list",
-            ["description"] = "Browse the code graph hierarchy. Use before querying to orient yourself.",
+            ["description"] = "Browse the code graph hierarchy. Use to discover assemblies, types, interfaces, or namespaces. BEST FOR: 'What projects exist?', 'What types are in module X?' NOT FOR: Searching inside method bodies or comments — use grep for those.",
             ["inputSchema"] = new JsonObject
             {
                 ["type"] = "object",
@@ -315,7 +321,19 @@ internal sealed class McpServer
                     ["top"] = new JsonObject
                     {
                         ["type"] = "integer",
-                        ["description"] = "Max items to return (default: 20)"
+                        ["description"] = "Max results (default: 50)",
+                        ["default"] = 50
+                    },
+                    ["skip"] = new JsonObject
+                    {
+                        ["type"] = "integer",
+                        ["description"] = "Skip N results for pagination",
+                        ["default"] = 0
+                    },
+                    ["filter"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Filter by name substring (case-insensitive)"
                     }
                 }
             }
@@ -324,7 +342,7 @@ internal sealed class McpServer
         var summaryTool = new JsonObject
         {
             ["name"] = "codegraph_summary",
-            ["description"] = "Generate a summary report of the code graph: hub types, assembly boundaries, test coverage, and suggested queries. Use to get an overview of the codebase structure.",
+            ["description"] = "Get architectural overview of the codebase (hub types, domain clusters, suggested queries). READ THIS FIRST before other queries — it provides free orientation that saves multiple discovery calls.",
             ["inputSchema"] = new JsonObject
             {
                 ["type"] = "object",
@@ -335,7 +353,7 @@ internal sealed class McpServer
         var pathTool = new JsonObject
         {
             ["name"] = "codegraph_path",
-            ["description"] = "Find the shortest dependency path between two symbols in the code graph. Use to understand how two symbols are connected through calls, inheritance, or other relationships.",
+            ["description"] = "Find the shortest dependency path between two symbols in the code graph. BEST FOR: 'How are A and B connected?', 'What's the call chain from X to Y?'",
             ["inputSchema"] = new JsonObject
             {
                 ["type"] = "object",
@@ -365,7 +383,7 @@ internal sealed class McpServer
         var impactTool = new JsonObject
         {
             ["name"] = "codegraph_impact",
-            ["description"] = "Analyze the impact of changing a symbol by finding all symbols that depend on it (reverse dependency traversal). Use to assess the blast radius of a change.",
+            ["description"] = "Analyze the impact of changing a symbol by finding all dependents (reverse traversal). BEST FOR: 'What breaks if I change X?', 'What's the blast radius of this change?'",
             ["inputSchema"] = new JsonObject
             {
                 ["type"] = "object",
@@ -390,7 +408,7 @@ internal sealed class McpServer
         var explainTool = new JsonObject
         {
             ["name"] = "codegraph_explain",
-            ["description"] = "Get a comprehensive view of a single symbol: its type, location, signature, members, all incoming/outgoing edges, and test coverage. Use to fully understand a symbol before making changes.",
+            ["description"] = "Get a comprehensive view of a single symbol: type, location, signature, members, all edges, and test coverage. BEST FOR: 'Tell me everything about X', 'What does X look like structurally?'",
             ["inputSchema"] = new JsonObject
             {
                 ["type"] = "object",
@@ -434,7 +452,7 @@ internal sealed class McpServer
         var batchTool = new JsonObject
         {
             ["name"] = "codegraph_batch",
-            ["description"] = "Query multiple symbols in one call. Returns combined results with shared context. More efficient than separate queries.",
+            ["description"] = "Query multiple symbols in one call. Returns combined results with shared context. More efficient than separate queries. BEST FOR: 'Compare these 3 services', 'Show all related types together'.",
             ["inputSchema"] = new JsonObject
             {
                 ["type"] = "object",
@@ -471,9 +489,71 @@ internal sealed class McpServer
             }
         };
 
+        var searchTool = new JsonObject
+        {
+            ["name"] = "codegraph_search",
+            ["description"] = "Search for symbols by name, namespace, or file path. Use for discovery when you don't know exact names. BEST FOR: 'Find things related to payments', 'What types exist in the auth module?' NOT FOR: Searching inside method bodies or comments — use grep for those.",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["query"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Search term (matches name, namespace, file path)"
+                    },
+                    ["top"] = new JsonObject
+                    {
+                        ["type"] = "integer",
+                        ["description"] = "Max results (default: 20)",
+                        ["default"] = 20
+                    },
+                    ["kind"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["enum"] = new JsonArray("type", "method", "namespace", "all"),
+                        ["description"] = "Filter by node kind (default: all)",
+                        ["default"] = "all"
+                    }
+                },
+                ["required"] = new JsonArray("query")
+            }
+        };
+
+        var compareTool = new JsonObject
+        {
+            ["name"] = "codegraph_compare",
+            ["description"] = "Compare two symbols structurally. BEST FOR: 'What's different between ServiceA and ServiceB?', 'Compare implementations of interface X'. Shows shared interfaces/bases, unique dependencies, and structural differences.",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["symbolA"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "First symbol to compare"
+                    },
+                    ["symbolB"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Second symbol to compare"
+                    },
+                    ["depth"] = new JsonObject
+                    {
+                        ["type"] = "integer",
+                        ["description"] = "Traversal depth for each (default: 1)",
+                        ["default"] = 1
+                    }
+                },
+                ["required"] = new JsonArray("symbolA", "symbolB")
+            }
+        };
+
         var result = new JsonObject
         {
-            ["tools"] = new JsonArray(tool, listTool, summaryTool, pathTool, impactTool, explainTool, fileTool, batchTool)
+            ["tools"] = new JsonArray(summaryTool, tool, listTool, searchTool, pathTool, impactTool, explainTool, fileTool, batchTool, compareTool)
         };
         return CreateResponse(id, result);
     }
@@ -483,6 +563,8 @@ internal sealed class McpServer
         var toolName = parameters?["name"]?.GetValue<string>();
         if (toolName == "codegraph_list")
             return await HandleListCallAsync(id, parameters);
+        if (toolName == "codegraph_search")
+            return await HandleSearchCallAsync(id, parameters);
         if (toolName == "codegraph_summary")
             return await HandleSummaryCallAsync(id);
         if (toolName == "codegraph_path")
@@ -495,6 +577,8 @@ internal sealed class McpServer
             return await HandleFileCallAsync(id, parameters);
         if (toolName == "codegraph_batch")
             return await HandleBatchCallAsync(id, parameters);
+        if (toolName == "codegraph_compare")
+            return await HandleCompareCallAsync(id, parameters);
         if (toolName != "codegraph_query")
             return CreateError(id, -32602, $"Unknown tool: {toolName}");
 
@@ -535,6 +619,7 @@ internal sealed class McpServer
             var modeStr = arguments?["mode"]?.GetValue<string>();
             var budget = arguments?["budget"]?.GetValue<int>();
             var confidenceStr = arguments?["confidence"]?.GetValue<string>();
+            var includeSource = arguments?["include_source"]?.GetValue<bool>() ?? false;
 
             var queryMode = modeStr?.ToLowerInvariant() switch
             {
@@ -605,8 +690,8 @@ internal sealed class McpServer
             {
                 OutputFormat.Json => JsonFormatter.Format(result),
                 OutputFormat.Text => TextFormatter.Format(result),
-                OutputFormat.Compact => CompactFormatter.Format(result),
-                _ => ContextFormatter.Format(result, queryDesc)
+                OutputFormat.Compact => CompactFormatter.Format(result, includeSource),
+                _ => ContextFormatter.Format(result, queryDesc, includeSource)
             };
 
             output = BudgetTruncator.Apply(output, budget);
@@ -785,6 +870,7 @@ internal sealed class McpServer
             var depth = arguments?["depth"]?.GetValue<int>() ?? 1;
             var formatStr = arguments?["format"]?.GetValue<string>() ?? "compact";
             var modeStr = arguments?["mode"]?.GetValue<string>();
+            var batchIncludeSource = arguments?["include_source"]?.GetValue<bool>() ?? false;
 
             var queryMode = modeStr?.ToLowerInvariant() switch
             {
@@ -858,11 +944,80 @@ internal sealed class McpServer
             {
                 OutputFormat.Json => JsonFormatter.Format(mergedResult),
                 OutputFormat.Text => TextFormatter.Format(mergedResult),
-                OutputFormat.Compact => CompactFormatter.Format(mergedResult),
-                _ => ContextFormatter.Format(mergedResult, queryDesc)
+                OutputFormat.Compact => CompactFormatter.Format(mergedResult, batchIncludeSource),
+                _ => ContextFormatter.Format(mergedResult, queryDesc, batchIncludeSource)
             };
 
             return CreateToolResult(id, output, false);
+        }
+        catch (FileNotFoundException ex)
+        {
+            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
+        }
+        catch (Exception ex)
+        {
+            return CreateToolError(id, ex.Message);
+        }
+    }
+
+    private async Task<JsonNode> HandleCompareCallAsync(JsonNode? id, JsonNode? parameters)
+    {
+        var arguments = parameters?["arguments"];
+        var symbolA = arguments?["symbolA"]?.GetValue<string>();
+        var symbolB = arguments?["symbolB"]?.GetValue<string>();
+
+        if (string.IsNullOrEmpty(symbolA) || string.IsNullOrEmpty(symbolB))
+            return CreateToolError(id, "Missing required parameters: symbolA and symbolB");
+
+        try
+        {
+            var engine = await GetOrLoadEngineAsync();
+            var depth = arguments?["depth"]?.GetValue<int>() ?? 1;
+
+            var optionsA = new QueryOptions { Pattern = symbolA, Depth = depth, MaxNodes = 50, Mode = QueryMode.Focused, IgnoreCase = true };
+            var optionsB = new QueryOptions { Pattern = symbolB, Depth = depth, MaxNodes = 50, Mode = QueryMode.Focused, IgnoreCase = true };
+
+            var resultA = engine.Query(optionsA);
+            var resultB = engine.Query(optionsB);
+
+            if (resultA.MatchedNodes.Count == 0 && resultB.MatchedNodes.Count == 0)
+                return CreateToolResult(id, $"No nodes found matching '{symbolA}' or '{symbolB}'.", true);
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"## Compare: {symbolA} vs {symbolB}");
+            sb.AppendLine();
+
+            // Show edges for A
+            sb.AppendLine($"### {symbolA} ({resultA.MatchedNodes.Count} matched, {resultA.Edges.Count} edges)");
+            var edgesA = resultA.Edges.Where(e => e.Type != EdgeType.Contains)
+                .Select(e => $"  {e.Type}: {e.FromId} → {e.ToId}").Take(20);
+            foreach (var e in edgesA) sb.AppendLine(e);
+            sb.AppendLine();
+
+            // Show edges for B
+            sb.AppendLine($"### {symbolB} ({resultB.MatchedNodes.Count} matched, {resultB.Edges.Count} edges)");
+            var edgesB = resultB.Edges.Where(e => e.Type != EdgeType.Contains)
+                .Select(e => $"  {e.Type}: {e.FromId} → {e.ToId}").Take(20);
+            foreach (var e in edgesB) sb.AppendLine(e);
+            sb.AppendLine();
+
+            // Shared dependencies
+            var depsA = new HashSet<string>(resultA.Edges.Where(e => e.Type != EdgeType.Contains).Select(e => e.ToId));
+            var depsB = new HashSet<string>(resultB.Edges.Where(e => e.Type != EdgeType.Contains).Select(e => e.ToId));
+            var shared = depsA.Intersect(depsB).ToList();
+            var uniqueA = depsA.Except(depsB).ToList();
+            var uniqueB = depsB.Except(depsA).ToList();
+
+            sb.AppendLine($"### Shared dependencies ({shared.Count})");
+            foreach (var s in shared.Take(10)) sb.AppendLine($"  {s}");
+            sb.AppendLine();
+            sb.AppendLine($"### Unique to {symbolA} ({uniqueA.Count})");
+            foreach (var s in uniqueA.Take(10)) sb.AppendLine($"  {s}");
+            sb.AppendLine();
+            sb.AppendLine($"### Unique to {symbolB} ({uniqueB.Count})");
+            foreach (var s in uniqueB.Take(10)) sb.AppendLine($"  {s}");
+
+            return CreateToolResult(id, sb.ToString().TrimEnd(), false);
         }
         catch (FileNotFoundException ex)
         {
@@ -889,7 +1044,9 @@ internal sealed class McpServer
         var arguments = parameters?["arguments"];
         var scope = arguments?["scope"]?.GetValue<string>() ?? "assemblies";
         var assemblyFilter = arguments?["assembly"]?.GetValue<string>();
-        var top = arguments?["top"]?.GetValue<int>() ?? 20;
+        var top = arguments?["top"]?.GetValue<int>() ?? 50;
+        var skip = arguments?["skip"]?.GetValue<int>() ?? 0;
+        var filter = arguments?["filter"]?.GetValue<string>();
 
         try
         {
@@ -908,11 +1065,13 @@ internal sealed class McpServer
                     break;
 
                 case "types":
-                    var types = list.ListTypes(assemblyFilter, top);
+                    var result = list.ListTypes(assemblyFilter, top, skip, filter);
                     sb.AppendLine($"{"Type",-50} {"In",4} {"Out",4} {"Assembly",-20}");
                     sb.AppendLine(new string('-', 80));
-                    foreach (var t in types)
+                    foreach (var t in result.Types)
                         sb.AppendLine($"{t.Name,-50} {t.InDegree,4} {t.OutDegree,4} {t.Assembly,-20}");
+                    var endIndex = Math.Min(skip + top, result.TotalCount);
+                    sb.AppendLine($"\nShowing {skip + 1}-{endIndex} of {result.TotalCount:N0} types. Use --skip {endIndex} for next page.");
                     break;
 
                 case "interfaces":
@@ -934,6 +1093,53 @@ internal sealed class McpServer
                 default:
                     return CreateToolError(id, $"Unknown list scope: {scope}. Use: assemblies, types, interfaces, namespaces");
             }
+
+            return CreateToolResult(id, sb.ToString(), false);
+        }
+        catch (FileNotFoundException ex)
+        {
+            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
+        }
+        catch (Exception ex)
+        {
+            return CreateToolError(id, ex.Message);
+        }
+    }
+
+    private async Task<JsonNode> HandleSearchCallAsync(JsonNode? id, JsonNode? parameters)
+    {
+        var arguments = parameters?["arguments"];
+        var query = arguments?["query"]?.GetValue<string>();
+        if (string.IsNullOrEmpty(query))
+            return CreateToolError(id, "Missing required parameter: query");
+
+        var top = arguments?["top"]?.GetValue<int>() ?? 20;
+        var kindStr = arguments?["kind"]?.GetValue<string>();
+
+        NodeKind? kindFilter = kindStr?.ToLowerInvariant() switch
+        {
+            "type" => NodeKind.Type,
+            "method" => NodeKind.Method,
+            "namespace" => NodeKind.Namespace,
+            _ => null
+        };
+
+        try
+        {
+            var engine = await GetOrLoadEngineAsync();
+            var results = engine.Search(query, top, kindFilter);
+
+            if (results.Count == 0)
+                return CreateToolResult(id, $"No results for '{query}'.", false);
+
+            var sb = new StringBuilder();
+            foreach (var node in results)
+            {
+                var ns = node.ContainingNamespaceId ?? "";
+                var filePart = !string.IsNullOrEmpty(node.FilePath) ? $" ({node.FilePath})" : "";
+                sb.AppendLine($"[{node.Kind}] {node.Name}  ns={ns}{filePart}");
+            }
+            sb.AppendLine($"\n{results.Count} result(s) for '{query}'.");
 
             return CreateToolResult(id, sb.ToString(), false);
         }
