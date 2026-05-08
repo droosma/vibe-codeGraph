@@ -123,12 +123,18 @@ public static class CompactFormatter
     private static void AppendSourceSnippet(StringBuilder sb, GraphNode node)
     {
         if (string.IsNullOrEmpty(node.FilePath) || node.StartLine <= 0 || node.EndLine <= 0)
+        {
+            sb.AppendLine("  ⚠ source unavailable (no file path or line range)");
             return;
+        }
 
         try
         {
             if (!File.Exists(node.FilePath))
+            {
+                sb.AppendLine($"  ⚠ source unavailable ({node.FilePath} not found)");
                 return;
+            }
 
             var lines = File.ReadLines(node.FilePath)
                 .Skip(node.StartLine - 1)
@@ -138,7 +144,7 @@ public static class CompactFormatter
             if (lines.Count == 0)
                 return;
 
-            sb.AppendLine("  ```csharp");
+            sb.AppendLine($"  ```csharp  // {node.FilePath}:{node.StartLine}-{node.EndLine}");
             const int maxLines = 20;
             const int previewLines = 15;
             if (lines.Count <= maxLines)
@@ -150,13 +156,13 @@ public static class CompactFormatter
             {
                 foreach (var line in lines.Take(previewLines))
                     sb.AppendLine($"  {line}");
-                sb.AppendLine($"  // ... ({lines.Count - previewLines} more lines)");
+                sb.AppendLine($"  // ... truncated ({lines.Count - previewLines} more lines) — read {node.FilePath}:{node.StartLine + previewLines}-{node.EndLine} for full source");
             }
             sb.AppendLine("  ```");
         }
         catch
         {
-            // File read failure is non-fatal
+            sb.AppendLine($"  ⚠ source unavailable (could not read {node.FilePath})");
         }
     }
 

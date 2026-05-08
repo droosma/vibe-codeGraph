@@ -24,7 +24,13 @@ public enum EdgeType
     Covers,
     CoveredBy,
     References,
-    Overrides
+    Overrides,
+    HandlesRoute,
+    BindsConfiguration,
+    UsesMiddleware,
+    MapsToTable,
+    NavigatesTo,
+    ConfiguredBy
 }
 
 public enum EdgeConfidence

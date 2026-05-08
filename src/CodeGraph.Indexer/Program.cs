@@ -1,16 +1,20 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using CodeGraph.Core.Configuration;
 using CodeGraph.Core.IO;
 using CodeGraph.Core.IO.Sqlite;
 using CodeGraph.Core.Models;
+using CodeGraph.Indexer.Daemon;
 using CodeGraph.Indexer.Init;
 using CodeGraph.Indexer.Mcp;
 using CodeGraph.Indexer.Passes;
+using CodeGraph.Indexer.Snapshots;
 using CodeGraph.Indexer.Workspace;
 using CodeGraph.Query;
+using CodeGraph.Query.Benchmarks;
 using CodeGraph.Query.Filters;
 using CodeGraph.Query.Metrics;
 using CodeGraph.Query.OutputFormatters;
@@ -42,6 +46,11 @@ static async Task<int> RunAsync(string[] args)
         "stats" => await RunStatsAsync(args),
         "wiki" => await RunWikiAsync(args),
         "view" => await RunViewAsync(args),
+        "test-impact" => await RunTestImpactAsync(args),
+        "snapshot" => await RunSnapshotAsync(args),
+        "packages" => await RunPackagesAsync(args),
+        "benchmark" => await RunBenchmarkAsync(args),
+        "daemon" => await RunDaemonAsync(args),
         "mcp" => await RunMcpAsync(args),
         "-h" or "--help" => ShowHelp(),
         _ => ShowUnknown(args[0])
@@ -811,6 +820,30 @@ static async Task<int> RunSingleIndexAsync(
             var (testEdges, testExternalNodes) = testCoveragePass.Execute(project.Compilation, solutionRoot, knownIds);
             nodes.AddRange(testExternalNodes);
             edges.AddRange(testEdges);
+            foreach (var en in testExternalNodes) knownIds.Add(en.Id);
+
+            var routesPass = new RoutesPass();
+            var (routeEdges, routeExternalNodes) = routesPass.Execute(project.Compilation, solutionRoot, knownIds);
+            nodes.AddRange(routeExternalNodes);
+            edges.AddRange(routeEdges);
+            foreach (var en in routeExternalNodes) knownIds.Add(en.Id);
+
+            var configPass = new ConfigurationPass();
+            var (configEdges, configExternalNodes) = configPass.Execute(project.Compilation, solutionRoot, knownIds);
+            nodes.AddRange(configExternalNodes);
+            edges.AddRange(configEdges);
+            foreach (var en in configExternalNodes) knownIds.Add(en.Id);
+
+            var middlewarePass = new MiddlewarePass();
+            var (middlewareEdges, middlewareExternalNodes) = middlewarePass.Execute(project.Compilation, solutionRoot, knownIds);
+            nodes.AddRange(middlewareExternalNodes);
+            edges.AddRange(middlewareEdges);
+            foreach (var en in middlewareExternalNodes) knownIds.Add(en.Id);
+
+            var dbContextPass = new DbContextPass();
+            var (dbEdges, dbExternalNodes) = dbContextPass.Execute(project.Compilation, solutionRoot, knownIds);
+            nodes.AddRange(dbExternalNodes);
+            edges.AddRange(dbEdges);
 
             projectResults.Add((nodes, edges));
         }
@@ -1118,6 +1151,362 @@ static async Task<int> RunExportAsync(string[] args)
 
     Console.WriteLine($"Exported {nodes.Count} nodes and {edgeList.Count} edges to {outputDir}/");
     return 0;
+}
+
+static async Task<int> RunTestImpactAsync(string[] args)
+{
+    var graphDir = ".codegraph";
+    string? symbol = null;
+    var depth = 3;
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--graph-dir" when i + 1 < args.Length:
+                graphDir = args[++i];
+                break;
+            case "--depth" when i + 1 < args.Length:
+                if (!int.TryParse(args[++i], out depth) || depth < 1)
+                {
+                    Console.Error.WriteLine("Error: --depth must be a positive integer.");
+                    return 1;
+                }
+                break;
+            case "-h" or "--help":
+                Console.WriteLine("Usage: codegraph test-impact <symbol> [--depth N] [--graph-dir <dir>]");
+                Console.WriteLine();
+                Console.WriteLine("Analyze test coverage for a symbol, showing direct and indirect tests.");
+                Console.WriteLine();
+                Console.WriteLine("Options:");
+                Console.WriteLine("  --depth <n>          Traversal depth for indirect coverage (default: 3)");
+                Console.WriteLine("  --graph-dir <path>   Graph directory (default: .codegraph)");
+                return 0;
+            default:
+                if (!args[i].StartsWith("-") && symbol is null)
+                    symbol = args[i];
+                break;
+        }
+    }
+
+    if (string.IsNullOrEmpty(symbol))
+    {
+        Console.Error.WriteLine("Error: symbol argument is required.");
+        Console.Error.WriteLine("Usage: codegraph test-impact <symbol> [--depth N] [--graph-dir <dir>]");
+        return 1;
+    }
+
+    try
+    {
+        var (_, nodes, edges) = await GraphReader.ReadAsync(graphDir);
+        var analyzer = new TestImpactAnalyzer(nodes, edges);
+        var result = analyzer.Analyze(symbol, depth);
+        Console.Write(TestImpactFormatter.Format(result));
+        return 0;
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
+        return 1;
+    }
+}
+
+static async Task<int> RunSnapshotAsync(string[] args)
+{
+    var graphDir = ".codegraph";
+
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: codegraph snapshot <save|list|delete> [name] [--graph-dir <dir>]");
+        return 1;
+    }
+
+    var subCommand = args[1];
+    string? name = null;
+
+    for (var i = 2; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--graph-dir" when i + 1 < args.Length:
+                graphDir = args[++i];
+                break;
+            default:
+                if (!args[i].StartsWith("-") && name is null)
+                    name = args[i];
+                break;
+        }
+    }
+
+    var manager = new SnapshotManager(graphDir);
+
+    switch (subCommand)
+    {
+        case "save":
+            if (string.IsNullOrEmpty(name))
+            {
+                Console.Error.WriteLine("Error: snapshot name is required.");
+                Console.Error.WriteLine("Usage: codegraph snapshot save <name> [--graph-dir <dir>]");
+                return 1;
+            }
+            await manager.SaveAsync(graphDir, name);
+            Console.WriteLine($"Snapshot '{name}' saved.");
+            return 0;
+
+        case "list":
+            var snapshots = manager.List();
+            if (snapshots.Count == 0)
+            {
+                Console.WriteLine("No snapshots found.");
+            }
+            else
+            {
+                foreach (var s in snapshots)
+                    Console.WriteLine($"  {s.Name,-20} {s.CreatedAt:yyyy-MM-dd HH:mm:ss}  {s.Path}");
+            }
+            return 0;
+
+        case "delete":
+            if (string.IsNullOrEmpty(name))
+            {
+                Console.Error.WriteLine("Error: snapshot name is required.");
+                Console.Error.WriteLine("Usage: codegraph snapshot delete <name> [--graph-dir <dir>]");
+                return 1;
+            }
+            if (manager.Delete(name))
+                Console.WriteLine($"Snapshot '{name}' deleted.");
+            else
+                Console.Error.WriteLine($"Snapshot '{name}' not found.");
+            return 0;
+
+        default:
+            Console.Error.WriteLine($"Unknown snapshot command: {subCommand}");
+            Console.Error.WriteLine("Usage: codegraph snapshot <save|list|delete> [name]");
+            return 1;
+    }
+}
+
+static async Task<int> RunPackagesAsync(string[] args)
+{
+    var graphDir = ".codegraph";
+    string? projectFilter = null;
+    string? packageFilter = null;
+    var formatJson = false;
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--graph-dir" when i + 1 < args.Length:
+                graphDir = args[++i];
+                break;
+            case "--project" when i + 1 < args.Length:
+                projectFilter = args[++i];
+                break;
+            case "--package" when i + 1 < args.Length:
+                packageFilter = args[++i];
+                break;
+            case "--format" when i + 1 < args.Length:
+                formatJson = args[++i].Equals("json", StringComparison.OrdinalIgnoreCase);
+                break;
+            case "-h" or "--help":
+                Console.WriteLine("Usage: codegraph packages [--project <name>] [--package <name>] [--format json] [--graph-dir <dir>]");
+                return 0;
+        }
+    }
+
+    try
+    {
+        var (_, nodes, edges) = await GraphReader.ReadAsync(graphDir);
+        var analyzer = new PackageAnalyzer(nodes, edges);
+
+        if (!string.IsNullOrEmpty(packageFilter))
+        {
+            var usages = analyzer.AnalyzeByPackage(packageFilter);
+            Console.Write(formatJson ? PackageFormatter.FormatUsageAsJson(usages) : PackageFormatter.FormatUsage(usages));
+        }
+        else
+        {
+            var usages = analyzer.AnalyzeByProject(projectFilter);
+            Console.Write(formatJson ? PackageFormatter.FormatUsageAsJson(usages) : PackageFormatter.FormatUsage(usages));
+
+            var conflicts = analyzer.FindConflicts();
+            if (conflicts.Count > 0)
+            {
+                Console.WriteLine();
+                Console.Write(formatJson ? PackageFormatter.FormatConflictsAsJson(conflicts) : PackageFormatter.FormatConflicts(conflicts));
+            }
+        }
+
+        return 0;
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
+        return 1;
+    }
+}
+
+static async Task<int> RunBenchmarkAsync(string[] args)
+{
+    var graphDir = ".codegraph";
+    string? scenariosPath = null;
+    var iterations = 5;
+    var formatJson = false;
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--graph-dir" when i + 1 < args.Length:
+                graphDir = args[++i];
+                break;
+            case "--scenarios" when i + 1 < args.Length:
+                scenariosPath = args[++i];
+                break;
+            case "--iterations" when i + 1 < args.Length:
+                if (!int.TryParse(args[++i], out iterations) || iterations < 1)
+                {
+                    Console.Error.WriteLine("Error: --iterations must be a positive integer.");
+                    return 1;
+                }
+                break;
+            case "--format" when i + 1 < args.Length:
+                formatJson = args[++i].Equals("json", StringComparison.OrdinalIgnoreCase);
+                break;
+            case "-h" or "--help":
+                Console.WriteLine("Usage: codegraph benchmark [--scenarios <path>] [--iterations N] [--format json] [--graph-dir <dir>]");
+                return 0;
+        }
+    }
+
+    try
+    {
+        var engine = await QueryEngine.LoadAsync(graphDir);
+        var runner = new BenchmarkRunner(engine);
+
+        IReadOnlyList<BenchmarkScenario> scenarios;
+        if (!string.IsNullOrEmpty(scenariosPath))
+        {
+            var json = await File.ReadAllTextAsync(scenariosPath);
+            scenarios = BenchmarkRunner.LoadScenarios(json);
+        }
+        else
+        {
+            var defaultPath = Path.Combine(AppContext.BaseDirectory, "benchmarks", "scenarios.json");
+            if (File.Exists(defaultPath))
+            {
+                var json = await File.ReadAllTextAsync(defaultPath);
+                scenarios = BenchmarkRunner.LoadScenarios(json);
+            }
+            else
+            {
+                scenarios = BenchmarkRunner.LoadScenarios("""
+                {
+                  "scenarios": [
+                    { "name": "query-single", "description": "Single type query", "command": "query", "args": { "pattern": "*", "depth": 1 } },
+                    { "name": "search-broad", "description": "Broad search", "command": "search", "args": { "query": "Service", "top": 50 } },
+                    { "name": "list-assemblies", "description": "List assemblies", "command": "list", "args": { "scope": "assemblies" } }
+                  ]
+                }
+                """);
+            }
+        }
+
+        var results = runner.RunAll(scenarios, iterations);
+        Console.Write(formatJson ? BenchmarkFormatter.FormatJson(results) : BenchmarkFormatter.FormatMarkdown(results));
+        return 0;
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
+        return 1;
+    }
+}
+
+static async Task<int> RunDaemonAsync(string[] args)
+{
+    var graphDir = ".codegraph";
+
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: codegraph daemon <start|stop|status> [--graph-dir <dir>]");
+        return 1;
+    }
+
+    var subCommand = args[1];
+
+    for (var i = 2; i < args.Length; i++)
+    {
+        if (args[i] == "--graph-dir" && i + 1 < args.Length)
+            graphDir = args[++i];
+    }
+
+    graphDir = Path.GetFullPath(graphDir);
+
+    switch (subCommand)
+    {
+        case "start":
+            if (PidFile.IsProcessRunning(graphDir))
+            {
+                Console.WriteLine("Daemon is already running.");
+                return 0;
+            }
+            Console.WriteLine($"Starting daemon for {graphDir}...");
+            Console.WriteLine($"Pipe: {DaemonServer.GetPipeName(graphDir)}");
+            var server = new DaemonServer(graphDir);
+            PidFile.Write(graphDir, Environment.ProcessId);
+            try
+            {
+                await server.StartAsync();
+            }
+            finally
+            {
+                PidFile.Delete(graphDir);
+            }
+            return 0;
+
+        case "stop":
+            var pid = PidFile.Read(graphDir);
+            if (pid is null)
+            {
+                Console.Error.WriteLine("No daemon is running.");
+                return 1;
+            }
+            try
+            {
+                var proc = Process.GetProcessById(pid.Value);
+                proc.Kill();
+                Console.WriteLine($"Daemon (PID {pid.Value}) stopped.");
+            }
+            catch
+            {
+                Console.WriteLine("Daemon process not found (may have already exited).");
+            }
+            PidFile.Delete(graphDir);
+            return 0;
+
+        case "status":
+            if (PidFile.IsProcessRunning(graphDir))
+            {
+                var daemonPid = PidFile.Read(graphDir);
+                Console.WriteLine($"Daemon is running (PID {daemonPid}).");
+                Console.WriteLine($"Pipe: {DaemonServer.GetPipeName(graphDir)}");
+            }
+            else
+            {
+                Console.WriteLine("No daemon is running.");
+            }
+            return 0;
+
+        default:
+            Console.Error.WriteLine($"Unknown daemon command: {subCommand}");
+            Console.Error.WriteLine("Usage: codegraph daemon <start|stop|status>");
+            return 1;
+    }
 }
 
 static async Task<int> RunViewAsync(string[] args)
@@ -1601,6 +1990,11 @@ static void PrintUsage()
     Console.WriteLine("  codegraph stats [--graph-dir <dir>]");
     Console.WriteLine("  codegraph wiki [--graph-dir <dir>] [--output <dir>]");
     Console.WriteLine("  codegraph view [--graph-dir <dir>] [--output <path>] [--max-nodes <n>] [--no-open]");
+    Console.WriteLine("  codegraph test-impact <symbol> [--depth N] [--graph-dir <dir>]");
+    Console.WriteLine("  codegraph snapshot <save|list|delete> [name] [--graph-dir <dir>]");
+    Console.WriteLine("  codegraph packages [--project <name>] [--package <name>] [--format json]");
+    Console.WriteLine("  codegraph benchmark [--scenarios <path>] [--iterations N] [--format json]");
+    Console.WriteLine("  codegraph daemon <start|stop|status> [--graph-dir <dir>]");
     Console.WriteLine("  codegraph mcp [--graph-dir <dir>]");
     Console.WriteLine();
     Console.WriteLine("Commands:");
@@ -1616,6 +2010,11 @@ static void PrintUsage()
     Console.WriteLine("  stats                    Show graph-level statistics (node/edge counts by kind)");
     Console.WriteLine("  wiki                     Generate navigable markdown wiki pages from the graph");
     Console.WriteLine("  view                     Open interactive 3D graph visualization in browser");
+    Console.WriteLine("  test-impact              Analyze test coverage for a symbol (direct + indirect)");
+    Console.WriteLine("  snapshot                 Save, list, or delete graph snapshots for diff comparison");
+    Console.WriteLine("  packages                 Analyze NuGet package usage and version conflicts");
+    Console.WriteLine("  benchmark                Run performance benchmarks against the graph");
+    Console.WriteLine("  daemon                   Start/stop persistent background daemon for fast queries");
     Console.WriteLine("  mcp                      Start MCP (Model Context Protocol) stdio server");
     Console.WriteLine();
     Console.WriteLine("Run 'codegraph <command> --help' for command-specific options.");

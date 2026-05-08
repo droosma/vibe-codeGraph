@@ -86,6 +86,12 @@ public static class CompareFormatter
             EdgeType.References => "references",
             EdgeType.Contains => "contains",
             EdgeType.Overrides => "overrides",
+            EdgeType.HandlesRoute => "handles-route",
+            EdgeType.BindsConfiguration => "binds-configuration",
+            EdgeType.UsesMiddleware => "uses-middleware",
+            EdgeType.MapsToTable => "maps-to-table",
+            EdgeType.NavigatesTo => "navigates-to",
+            EdgeType.ConfiguredBy => "configured-by",
             _ => edge.Type.ToString().ToLowerInvariant()
         };
         return $"{type} → {edge.ToId}";

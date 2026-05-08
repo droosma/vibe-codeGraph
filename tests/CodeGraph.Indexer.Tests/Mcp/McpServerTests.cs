@@ -302,7 +302,7 @@ public class McpServerTests : IDisposable
 
         Assert.NotNull(response);
         var tools = response!["result"]!["tools"]!.AsArray();
-        Assert.Equal(10, tools.Count);
+        Assert.Equal(13, tools.Count);
     }
 
     [Fact]
@@ -326,6 +326,9 @@ public class McpServerTests : IDisposable
         Assert.Contains("codegraph_file", names);
         Assert.Contains("codegraph_batch", names);
         Assert.Contains("codegraph_compare", names);
+        Assert.Contains("codegraph_test_impact", names);
+        Assert.Contains("codegraph_diff", names);
+        Assert.Contains("codegraph_packages", names);
     }
 
     [Fact]

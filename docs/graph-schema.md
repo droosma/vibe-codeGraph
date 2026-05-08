@@ -199,6 +199,8 @@ Serialized as **camelCase strings** in JSON.
 
 ## EdgeType Enum
 
+### Core structural edge types
+
 | Value | Description | Example |
 |-------|-------------|---------|
 | `contains` | Structural containment. | Namespace → Type, Type → Method |
@@ -212,7 +214,24 @@ Serialized as **camelCase strings** in JSON.
 | `references` | General reference. | Any symbol reference not covered by other types. |
 | `overrides` | Method override. | `Derived.Foo()` → `Base.Foo()` |
 
-Serialized as **camelCase strings** in JSON.
+### Domain-specific edge types
+
+These edge types carry domain framework semantics via edge metadata.
+
+| Value | Description | Metadata keys | Example |
+|-------|-------------|---------------|---------|
+| `handlesRoute` | ASP.NET route handler mapping. | `httpMethod`, `route`, `fullRoute` | `OrderController.GetById` → `GET /api/orders/{id}` |
+| `bindsConfiguration` | Options/configuration section binding. | `section`, `registrationMethod` | `PaymentOptions` → `[Config:Payment:Gateway]` |
+| `usesMiddleware` | Middleware pipeline registration. | `pipelineOrder` | `Pipeline[1]` → `UseAuthentication` |
+| `mapsToTable` | EF Core entity-to-table mapping. | `tableName`, `schema` | `Order` → `[Table:Orders]` |
+| `navigatesTo` | EF Core entity navigation property. | `relationship`, `property` | `Order` → `OrderLine` (one-to-many) |
+| `configuredBy` | EF Core entity type configuration. | `configurationClass` | `Order` → `OrderConfiguration` |
+
+Serialized as **camelCase strings** in JSON. Stored as **integer ordinals** in SQLite.
+
+### Extension strategy
+
+Domain-specific edge types are added directly to the `EdgeType` enum. All formatters and filters include a `_ => fallback` branch that handles unknown edge types gracefully — old readers display unknown types as their enum name. Edge metadata carries domain-specific details (route patterns, table names, pipeline order) without requiring schema changes.
 
 ---
 

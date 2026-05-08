@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeGraph.Core.IO;
 using CodeGraph.Core.Models;
 using CodeGraph.Query;
 using CodeGraph.Query.Filters;
@@ -212,7 +213,7 @@ internal sealed class McpServer
         var tool = new JsonObject
         {
             ["name"] = "codegraph_query",
-            ["description"] = "Query the code graph for structural relationships (calls, implements, DI wiring, inheritance). TIP: Start with codegraph_summary for orientation, then use this for specific symbols. BEST FOR: 'What calls X?', 'What implements Y?', 'How is Z wired in DI?' NOT FOR: Reading method bodies, finding string literals, broad text search — use file reading/grep for those.",
+            ["description"] = "Query the code graph for structural relationships (calls, implements, DI wiring, inheritance). TIP: Start with codegraph_summary for orientation, then use this for specific symbols. BEST FOR: 'What calls X?', 'What implements Y?', 'How is Z wired in DI?' Use include_source=true only AFTER narrowing to a specific method/type when you need implementation details — snippets are capped at 20 lines for token safety. NOT FOR: Broad text search or reading entire files — use file reading/grep for those.",
             ["inputSchema"] = new JsonObject
             {
                 ["type"] = "object",
@@ -233,7 +234,7 @@ internal sealed class McpServer
                     {
                         ["type"] = "string",
                         ["description"] = "Edge type filter",
-                        ["enum"] = new JsonArray("calls-to", "calls-from", "inherits", "implements", "depends-on", "resolves-to", "covers", "covered-by", "references", "overrides", "contains", "all")
+                        ["enum"] = new JsonArray("calls-to", "calls-from", "inherits", "implements", "depends-on", "resolves-to", "covers", "covered-by", "references", "overrides", "contains", "handles-route", "binds-configuration", "uses-middleware", "maps-to-table", "navigates-to", "configured-by", "all")
                     },
                     ["namespace"] = new JsonObject
                     {
@@ -290,7 +291,7 @@ internal sealed class McpServer
                     ["include_source"] = new JsonObject
                     {
                         ["type"] = "boolean",
-                        ["description"] = "Embed source code snippets (up to 20 lines) for each node in the output",
+                        ["description"] = "Embed source code snippets (up to 20 lines) for queried nodes. Set true only AFTER narrowing to a specific symbol when you need implementation details. Snippets include file path and line range. If truncated, output shows how to read the full source.",
                         ["default"] = false
                     }
                 },
@@ -551,9 +552,82 @@ internal sealed class McpServer
             }
         };
 
+        var testImpactTool = new JsonObject
+        {
+            ["name"] = "codegraph_test_impact",
+            ["description"] = "Analyze test coverage for a symbol. Shows direct tests (CoveredBy edges), indirect tests (via call chains), uncovered callers, and suggests a 'dotnet test --filter' command. BEST FOR: 'What tests cover X?', 'Is this method tested?', 'What tests should I run after changing X?'",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["symbol"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Symbol name or pattern to analyze test coverage for"
+                    },
+                    ["depth"] = new JsonObject
+                    {
+                        ["type"] = "integer",
+                        ["description"] = "Backward traversal depth for indirect coverage (default: 3)",
+                        ["default"] = 3
+                    }
+                },
+                ["required"] = new JsonArray("symbol")
+            }
+        };
+
+        var diffTool = new JsonObject
+        {
+            ["name"] = "codegraph_diff",
+            ["description"] = "Compare two graph snapshots to find structural changes. BEST FOR: 'What changed between branches?', 'PR review of structural changes', 'What types/edges were added or removed?'",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["base_dir"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Path to the base graph directory (e.g., '.codegraph-snapshots/main')"
+                    },
+                    ["head_dir"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Path to the head graph directory (default: '.codegraph')",
+                        ["default"] = ".codegraph"
+                    }
+                },
+                ["required"] = new JsonArray("base_dir")
+            }
+        };
+
+        var packagesTool = new JsonObject
+        {
+            ["name"] = "codegraph_packages",
+            ["description"] = "Analyze NuGet package usage across the solution. Shows which packages each project uses, how many internal types reference them, and detects version conflicts. BEST FOR: 'What packages does this project use?', 'Are there version conflicts?', 'Why is this package referenced?'",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["project"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Filter to a specific project name"
+                    },
+                    ["package"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Filter to a specific package name"
+                    }
+                }
+            }
+        };
+
         var result = new JsonObject
         {
-            ["tools"] = new JsonArray(summaryTool, tool, listTool, searchTool, pathTool, impactTool, explainTool, fileTool, batchTool, compareTool)
+            ["tools"] = new JsonArray(summaryTool, tool, listTool, searchTool, pathTool, impactTool, explainTool, fileTool, batchTool, compareTool, testImpactTool, diffTool, packagesTool)
         };
         return CreateResponse(id, result);
     }
@@ -579,6 +653,12 @@ internal sealed class McpServer
             return await HandleBatchCallAsync(id, parameters);
         if (toolName == "codegraph_compare")
             return await HandleCompareCallAsync(id, parameters);
+        if (toolName == "codegraph_test_impact")
+            return await HandleTestImpactCallAsync(id, parameters);
+        if (toolName == "codegraph_diff")
+            return await HandleDiffCallAsync(id, parameters);
+        if (toolName == "codegraph_packages")
+            return await HandlePackagesCallAsync(id, parameters);
         if (toolName != "codegraph_query")
             return CreateError(id, -32602, $"Unknown tool: {toolName}");
 
@@ -1018,6 +1098,101 @@ internal sealed class McpServer
             foreach (var s in uniqueB.Take(10)) sb.AppendLine($"  {s}");
 
             return CreateToolResult(id, sb.ToString().TrimEnd(), false);
+        }
+        catch (FileNotFoundException ex)
+        {
+            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
+        }
+        catch (Exception ex)
+        {
+            return CreateToolError(id, ex.Message);
+        }
+    }
+
+    private async Task<JsonNode> HandleTestImpactCallAsync(JsonNode? id, JsonNode? parameters)
+    {
+        var arguments = parameters?["arguments"];
+        var symbol = arguments?["symbol"]?.GetValue<string>();
+
+        if (string.IsNullOrEmpty(symbol))
+            return CreateToolError(id, "Missing required parameter: symbol");
+
+        try
+        {
+            var engine = await GetOrLoadEngineAsync();
+            var analyzer = new TestImpactAnalyzer(engine.Nodes, engine.Edges);
+            var depth = arguments?["depth"]?.GetValue<int>() ?? 3;
+            var result = analyzer.Analyze(symbol, depth);
+
+            return CreateToolResult(id, TestImpactFormatter.Format(result), false);
+        }
+        catch (FileNotFoundException ex)
+        {
+            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
+        }
+        catch (Exception ex)
+        {
+            return CreateToolError(id, ex.Message);
+        }
+    }
+
+    private async Task<JsonNode> HandleDiffCallAsync(JsonNode? id, JsonNode? parameters)
+    {
+        var arguments = parameters?["arguments"];
+        var baseDir = arguments?["base_dir"]?.GetValue<string>();
+        var headDir = arguments?["head_dir"]?.GetValue<string>() ?? _graphDir;
+
+        if (string.IsNullOrEmpty(baseDir))
+            return CreateToolError(id, "Missing required parameter: base_dir");
+
+        try
+        {
+            var (baseMeta, baseNodes, baseEdges) = await GraphReader.ReadAsync(baseDir);
+            var (headMeta, headNodes, headEdges) = await GraphReader.ReadAsync(headDir);
+
+            var diff = GraphDiffEngine.Compare(baseMeta, baseNodes, baseEdges, headMeta, headNodes, headEdges);
+            var output = GraphDiffGroupFormatter.Format(diff);
+
+            return CreateToolResult(id, output, false);
+        }
+        catch (FileNotFoundException ex)
+        {
+            return CreateToolError(id, $"{ex.Message}\nUse 'codegraph snapshot save <name>' to create a snapshot first.");
+        }
+        catch (Exception ex)
+        {
+            return CreateToolError(id, ex.Message);
+        }
+    }
+
+    private async Task<JsonNode> HandlePackagesCallAsync(JsonNode? id, JsonNode? parameters)
+    {
+        var arguments = parameters?["arguments"];
+        var projectFilter = arguments?["project"]?.GetValue<string>();
+        var packageFilter = arguments?["package"]?.GetValue<string>();
+
+        try
+        {
+            var engine = await GetOrLoadEngineAsync();
+            var analyzer = new PackageAnalyzer(engine.Nodes, engine.Edges);
+
+            string output;
+            if (!string.IsNullOrEmpty(packageFilter))
+            {
+                var usages = analyzer.AnalyzeByPackage(packageFilter);
+                output = PackageFormatter.FormatUsage(usages);
+            }
+            else
+            {
+                var usages = analyzer.AnalyzeByProject(projectFilter);
+                output = PackageFormatter.FormatUsage(usages);
+
+                var conflicts = analyzer.FindConflicts();
+                if (conflicts.Count > 0)
+                    output += "\n" + PackageFormatter.FormatConflicts(conflicts);
+            }
+
+            return CreateToolResult(id, output, false);
         }
         catch (FileNotFoundException ex)
         {

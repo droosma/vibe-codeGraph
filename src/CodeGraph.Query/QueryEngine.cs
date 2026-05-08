@@ -556,7 +556,9 @@ internal static class QueryModeEdgeSets
 
     public static readonly HashSet<EdgeType> Structural = new(Focused)
     {
-        EdgeType.Contains, EdgeType.DependsOn
+        EdgeType.Contains, EdgeType.DependsOn,
+        EdgeType.HandlesRoute, EdgeType.BindsConfiguration, EdgeType.UsesMiddleware,
+        EdgeType.MapsToTable, EdgeType.NavigatesTo, EdgeType.ConfiguredBy
     };
 
     public static HashSet<EdgeType>? ForMode(QueryMode mode) => mode switch

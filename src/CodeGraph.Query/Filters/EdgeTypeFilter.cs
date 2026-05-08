@@ -17,6 +17,12 @@ public static class EdgeTypeFilter
         ["covered-by"] = EdgeType.CoveredBy,
         ["references"] = EdgeType.References,
         ["overrides"] = EdgeType.Overrides,
+        ["handles-route"] = EdgeType.HandlesRoute,
+        ["binds-configuration"] = EdgeType.BindsConfiguration,
+        ["uses-middleware"] = EdgeType.UsesMiddleware,
+        ["maps-to-table"] = EdgeType.MapsToTable,
+        ["navigates-to"] = EdgeType.NavigatesTo,
+        ["configured-by"] = EdgeType.ConfiguredBy,
         ["contains"] = EdgeType.Contains,
         ["all"] = null
     };

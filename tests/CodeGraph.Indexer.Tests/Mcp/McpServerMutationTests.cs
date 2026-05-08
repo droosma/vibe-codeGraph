@@ -680,7 +680,7 @@ public class McpServerMutationTests : IDisposable
         var response = await server.HandleMessageAsync(request);
 
         var tools = response!["result"]!["tools"]!.AsArray();
-        Assert.Equal(10, tools.Count);
+        Assert.Equal(13, tools.Count);
     }
 
     // ── tools/list tool names are exact ──
@@ -701,6 +701,9 @@ public class McpServerMutationTests : IDisposable
         Assert.Contains("codegraph_path", names);
         Assert.Contains("codegraph_impact", names);
         Assert.Contains("codegraph_explain", names);
+        Assert.Contains("codegraph_test_impact", names);
+        Assert.Contains("codegraph_diff", names);
+        Assert.Contains("codegraph_packages", names);
     }
 
     // ── Query with budget parameter ──

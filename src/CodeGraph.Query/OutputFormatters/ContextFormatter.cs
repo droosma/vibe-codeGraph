@@ -15,7 +15,13 @@ public static class ContextFormatter
         [EdgeType.Covers] = "Covered by tests",
         [EdgeType.References] = "References (outgoing)",
         [EdgeType.Contains] = "Contains",
-        [EdgeType.Overrides] = "Overrides"
+        [EdgeType.Overrides] = "Overrides",
+        [EdgeType.HandlesRoute] = "Handles route",
+        [EdgeType.BindsConfiguration] = "Binds configuration",
+        [EdgeType.UsesMiddleware] = "Uses middleware",
+        [EdgeType.MapsToTable] = "Maps to table",
+        [EdgeType.NavigatesTo] = "Navigates to",
+        [EdgeType.ConfiguredBy] = "Configured by"
     };
 
     private static readonly Dictionary<EdgeType, string> IncomingHeaders = new()
@@ -28,7 +34,13 @@ public static class ContextFormatter
         [EdgeType.Covers] = "Covers",
         [EdgeType.References] = "Referenced by (incoming)",
         [EdgeType.Contains] = "Contained in",
-        [EdgeType.Overrides] = "Overridden by"
+        [EdgeType.Overrides] = "Overridden by",
+        [EdgeType.HandlesRoute] = "Route handled by",
+        [EdgeType.BindsConfiguration] = "Configuration bound by",
+        [EdgeType.UsesMiddleware] = "Middleware used by",
+        [EdgeType.MapsToTable] = "Table mapped from",
+        [EdgeType.NavigatesTo] = "Navigated from",
+        [EdgeType.ConfiguredBy] = "Configures"
     };
 
     public static string Format(QueryResult result, string? queryDescription = null, bool includeSource = false)
