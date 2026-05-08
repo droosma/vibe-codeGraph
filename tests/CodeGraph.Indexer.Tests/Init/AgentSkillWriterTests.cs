@@ -189,6 +189,65 @@ public class AgentSkillWriterTests : IDisposable
         Assert.Contains(results, r => r.RelativePath.Contains("AGENTS.md"));
         Assert.Contains(results, r => r.RelativePath.Contains("codegraph.md"));
         Assert.Contains(results, r => r.RelativePath.Contains("INSTRUCTIONS.md"));
+        Assert.Contains(results, r => r.RelativePath == ".codegraph/agents/codegraph-architect.md");
+        Assert.Contains(results, r => r.RelativePath == ".codegraph/agents/codegraph-reviewer.md");
+        Assert.Contains(results, r => r.RelativePath == ".claude/agents/codegraph-architect.md");
+        Assert.Contains(results, r => r.RelativePath == ".claude/agents/codegraph-reviewer.md");
+    }
+
+    [Fact]
+    public async Task WriteAsync_AlwaysCreatesAgentDefinitions()
+    {
+        var results = await AgentSkillWriter.WriteAsync(
+            _testDir, Array.Empty<AgentKind>(), force: false);
+
+        Assert.Contains(results, r =>
+            r.RelativePath == ".codegraph/agents/codegraph-architect.md" && r.Action == WriteAction.Created);
+        Assert.Contains(results, r =>
+            r.RelativePath == ".codegraph/agents/codegraph-reviewer.md" && r.Action == WriteAction.Created);
+
+        var architectPath = Path.Combine(_testDir, ".codegraph", "agents", "codegraph-architect.md");
+        Assert.True(File.Exists(architectPath));
+        var architectContent = File.ReadAllText(architectPath);
+        Assert.Contains("CodeGraph Architect", architectContent);
+
+        var reviewerPath = Path.Combine(_testDir, ".codegraph", "agents", "codegraph-reviewer.md");
+        Assert.True(File.Exists(reviewerPath));
+        var reviewerContent = File.ReadAllText(reviewerPath);
+        Assert.Contains("CodeGraph Reviewer", reviewerContent);
+    }
+
+    [Fact]
+    public async Task WriteAsync_Claude_CreatesClaudeAgentDefinitions()
+    {
+        var results = await AgentSkillWriter.WriteAsync(
+            _testDir, new[] { AgentKind.Claude }, force: false);
+
+        Assert.Contains(results, r =>
+            r.RelativePath == ".claude/agents/codegraph-architect.md" && r.Action == WriteAction.Created);
+        Assert.Contains(results, r =>
+            r.RelativePath == ".claude/agents/codegraph-reviewer.md" && r.Action == WriteAction.Created);
+
+        var architectPath = Path.Combine(_testDir, ".claude", "agents", "codegraph-architect.md");
+        Assert.True(File.Exists(architectPath));
+
+        var reviewerPath = Path.Combine(_testDir, ".claude", "agents", "codegraph-reviewer.md");
+        Assert.True(File.Exists(reviewerPath));
+    }
+
+    [Fact]
+    public async Task WriteAsync_NonClaude_DoesNotCreateClaudeAgentDefinitions()
+    {
+        var results = await AgentSkillWriter.WriteAsync(
+            _testDir, new[] { AgentKind.Copilot }, force: false);
+
+        Assert.DoesNotContain(results, r =>
+            r.RelativePath == ".claude/agents/codegraph-architect.md");
+        Assert.DoesNotContain(results, r =>
+            r.RelativePath == ".claude/agents/codegraph-reviewer.md");
+
+        var claudeAgentsDir = Path.Combine(_testDir, ".claude", "agents");
+        Assert.False(Directory.Exists(claudeAgentsDir));
     }
 
     [Fact]

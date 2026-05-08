@@ -48,6 +48,13 @@ internal static class AgentSkillWriter
         // Always write generic instructions
         results.Add(await WriteGenericInstructionsAsync(repoRoot, force));
 
+        // Always write agent definitions (generic fallback)
+        results.AddRange(await WriteAgentDefinitionsAsync(repoRoot, force));
+
+        // Write Claude-specific agent definitions when Claude is selected
+        if (agents.Distinct().Contains(AgentKind.Claude))
+            results.AddRange(await WriteClaudeAgentDefinitionsAsync(repoRoot, force));
+
         return results;
     }
 
@@ -155,6 +162,36 @@ internal static class AgentSkillWriter
         var dir = Path.Combine(repoRoot, ".codegraph");
         var path = Path.Combine(dir, "INSTRUCTIONS.md");
         return await WriteFileAsync(path, AgentTemplates.GenericInstructionsMd, ".codegraph/INSTRUCTIONS.md", force);
+    }
+
+    private static async Task<List<WriteResult>> WriteAgentDefinitionsAsync(string repoRoot, bool force)
+    {
+        var results = new List<WriteResult>();
+
+        var architectPath = Path.Combine(repoRoot, ".codegraph", "agents", "codegraph-architect.md");
+        results.Add(await WriteFileAsync(architectPath, AgentTemplates.ArchitectAgentMd,
+            ".codegraph/agents/codegraph-architect.md", force));
+
+        var reviewerPath = Path.Combine(repoRoot, ".codegraph", "agents", "codegraph-reviewer.md");
+        results.Add(await WriteFileAsync(reviewerPath, AgentTemplates.ReviewerAgentMd,
+            ".codegraph/agents/codegraph-reviewer.md", force));
+
+        return results;
+    }
+
+    private static async Task<List<WriteResult>> WriteClaudeAgentDefinitionsAsync(string repoRoot, bool force)
+    {
+        var results = new List<WriteResult>();
+
+        var architectPath = Path.Combine(repoRoot, ".claude", "agents", "codegraph-architect.md");
+        results.Add(await WriteFileAsync(architectPath, AgentTemplates.ArchitectAgentMd,
+            ".claude/agents/codegraph-architect.md", force));
+
+        var reviewerPath = Path.Combine(repoRoot, ".claude", "agents", "codegraph-reviewer.md");
+        results.Add(await WriteFileAsync(reviewerPath, AgentTemplates.ReviewerAgentMd,
+            ".claude/agents/codegraph-reviewer.md", force));
+
+        return results;
     }
 
     private static async Task<WriteResult> WriteFileAsync(

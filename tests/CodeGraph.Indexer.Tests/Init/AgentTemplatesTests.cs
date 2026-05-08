@@ -56,5 +56,33 @@ public class AgentTemplatesTests
         Assert.NotEmpty(AgentTemplates.CursorRuleMd);
         Assert.NotEmpty(AgentTemplates.GenericInstructionsMd);
         Assert.NotEmpty(AgentTemplates.AppendMarker);
+        Assert.NotEmpty(AgentTemplates.ArchitectAgentMd);
+        Assert.NotEmpty(AgentTemplates.ReviewerAgentMd);
+    }
+
+    [Fact]
+    public void ArchitectAgentMd_ContainsTriggerPhrasesAndWorkflow()
+    {
+        Assert.Contains("explain architecture", AgentTemplates.ArchitectAgentMd);
+        Assert.Contains("trace flow", AgentTemplates.ArchitectAgentMd);
+        Assert.Contains("how are these connected?", AgentTemplates.ArchitectAgentMd);
+        Assert.Contains("what depends on X?", AgentTemplates.ArchitectAgentMd);
+        Assert.Contains("REPORT.md", AgentTemplates.ArchitectAgentMd);
+        Assert.Contains("codegraph list assemblies", AgentTemplates.ArchitectAgentMd);
+        Assert.Contains("codegraph query", AgentTemplates.ArchitectAgentMd);
+        Assert.Contains("codegraph path", AgentTemplates.ArchitectAgentMd);
+        Assert.Contains("codegraph explain", AgentTemplates.ArchitectAgentMd);
+    }
+
+    [Fact]
+    public void ReviewerAgentMd_ContainsTriggerPhrasesAndWorkflow()
+    {
+        Assert.Contains("what tests should I run?", AgentTemplates.ReviewerAgentMd);
+        Assert.Contains("what might break?", AgentTemplates.ReviewerAgentMd);
+        Assert.Contains("review blast radius", AgentTemplates.ReviewerAgentMd);
+        Assert.Contains("codegraph impact", AgentTemplates.ReviewerAgentMd);
+        Assert.Contains("codegraph query", AgentTemplates.ReviewerAgentMd);
+        Assert.Contains("git diff", AgentTemplates.ReviewerAgentMd);
+        Assert.Contains("covers", AgentTemplates.ReviewerAgentMd);
     }
 }
