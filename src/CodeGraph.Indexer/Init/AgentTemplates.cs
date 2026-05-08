@@ -27,8 +27,12 @@ internal static class AgentTemplates
         - Mode defaults to `focused` (high-signal edges only)
         - Use `--format context` when you need full signatures and metadata
         - Use `--mode all` only for exhaustive analysis
+        - Use `--include-source` only AFTER narrowing to a specific method — snippets are capped at 20 lines
 
         This strategy uses ~4× fewer tokens than reading source files directly.
+
+        > **Prefer MCP tools over CLI commands for speed** — MCP keeps the graph in memory.
+        > For non-MCP clients, run `codegraph daemon start` to keep the graph resident.
 
         ## Commands
 
@@ -94,6 +98,9 @@ internal static class AgentTemplates
         MCP defaults: `compact` format + `focused` mode (token-optimized).
         Use `--format context` for full detail, `--mode all` for exhaustive traversal.
 
+        > **Prefer MCP tools over CLI commands for speed** — MCP keeps the graph in memory.
+        > For non-MCP clients, run `codegraph daemon start` to keep the graph resident.
+
         ### Quick Reference
 
         ```bash
@@ -125,6 +132,9 @@ internal static class AgentTemplates
         Use it as your **primary** tool for structural questions — ~4× fewer tokens
         than reading source files.
 
+        > **Prefer MCP tools over CLI commands for speed** — MCP keeps the graph in memory.
+        > For non-MCP clients, run `codegraph daemon start` to keep the graph resident.
+
         ### Strategy
 
         1. Read `.codegraph/REPORT.md` first (free architectural overview)
@@ -154,6 +164,9 @@ internal static class AgentTemplates
 
         Pre-built code graph for this C# codebase. Use `codegraph` instead of
         grepping for code structure — ~4× fewer tokens.
+
+        > **Prefer MCP tools over CLI commands for speed** — MCP keeps the graph in memory.
+        > For non-MCP clients, run `codegraph daemon start` to keep the graph resident.
 
         ## Strategy
 
@@ -185,6 +198,9 @@ internal static class AgentTemplates
         This repository has a pre-built code graph providing semantic understanding
         of all types, methods, call chains, interface implementations, and DI wiring.
         Using CodeGraph consumes ~4× fewer tokens than reading source files directly.
+
+        > **Prefer MCP tools over CLI commands for speed** — MCP keeps the graph in memory.
+        > For non-MCP clients, run `codegraph daemon start` to keep the graph resident.
 
         ## Strategy — Follow This Order
 
