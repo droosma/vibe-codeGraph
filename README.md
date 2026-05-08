@@ -149,6 +149,7 @@ codegraph index --solution <path.sln|path.slnx> [options]
 | `--skip-build` | Hidden alias for `--skip-restore` | `false` |
 | `--changed-only` | Incremental re-index; only re-index projects with changes since last indexed commit | `false` |
 | `--sequential` | Disable parallel multi-solution indexing (recommended on machines with < 16 GB RAM) | `false` |
+| `--extend <db-path>` | Extend an existing `graph.db` with this solution's graph instead of creating a new one | (none) |
 | `--verbose` | Enable verbose output | `false` |
 
 ### `codegraph query`
@@ -171,6 +172,7 @@ codegraph query <symbol-pattern> [options]
 | `--format <fmt>` | Output format: `json`, `text`, `context`, `compact` | `context` |
 | `--max-nodes <n>` | Maximum nodes in result | `50` |
 | `--include-external` | Include external assembly dependencies | `false` |
+| `--include-source` | Embed source code snippets alongside node references in output | `false` |
 | `--no-rank` | Disable relevance ranking | (ranking enabled by default) |
 | `--budget <tokens>` | Maximum token budget; output is truncated with a hint when exceeded | (none) |
 | `--no-metrics` | Suppress the compression metrics footer | `false` |
@@ -220,6 +222,49 @@ codegraph diff [options]
 
 See [docs/diff.md](docs/diff.md) for the full how-to guide.
 
+### `codegraph compare`
+
+Compare two symbols structurally — discover shared interfaces, shared base types, shared dependencies, and relationships unique to each symbol.
+
+```
+codegraph compare <symbolA> <symbolB> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--depth <n>` | Traversal depth for relationship collection | `1` |
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph compare OrderService InvoiceService
+codegraph compare "*OrderRepo*" "*InvoiceRepo*" --depth 2
+```
+
+See [docs/compare.md](docs/compare.md) for the full how-to guide, including output format and refactoring workflows.
+
+### `codegraph search`
+
+Search for symbols by name, namespace, or file path using case-insensitive substring matching. Use this to discover the exact qualified name of a symbol before running `codegraph query` or `codegraph compare`.
+
+```
+codegraph search <query> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--top <n>` | Maximum results to return | `20` |
+| `--kind <kind>` | Filter by node kind: `type`, `method`, `namespace`, `property`, `field` | All kinds |
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph search Order                        # Find all symbols containing "Order"
+codegraph search Order --kind type            # Types only
+codegraph search PlaceOrder --kind method     # Methods only
+codegraph search Service --top 50            # Show up to 50 results
+```
+
+See [docs/search.md](docs/search.md) for the full how-to guide, including discovery workflows.
+
 ### `codegraph list`
 
 Browse the code graph hierarchy — enumerate assemblies, types, interfaces, or namespaces without writing a query.
@@ -238,7 +283,9 @@ codegraph list [scope] [options]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--assembly <name>` | Filter by assembly name (applies to `types`, `interfaces`, `namespaces`) | All |
-| `--top <n>` | Maximum items to return (applies to `types` only) | `20` |
+| `--top <n>` | Maximum items to return (applies to `types` only) | `50` |
+| `--skip <n>` | Skip the first N results for pagination (applies to `types` only) | `0` |
+| `--filter <pattern>` | Filter results by name substring, case-insensitive (applies to `types` only) | All |
 | `--graph-dir <path>` | Graph directory | `.codegraph` |
 
 ```bash
@@ -247,6 +294,8 @@ codegraph list types                        # Most-connected types across all as
 codegraph list types --assembly MyApp.Core  # Types in a specific assembly
 codegraph list interfaces --top 10          # Top 10 most-implemented interfaces
 codegraph list namespaces                   # All namespaces
+codegraph list types --filter Order         # Types whose name contains "Order"
+codegraph list types --top 20 --skip 20     # Page 2 of types
 ```
 
 See [docs/list.md](docs/list.md) for the full guide, including output format details and orientation workflows.
@@ -554,8 +603,8 @@ For a deep dive, see [docs/architecture.md](docs/architecture.md).
 Push a version tag to trigger the NuGet publish workflow:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 This runs `.github/workflows/publish.yml` which builds, tests, packs, and pushes to NuGet.org. You'll need to add a `NUGET_API_KEY` secret to your GitHub repository.
@@ -590,6 +639,8 @@ Stryker generates HTML reports in `StrykerOutput/` with mutation scores per proj
 - [Configuration Reference](docs/configuration.md)
 - [Agent Setup Guide](docs/agent-setup.md)
 - [MCP Server Guide](docs/mcp.md)
+- [Symbol Search How-to Guide](docs/search.md)
+- [Symbol Compare How-to Guide](docs/compare.md)
 - [Graph List How-to Guide](docs/list.md)
 - [Graph Stats Reference](docs/stats.md)
 - [Graph Export Guide](docs/export.md)
