@@ -76,9 +76,11 @@ codegraph list --graph-dir .codegraph-prev       # List from an older snapshot
 ### `assemblies`
 
 ```
-MyApp.Core            42 types  |  198 methods
-MyApp.Api             17 types  |   83 methods
-MyApp.Infrastructure  31 types  |  152 methods
+Assembly                                  Types  Methods   Total
+--------------------------------------------------------------
+MyApp.Core                                   42      198     287
+MyApp.Api                                    17       83     112
+MyApp.Infrastructure                         31      152     204
 ```
 
 Use this to understand the size and shape of each project before drilling deeper.
@@ -86,19 +88,23 @@ Use this to understand the size and shape of each project before drilling deeper
 ### `types`
 
 ```
-MyApp.Core.OrderService          degree=47  (in=12, out=35)
-MyApp.Infrastructure.DbContext   degree=38  (in=29, out=9)
+Type                                               In  Out Assembly            
+--------------------------------------------------------------------------------
+MyApp.Core.OrderService                            12   35 MyApp.Core          
+MyApp.Infrastructure.DbContext                     29    9 MyApp.Infrastructure
 ...
 ```
 
-High-degree types are **hubs** — they are worth understanding first when exploring the graph, as they tend to be the most impactful to change.
+Types with the highest in + out degree are **hubs** — they tend to have the widest blast radius when changed.
 
 ### `interfaces`
 
 ```
-IOrderService     3 implementations
-IRepository<T>    5 implementations
-IEventBus         1 implementation
+Interface                                          Impls Assembly            
+------------------------------------------------------------------------------
+IRepository<T>                                         5 MyApp.Core          
+IOrderService                                          3 MyApp.Core          
+IEventBus                                              1 MyApp.Core          
 ```
 
 This is useful for understanding how polymorphism is used in the codebase.
@@ -106,9 +112,11 @@ This is useful for understanding how polymorphism is used in the codebase.
 ### `namespaces`
 
 ```
-MyApp.Core.Orders       8 types  |  34 methods
-MyApp.Core.Payments     5 types  |  19 methods
-MyApp.Infrastructure    31 types | 152 methods
+Namespace                                           Types  Methods
+------------------------------------------------------------------
+MyApp.Infrastructure                                   31      152
+MyApp.Core.Orders                                       8       34
+MyApp.Core.Payments                                     5       19
 ```
 
 ---

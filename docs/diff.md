@@ -41,7 +41,7 @@ codegraph diff [options]
 | `--head <path>` | Directory of the head (after) graph snapshot | `.codegraph` |
 | `--ref <git-ref>` | Resolve a git ref and look for `.codegraph-<ref>` or `.codegraph-<short-sha>` as the base | (none) |
 | `--only <types>` | Comma-separated filter (see table below) | All change types |
-| `--format <fmt>` | `context` \| `text` \| `json` | `context` |
+| `--format <fmt>` | `context` \| `text` \| `json` \| `compact` | `context` |
 
 ### `--only` values
 
