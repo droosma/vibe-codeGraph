@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using CodeGraph.Core.Models;
 
 namespace CodeGraph.Query.OutputFormatters;
@@ -72,10 +74,9 @@ public static class CompactFormatter
         var fileInfo = !string.IsNullOrEmpty(node.FilePath)
             ? $", {node.FilePath}:{node.StartLine}-{node.EndLine}"
             : "";
-        sb.AppendLine($"## {shortId} [{node.Kind.ToString().ToLowerInvariant()}{fileInfo}]");
-
-        if (!string.IsNullOrEmpty(node.DocComment))
-            sb.AppendLine($"  {node.DocComment}");
+        var summary = ExtractSummary(node.DocComment);
+        var inlineComment = !string.IsNullOrEmpty(summary) ? $" // {summary}" : "";
+        sb.AppendLine($"## {shortId} [{node.Kind.ToString().ToLowerInvariant()}{fileInfo}]{inlineComment}");
 
         if (includeSource)
             AppendSourceSnippet(sb, node);
@@ -177,6 +178,12 @@ public static class CompactFormatter
         EdgeType.References => "references",
         EdgeType.Contains => "contains",
         EdgeType.Overrides => "overrides",
+        EdgeType.HandlesRoute => "handles-route",
+        EdgeType.BindsConfiguration => "binds-configuration",
+        EdgeType.UsesMiddleware => "uses-middleware",
+        EdgeType.MapsToTable => "maps-to-table",
+        EdgeType.NavigatesTo => "navigates-to",
+        EdgeType.ConfiguredBy => "configured-by",
         _ => type.ToString().ToLowerInvariant()
     };
 
@@ -213,5 +220,47 @@ public static class CompactFormatter
         if (string.IsNullOrEmpty(prefix))
             return id;
         return id.StartsWith(prefix, StringComparison.Ordinal) ? id[prefix.Length..] : id;
+    }
+
+    internal static string ExtractSummary(string? docComment)
+    {
+        if (string.IsNullOrWhiteSpace(docComment))
+            return string.Empty;
+
+        string text;
+        // Check if the doc comment contains XML
+        if (docComment.Contains('<'))
+        {
+            try
+            {
+                var wrapped = $"<root>{docComment}</root>";
+                var doc = XDocument.Parse(wrapped);
+                var summaryElement = doc.Root?.Element("summary");
+                if (summaryElement is null)
+                    return string.Empty;
+                text = summaryElement.Value;
+            }
+            catch
+            {
+                // Not valid XML — treat as plain text
+                text = docComment;
+            }
+        }
+        else
+        {
+            text = docComment;
+        }
+
+        // Collapse whitespace
+        text = Regex.Replace(text.Trim(), @"\s+", " ");
+
+        if (string.IsNullOrEmpty(text))
+            return string.Empty;
+
+        const int maxLength = 120;
+        if (text.Length > maxLength)
+            text = string.Concat(text.AsSpan(0, maxLength), "\u2026");
+
+        return text;
     }
 }

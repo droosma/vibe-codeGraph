@@ -190,7 +190,7 @@ public class CompactFormatterTests
     }
 
     [Fact]
-    public void Format_DocComment_ShownUnderNode()
+    public void Format_DocComment_ShownInlineOnHeader()
     {
         var target = new GraphNode
         {
@@ -207,7 +207,11 @@ public class CompactFormatterTests
             WasTruncated = false, TotalMatchCount = 1
         };
         var output = CompactFormatter.Format(result);
-        Assert.Contains("Does important stuff.", output);
+        // Should be inline on the header line, not a separate line
+        Assert.Contains("// Does important stuff.", output);
+        var lines = output.Split('\n');
+        var headerLine = lines.First(l => l.StartsWith("## A.Run"));
+        Assert.Contains("// Does important stuff.", headerLine);
     }
 
     [Fact]
@@ -435,6 +439,114 @@ public class CompactFormatterTests
         var output = CompactFormatter.Format(result);
         Assert.Contains("← calls:", output);
         Assert.Contains("OrderController.Post", output);
+    }
+
+    [Fact]
+    public void ExtractSummary_XmlDocComment_ExtractsSummaryOnly()
+    {
+        var xml = "<summary>Places an order.</summary><param name=\"req\">The request.</param><returns>Result.</returns>";
+        var result = CompactFormatter.ExtractSummary(xml);
+        Assert.Equal("Places an order.", result);
+    }
+
+    [Fact]
+    public void ExtractSummary_PlainText_UsedAsIs()
+    {
+        var result = CompactFormatter.ExtractSummary("Simple plain text comment.");
+        Assert.Equal("Simple plain text comment.", result);
+    }
+
+    [Fact]
+    public void ExtractSummary_TruncatesLongText()
+    {
+        var longText = new string('a', 200);
+        var result = CompactFormatter.ExtractSummary(longText);
+        Assert.Equal(121, result.Length); // 120 chars + ellipsis
+        Assert.EndsWith("\u2026", result);
+    }
+
+    [Fact]
+    public void ExtractSummary_XmlWithNoSummary_ReturnsEmpty()
+    {
+        var xml = "<param name=\"x\">The value.</param><returns>Something.</returns>";
+        var result = CompactFormatter.ExtractSummary(xml);
+        Assert.Equal(string.Empty, result);
+    }
+
+    [Fact]
+    public void ExtractSummary_NullOrEmpty_ReturnsEmpty()
+    {
+        Assert.Equal(string.Empty, CompactFormatter.ExtractSummary(null));
+        Assert.Equal(string.Empty, CompactFormatter.ExtractSummary(""));
+        Assert.Equal(string.Empty, CompactFormatter.ExtractSummary("   "));
+    }
+
+    [Fact]
+    public void ExtractSummary_CollapsesWhitespace()
+    {
+        var xml = "<summary>\n  Places an order\n  and triggers payment.\n</summary>";
+        var result = CompactFormatter.ExtractSummary(xml);
+        Assert.Equal("Places an order and triggers payment.", result);
+    }
+
+    [Fact]
+    public void Format_EmptyDocComment_NoInlineComment()
+    {
+        var target = new GraphNode
+        {
+            Id = "A.Run", Name = "Run", Kind = NodeKind.Method,
+            DocComment = "", Accessibility = Accessibility.Public
+        };
+        var result = new QueryResult
+        {
+            TargetNode = target,
+            MatchedNodes = new List<GraphNode> { target },
+            Nodes = new Dictionary<string, GraphNode> { [target.Id] = target },
+            Edges = new List<GraphEdge>(),
+            Metadata = new GraphMetadata { SchemaVersion = 1, GeneratedAt = DateTime.UtcNow, Solution = "T.sln", SolutionName = "T", CommitHash = "abc", Branch = "main", ProjectsIndexed = Array.Empty<string>() },
+            WasTruncated = false, TotalMatchCount = 1
+        };
+        var output = CompactFormatter.Format(result);
+        Assert.DoesNotContain("//", output);
+    }
+
+    [Fact]
+    public void Format_RelatedNodes_NoDocComment()
+    {
+        var target = new GraphNode
+        {
+            Id = "MyApp.Services.OrderService.PlaceOrder", Name = "PlaceOrder",
+            Kind = NodeKind.Method, DocComment = "Target comment.",
+            Accessibility = Accessibility.Public
+        };
+        var related = new GraphNode
+        {
+            Id = "MyApp.Services.InventoryService.Reserve", Name = "Reserve",
+            Kind = NodeKind.Method, DocComment = "Related comment.",
+            Accessibility = Accessibility.Public
+        };
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            [target.Id] = target,
+            [related.Id] = related
+        };
+        var result = new QueryResult
+        {
+            TargetNode = target,
+            MatchedNodes = new List<GraphNode> { target },
+            Nodes = nodes,
+            Edges = new List<GraphEdge>(),
+            Metadata = new GraphMetadata { SchemaVersion = 1, GeneratedAt = DateTime.UtcNow, Solution = "T.sln", SolutionName = "T", CommitHash = "abc", Branch = "main", ProjectsIndexed = Array.Empty<string>() },
+            WasTruncated = false, TotalMatchCount = 1
+        };
+        var output = CompactFormatter.Format(result);
+        // Target should have inline comment
+        Assert.Contains("// Target comment.", output);
+        // Related node line should NOT have any doc comment
+        var lines = output.Split('\n');
+        var relatedLine = lines.FirstOrDefault(l => l.StartsWith("- ") && l.Contains("Reserve"));
+        Assert.NotNull(relatedLine);
+        Assert.DoesNotContain("Related comment.", relatedLine);
     }
 
     private static QueryResult BuildSimpleResult()

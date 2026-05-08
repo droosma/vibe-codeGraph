@@ -282,7 +282,7 @@ public class CompactFormatterMutationTests
     }
 
     [Fact]
-    public void Format_NodeBlock_WithDocComment_IndentedBelow()
+    public void Format_NodeBlock_WithDocComment_InlineOnHeader()
     {
         var target = MakeNode("A", NodeKind.Type, docComment: "My doc");
         var result = new QueryResult
@@ -296,7 +296,9 @@ public class CompactFormatterMutationTests
         };
         var output = CompactFormatter.Format(result);
 
-        Assert.Contains("  My doc", output);
+        // Doc comment should be inline on the header, not on a separate indented line
+        Assert.Contains("// My doc", output);
+        Assert.DoesNotContain("  My doc", output);
     }
 
     [Fact]
