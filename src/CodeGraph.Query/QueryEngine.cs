@@ -3,6 +3,7 @@ using CodeGraph.Core.IO;
 using CodeGraph.Core.IO.Sqlite;
 using CodeGraph.Core.Models;
 using CodeGraph.Query.Filters;
+using CodeGraph.Query.Metrics;
 
 namespace CodeGraph.Query;
 
@@ -39,6 +40,28 @@ public class QueryEngine
             }
             inList.Add(edge);
         }
+    }
+
+    public Dictionary<string, GraphNode> Nodes => _nodes;
+    public List<GraphEdge> Edges => _edges;
+    public GraphMetadata Metadata => _metadata;
+
+    public static bool LooksLikeFilePath(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return false;
+        return value.Contains('/') || value.Contains('\\') || value.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public List<GraphNode> FindByFilePath(string path, NodeKind? kindFilter = null)
+    {
+        var results = _nodes.Values.Where(n =>
+            n.FilePath.Contains(path, StringComparison.OrdinalIgnoreCase) ||
+            n.FilePath.EndsWith(path, StringComparison.OrdinalIgnoreCase));
+
+        if (kindFilter.HasValue)
+            results = results.Where(n => n.Kind == kindFilter.Value);
+
+        return results.ToList();
     }
 
     public static async Task<QueryEngine> LoadAsync(string graphDirectory)
@@ -236,6 +259,13 @@ public class QueryEngine
                 .ToList();
         }
 
+        // Fuzzy fallback: if no matches and pattern has no wildcards, suggest similar names
+        var suggestions = new List<string>();
+        if (matchedNodes.Count == 0 && !options.Pattern.Contains('*'))
+        {
+            suggestions = FindFuzzyMatches(options.Pattern, maxDistance: 2, maxResults: 5);
+        }
+
         return new QueryResult
         {
             TargetNode = targetNode,
@@ -244,8 +274,84 @@ public class QueryEngine
             Edges = subgraphEdges,
             Metadata = _metadata,
             WasTruncated = wasTruncated,
-            TotalMatchCount = totalMatchCount
+            TotalMatchCount = totalMatchCount,
+            Suggestions = suggestions
         };
+    }
+
+    /// <summary>
+    /// Find nodes whose names are within edit distance of the query pattern.
+    /// Only considers Type and Namespace nodes for performance.
+    /// </summary>
+    public List<string> FindFuzzyMatches(string pattern, int maxDistance = 2, int maxResults = 5)
+    {
+        var candidates = _nodes.Values
+            .Where(n => n.Kind == NodeKind.Type || n.Kind == NodeKind.Namespace)
+            .Select(n => (n.Name, Distance: LevenshteinDistance(pattern.ToLowerInvariant(), n.Name.ToLowerInvariant())))
+            .Where(x => x.Distance > 0 && x.Distance <= maxDistance)
+            .OrderBy(x => x.Distance)
+            .ThenBy(x => x.Name)
+            .Select(x => x.Name)
+            .Distinct()
+            .Take(maxResults)
+            .ToList();
+
+        return candidates;
+    }
+
+    /// <summary>
+    /// Computes the Levenshtein (edit) distance between two strings.
+    /// </summary>
+    public static int LevenshteinDistance(string source, string target)
+    {
+        if (string.IsNullOrEmpty(source)) return target?.Length ?? 0;
+        if (string.IsNullOrEmpty(target)) return source.Length;
+
+        var m = source.Length;
+        var n = target.Length;
+        var dp = new int[m + 1, n + 1];
+
+        for (var i = 0; i <= m; i++) dp[i, 0] = i;
+        for (var j = 0; j <= n; j++) dp[0, j] = j;
+
+        for (var i = 1; i <= m; i++)
+        {
+            for (var j = 1; j <= n; j++)
+            {
+                var cost = source[i - 1] == target[j - 1] ? 0 : 1;
+                dp[i, j] = Math.Min(
+                    Math.Min(dp[i - 1, j] + 1, dp[i, j - 1] + 1),
+                    dp[i - 1, j - 1] + cost);
+            }
+        }
+
+        return dp[m, n];
+    }
+
+    /// <summary>
+    /// Estimates cost of running a query without executing full traversal.
+    /// Useful for agents to decide if a query is worth running.
+    /// </summary>
+    public QueryCostEstimate EstimateCost(string pattern, QueryOptions options)
+    {
+        var matchedNodes = FindMatchingNodes(pattern);
+        if (matchedNodes.Count == 0)
+            return new QueryCostEstimate(0, 0, 0, 0);
+
+        var seedIds = matchedNodes.Select(n => n.Id).ToList();
+        var allowedEdges = QueryModeEdgeSets.ForMode(options.Mode);
+        var reachableIds = DepthFilter.Traverse(
+            seedIds, _outgoing, _incoming, options.Depth, options.IncludeExternal, allowedEdges);
+
+        var nodeCount = Math.Min(reachableIds.Count, options.MaxNodes);
+        var edgeCount = _edges
+            .Count(e => reachableIds.Contains(e.FromId) && reachableIds.Contains(e.ToId));
+
+        // Token estimates: compact ~50/node + 20/edge, context ~150/node + 60/edge
+        var tokensCompact = nodeCount * 50 + edgeCount * 20;
+        var tokensContext = nodeCount * 150 + edgeCount * 60;
+
+        return new QueryCostEstimate(nodeCount, edgeCount, tokensCompact, tokensContext);
     }
 
     private List<GraphNode> FindMatchingNodes(string pattern)
@@ -316,6 +422,7 @@ public record QueryOptions
     public int MaxNodes { get; init; } = 50;
     public bool IncludeExternal { get; init; }
     public bool Rank { get; init; } = true;
+    public bool IgnoreCase { get; init; }
     public OutputFormat Format { get; init; } = OutputFormat.Context;
     public QueryMode Mode { get; init; } = QueryMode.All;
     public int? Budget { get; init; }
@@ -370,4 +477,5 @@ public record QueryResult
     public GraphMetadata Metadata { get; init; } = null!;
     public bool WasTruncated { get; init; }
     public int TotalMatchCount { get; init; }
+    public List<string> Suggestions { get; init; } = new();
 }

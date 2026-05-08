@@ -54,6 +54,14 @@ public static class CompactFormatter
         if (result.WasTruncated)
             sb.AppendLine($"\n⚠ Truncated ({result.TotalMatchCount} total matches)");
 
+        if (result.Suggestions.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Did you mean:");
+            foreach (var suggestion in result.Suggestions)
+                sb.AppendLine($"  - {suggestion}");
+        }
+
         return sb.ToString().TrimEnd();
     }
 

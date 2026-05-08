@@ -995,62 +995,6 @@ static async Task<int> RunWikiAsync(string[] args)
     return 0;
 }
 
-static async Task<int> RunViewAsync(string[] args)
-{
-    var graphDir = ".codegraph";
-    var output = (string?)null;
-    var maxNodes = 5000;
-    var open = true;
-
-    for (var i = 1; i < args.Length; i++)
-    {
-        switch (args[i])
-        {
-            case "--graph-dir" when i + 1 < args.Length:
-                graphDir = args[++i];
-                break;
-            case "--output" or "-o" when i + 1 < args.Length:
-                output = args[++i];
-                break;
-            case "--max-nodes" when i + 1 < args.Length:
-                maxNodes = int.Parse(args[++i]);
-                break;
-            case "--no-open":
-                open = false;
-                break;
-            case "-h" or "--help":
-                PrintViewUsage();
-                return 0;
-        }
-    }
-
-    output ??= Path.Combine(graphDir, "graph.html");
-
-    var generator = new HtmlGraphGenerator(graphDir, maxNodes);
-
-    try
-    {
-        var html = await generator.GenerateAsync();
-        var fullPath = Path.GetFullPath(output);
-        await File.WriteAllTextAsync(fullPath, html);
-        Console.WriteLine($"Graph visualization written to {fullPath}");
-
-        if (open)
-        {
-            var psi = new System.Diagnostics.ProcessStartInfo(fullPath) { UseShellExecute = true };
-            System.Diagnostics.Process.Start(psi);
-        }
-    }
-    catch (FileNotFoundException ex)
-    {
-        Console.Error.WriteLine($"Error: {ex.Message}");
-        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
-        return 1;
-    }
-
-    return 0;
-}
-
 static async Task<int> RunExportAsync(string[] args)
 {
     var graphDir = ".codegraph";
@@ -1644,30 +1588,6 @@ static void PrintExportUsage()
           codegraph export                                    # Export from .codegraph/graph.db to export/
           codegraph export --output my-export                 # Export to my-export/
           codegraph export --graph-dir .codegraph --output .  # Export JSON alongside graph.db
-        """);
-}
-
-static void PrintViewUsage()
-{
-    Console.WriteLine("""
-        Usage: codegraph view [options]
-
-        Generates an interactive 3D graph visualization as a self-contained HTML file
-        and opens it in the default browser.
-
-        Options:
-          --graph-dir <path>   Directory containing graph data (default: .codegraph)
-          --output <path>      Save HTML to a specific file (default: temp file)
-          --max-nodes <n>      Maximum nodes to render, smart-sampled when exceeded (default: 5000)
-          --no-open            Generate HTML but do not open in browser
-          --help, -h           Show this help
-
-        Examples:
-          codegraph view                              # Open graph in browser
-          codegraph view --output graph.html          # Save to file
-          codegraph view --max-nodes 2000             # Limit for performance
-          codegraph view --graph-dir .codegraph/Api   # View specific sub-graph
-          codegraph view --output report.html --no-open  # CI: generate without opening
         """);
 }
 

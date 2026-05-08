@@ -48,6 +48,14 @@ public static class TextFormatter
         if (result.WasTruncated)
             sb.AppendLine($"⚠ Results truncated. Showing subset of {result.TotalMatchCount} total matches.");
 
+        if (result.Suggestions.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Did you mean:");
+            foreach (var suggestion in result.Suggestions)
+                sb.AppendLine($"  - {suggestion}");
+        }
+
         return sb.ToString().TrimEnd();
     }
 }

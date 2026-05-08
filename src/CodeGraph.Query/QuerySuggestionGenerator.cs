@@ -9,12 +9,28 @@ namespace CodeGraph.Query;
 public static class QuerySuggestionGenerator
 {
     /// <summary>
-    /// Generates up to <paramref name="maxSuggestions"/> follow-up query suggestions
-    /// based on the current query result and options.
+    /// Generates follow-up query suggestions (non-session-aware overload).
     /// </summary>
     public static List<string> Generate(QueryResult result, QueryOptions options, int maxSuggestions = 3)
     {
+        return Generate(result, options, session: null, maxSuggestions);
+    }
+
+    /// <summary>
+    /// Generates up to <paramref name="maxSuggestions"/> follow-up query suggestions,
+    /// optionally session-aware to avoid repeating already-explored patterns.
+    /// </summary>
+    public static List<string> Generate(QueryResult result, QueryOptions options, QuerySessionTracker? session, int maxSuggestions = 3)
+    {
         var suggestions = new List<string>();
+
+        // After 3+ queries, suggest report mode
+        if (session is not null && session.QueryCount >= 3)
+        {
+            suggestions.Add("codegraph report --format compact");
+            return suggestions.Take(maxSuggestions).ToList();
+        }
+
         if (result.Nodes.Count == 0)
             return suggestions;
 
@@ -34,16 +50,22 @@ public static class QuerySuggestionGenerator
         var hasCalls = edgeTypes.Contains(EdgeType.Calls);
         var hasInheritance = edgeTypes.Contains(EdgeType.Inherits);
 
-        // Suggest deeper traversal if at depth 1
+        // Suggest deeper traversal if at depth 1, unless already queried at depth 2+
         if (options.Depth <= 1 && result.Edges.Count > 0)
         {
-            suggestions.Add($"codegraph query {Quote(targetNode.Name)} --depth 2 --format compact");
+            if (session is null || !session.WasQueriedAtDepth(targetNode.Name, 2))
+            {
+                suggestions.Add($"codegraph query {Quote(targetNode.Name)} --depth 2 --format compact");
+            }
         }
 
         // Suggest call chain exploration
         if (hasCalls && options.EdgeTypeFilter != EdgeType.Calls)
         {
-            suggestions.Add($"codegraph query {Quote(targetNode.Name)} --depth 3 --kind calls --format compact");
+            if (session is null || !session.WasQueried(targetNode.Name + " --kind calls"))
+            {
+                suggestions.Add($"codegraph query {Quote(targetNode.Name)} --depth 3 --kind calls --format compact");
+            }
         }
 
         // Suggest DI wiring for interfaces
@@ -78,6 +100,18 @@ public static class QuerySuggestionGenerator
         if (hasInheritance && options.EdgeTypeFilter != EdgeType.Inherits)
         {
             suggestions.Add($"codegraph query {Quote(targetNode.Name)} --kind inherits --depth 3 --format compact");
+        }
+
+        // Suggest unexplored neighbors from the result
+        if (session is not null && result.Nodes.Count > 1)
+        {
+            var unexplored = result.Nodes.Values
+                .Where(n => n.Kind == NodeKind.Type && n.Id != targetNode.Id && !session.WasQueried(n.Name))
+                .Take(2);
+            foreach (var n in unexplored)
+            {
+                suggestions.Add($"codegraph query {Quote(n.Name)} --depth 1 --format compact");
+            }
         }
 
         // Suggest cross-project exploration if result spans multiple assemblies
