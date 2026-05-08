@@ -1,0 +1,52 @@
+{
+  "scenarios": [
+    {
+      "name": "query-single-type",
+      "description": "Query a single type with depth 1",
+      "command": "query",
+      "args": { "pattern": "QueryEngine", "depth": 1, "format": "compact" }
+    },
+    {
+      "name": "query-deep-traversal",
+      "description": "Query with depth 3 for full graph walk",
+      "command": "query",
+      "args": { "pattern": "QueryEngine", "depth": 3, "format": "compact" }
+    },
+    {
+      "name": "search-exact",
+      "description": "Search for an exact symbol name",
+      "command": "search",
+      "args": { "query": "QueryEngine", "top": 20 }
+    },
+    {
+      "name": "search-broad",
+      "description": "Search with a broad term",
+      "command": "search",
+      "args": { "query": "Service", "top": 50 }
+    },
+    {
+      "name": "list-assemblies",
+      "description": "List all assemblies",
+      "command": "list",
+      "args": { "scope": "assemblies" }
+    },
+    {
+      "name": "list-types",
+      "description": "List all types ranked by connectivity",
+      "command": "list",
+      "args": { "scope": "types", "top": 100 }
+    },
+    {
+      "name": "impact-analysis",
+      "description": "Analyze impact of changing a central type",
+      "command": "impact",
+      "args": { "symbol": "QueryEngine", "depth": 3 }
+    },
+    {
+      "name": "batch-query",
+      "description": "Query multiple symbols in one call",
+      "command": "batch",
+      "args": { "symbols": ["QueryEngine", "GraphNode", "GraphEdge"], "depth": 1 }
+    }
+  ]
+}
