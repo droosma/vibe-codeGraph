@@ -165,6 +165,7 @@ codegraph query <symbol-pattern> [options]
 |------|-------------|---------|
 | `--depth <n>` | BFS traversal depth | `1` |
 | `--kind <type>` | Edge filter (see table below) | All kinds |
+| `--file <path>` | Find all symbols in the given source file instead of querying by pattern | (none) |
 | `--mode <mode>` | Traversal mode: `focused` (high-signal edges only), `structural` (includes containment), `all` | `all` |
 | `--namespace <pattern>` | Namespace filter (supports wildcards) | All namespaces |
 | `--project <name>` | Project filter | All projects |

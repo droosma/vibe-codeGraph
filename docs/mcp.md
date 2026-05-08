@@ -38,7 +38,7 @@ codegraph mcp [options]
 
 ## Exposed MCP Tools
 
-The server exposes six tools. Agents call them like any other tool:
+The server exposes eight tools. Agents call them like any other tool:
 
 | MCP Tool | Description |
 |----------|-------------|
@@ -48,6 +48,8 @@ The server exposes six tools. Agents call them like any other tool:
 | `codegraph_path` | Find the shortest dependency path between two symbols |
 | `codegraph_impact` | Reverse-dependency analysis — assess the blast radius of a change |
 | `codegraph_explain` | Full symbol deep-dive: signature, members, all edges, test coverage |
+| `codegraph_file` | Find all symbols defined in a source file by file path |
+| `codegraph_batch` | Query multiple symbols in one call and receive combined results |
 
 These tools wrap the same library code used by the CLI commands — there is no difference in capability.
 

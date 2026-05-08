@@ -58,7 +58,7 @@ For **APM**: run `apm install` to wire the MCP server into all detected clients.
 
 ### MCP Tool Reference
 
-The MCP server exposes six tools. Agents call them like any other native tool.
+The MCP server exposes eight tools. Agents call them like any other native tool.
 
 #### `codegraph_query`
 
@@ -136,6 +136,30 @@ Get a comprehensive view of a single symbol: its type, file location, signature,
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `symbol` | `string` | ✅ | — | Symbol name or pattern to explain. |
+
+#### `codegraph_file`
+
+Find all symbols defined in a source file by file path. Use when you know the file but not the individual symbol names — for example, after receiving a list of changed files from `git diff`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `path` | `string` | ✅ | — | File path or partial path. Partial matches are accepted (e.g., `OrderService.cs`). Cross-platform: backslashes and forward slashes both work. |
+| `kind` | `string` | | `"type"` | Filter returned symbols by node kind: `type`, `method`, or `all`. |
+
+Output lists each symbol with its kind, fully-qualified ID, signature, and line range.
+
+#### `codegraph_batch`
+
+Query multiple symbols in one call and receive combined, deduplicated results. More efficient than issuing separate `codegraph_query` calls when you need context for several symbols at once.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `symbols` | `string[]` | ✅ | — | List of symbol names or patterns to query. |
+| `depth` | `integer` | | `1` | BFS traversal depth applied to every symbol. |
+| `format` | `string` | | `"compact"` | Output format: `compact`, `context`, `json`, or `text`. Defaults to `compact` to minimise token usage across the merged result. |
+| `mode` | `string` | | `"focused"` | Traversal mode: `focused`, `structural`, or `all`. |
+
+Results from all symbols are merged: nodes and edges are deduplicated so shared types appear only once.
 
 ---
 
