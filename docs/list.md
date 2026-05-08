@@ -157,6 +157,7 @@ codegraph list types --graph-dir .codegraph/Workers
 
 ## See Also
 
+- [`codegraph search`](search.md) — find symbols by name when you don't know the exact identifier
 - [`codegraph query`](../README.md#codegraph-query) — query for specific symbols and their relationships
 - [`codegraph stats`](stats.md) — print numeric statistics (node/edge counts)
 - [`codegraph report`](report.md) — full Markdown analysis report

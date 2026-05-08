@@ -202,6 +202,48 @@ codegraph query <symbol-pattern> [options]
 | `contains` | Contains |
 | `all` | No filter |
 
+### `codegraph compare`
+
+Compare two symbols structurally — show their shared interfaces, base types, and dependencies, plus what makes each one unique.
+
+```
+codegraph compare <symbolA> <symbolB> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--depth <n>` | BFS traversal depth for gathering edges | `1` |
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph compare OrderService InvoiceService
+codegraph compare SqlOrderRepository InMemoryOrderRepository --depth 2
+```
+
+See [docs/compare.md](docs/compare.md) for the full guide, including output format and common workflows.
+
+### `codegraph search`
+
+Search for symbols by name, namespace, or file path using case-insensitive substring matching. The fastest way to discover symbols when you only know part of the name.
+
+```
+codegraph search <query> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--top <n>` | Maximum results to return | `20` |
+| `--kind <kind>` | Filter by kind: `type`, `method`, `namespace`, `property`, `field` | All kinds |
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph search payment                    # Find anything related to "payment"
+codegraph search order --kind type          # Only types whose name/path contains "order"
+codegraph search Controllers/Order          # Find by file path fragment
+```
+
+See [docs/search.md](docs/search.md) for the full guide, including how search differs from `query` and `list`.
+
 ### `codegraph diff`
 
 Compare two graph snapshots and report structural changes.
