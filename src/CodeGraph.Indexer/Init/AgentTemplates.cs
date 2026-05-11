@@ -16,35 +16,42 @@ internal static class AgentTemplates
 
         ## Strategy — Follow This Order
 
-        1. **Orient** — read `.codegraph/REPORT.md` if it exists (free overview, zero tool calls)
+        1. **Orient** — read `.codegraph/BRIEF.md` or `.codegraph/REPORT.md` (free overview, zero tool calls)
         2. **Scope** — `codegraph list assemblies` to find relevant projects
         3. **Query** — `codegraph query <symbol> --depth 1 --format compact` for relationships
         4. **Deepen** — increase `--depth` or add `--kind` filters to follow specific edges
         5. **Detail** — only grep/view specific source lines when you need method bodies
 
-        Default MCP settings are optimized for token efficiency:
-        - Format defaults to `compact` (~3-5× fewer tokens than `context`)
+        CLI defaults are optimized for token efficiency:
+        - Format defaults to `compact` when output is piped (~3-5× fewer tokens than `context`)
         - Mode defaults to `focused` (high-signal edges only)
         - Use `--format context` when you need full signatures and metadata
         - Use `--mode all` only for exhaustive analysis
         - Use `--include-source` only AFTER narrowing to a specific method — snippets are capped at 20 lines
+        - Use `--json` on any command for machine-readable output
 
         This strategy uses ~4× fewer tokens than reading source files directly.
 
-        > **Prefer MCP tools over CLI commands for speed** — MCP keeps the graph in memory.
-        > For non-MCP clients, run `codegraph daemon start` to keep the graph resident.
+        > **Use CLI commands** — they have zero schema overhead. MCP is available
+        > as an alternative for IDE-only agents that cannot run shell commands.
 
         ## Commands
 
         ```bash
-        codegraph query <symbol> --depth 1 --format compact   # relationships
-        codegraph query <symbol> --depth 3 --kind calls        # call chains
-        codegraph query I<Name> --kind resolves-to             # DI wiring
-        codegraph query <symbol> --kind implements             # implementations
-        codegraph list assemblies                               # project overview
-        codegraph list types --project <name>                   # types in a project
-        codegraph report                                        # generate full report
-        codegraph stats                                         # node/edge counts
+        codegraph brief                                          # generate BRIEF.md orientation
+        codegraph query <symbol> --depth 1 --format compact      # relationships
+        codegraph query <symbol> --depth 3 --kind calls          # call chains
+        codegraph query I<Name> --kind resolves-to               # DI wiring
+        codegraph query <symbol> --kind implements               # implementations
+        codegraph list assemblies                                 # project overview
+        codegraph list types --project <name>                     # types in a project
+        codegraph search <term>                                   # fuzzy symbol search
+        codegraph explain <symbol>                                # full symbol deep-dive
+        codegraph impact <symbol>                                 # blast radius analysis
+        codegraph path --from A --to B                            # shortest dependency path
+        codegraph test-impact <symbol>                            # test coverage analysis
+        codegraph report                                          # generate full report
+        codegraph stats                                           # node/edge counts
         ```
 
         ## Key Flags
@@ -53,23 +60,30 @@ internal static class AgentTemplates
         |------|---------|
         | `--depth <n>` | BFS depth (start at 1, increase as needed) |
         | `--kind <type>` | Filter: `calls`, `inherits`, `implements`, `resolves-to`, `covers`, `depends-on` |
-        | `--format compact` | Minimal output — signatures + edges only, ~3-5× fewer tokens (MCP default) |
+        | `--format compact` | Minimal output — signatures + edges only, ~3-5× fewer tokens |
+        | `--json` | Machine-readable JSON output |
         | `--budget <tokens>` | Hard cap on output token count |
-        | `--mode focused` | Only high-signal relationships — calls, inheritance, DI (MCP default) |
+        | `--mode focused` | Only high-signal relationships — calls, inheritance, DI (default) |
         | `--include-external` | Include NuGet/framework dependencies |
 
         ## When to Use Each Tool
 
         | Question pattern | Use |
         |-----------------|-----|
+        | "What's the overall architecture?" | Read `.codegraph/BRIEF.md` or `codegraph summary` |
         | "What calls/implements/depends on X?" | `codegraph query` |
-        | "Find things related to <domain>" | `codegraph list types --assembly <name>` |
+        | "Find things related to <domain>" | `codegraph search <term>` |
         | "How are A and B connected?" | `codegraph path --from A --to B` |
         | "What breaks if I change X?" | `codegraph impact <symbol>` |
-        | "What's the overall architecture?" | `codegraph summary` (or read REPORT.md) |
         | "Tell me everything about X" | `codegraph explain <symbol>` |
+        | "What tests cover X?" | `codegraph test-impact <symbol>` |
         | "What does this method body do?" | `grep`/`view` source files |
-        | "Find all TODO/FIXME comments" | `grep` |
+
+        ## Exit Codes
+
+        - `0` — success with results
+        - `1` — error (bad args, missing graph, etc.)
+        - `2` — success but no results found
         """;
 
     public const string ClaudeQueryWrapperSh = """
@@ -89,39 +103,48 @@ internal static class AgentTemplates
 
         ### Strategy — Follow This Order
 
-        1. **Orient** — read `.codegraph/REPORT.md` if it exists (free overview)
+        1. **Orient** — read `.codegraph/BRIEF.md` or `.codegraph/REPORT.md` (free overview)
         2. **Scope** — `codegraph list assemblies` to find relevant projects
         3. **Query** — `codegraph query <symbol> --depth 1 --format compact`
         4. **Deepen** — increase `--depth` or add `--kind` to follow edges
         5. **Detail** — only grep/view source when you need method bodies
 
-        MCP defaults: `compact` format + `focused` mode (token-optimized).
-        Use `--format context` for full detail, `--mode all` for exhaustive traversal.
+        CLI defaults are token-optimized: `compact` format + `focused` mode when piped.
+        Use `--json` for machine-readable output. Use `--format context` for full detail.
 
-        > **Prefer MCP tools over CLI commands for speed** — MCP keeps the graph in memory.
-        > For non-MCP clients, run `codegraph daemon start` to keep the graph resident.
+        > **Use CLI commands** — they have zero schema overhead. MCP is available
+        > as an alternative for IDE-only agents that cannot run shell commands.
 
         ### Quick Reference
 
         ```bash
-        codegraph query <symbol> --depth 1 --format compact   # relationships
-        codegraph query <symbol> --depth 3 --kind calls        # call chains
-        codegraph query I<Name> --kind resolves-to             # DI wiring
-        codegraph list assemblies                               # project overview
-        codegraph report                                        # generate full report
+        codegraph brief                                          # generate BRIEF.md orientation
+        codegraph query <symbol> --depth 1 --format compact      # relationships
+        codegraph query <symbol> --depth 3 --kind calls          # call chains
+        codegraph query I<Name> --kind resolves-to               # DI wiring
+        codegraph list assemblies                                 # project overview
+        codegraph search <term>                                   # fuzzy symbol search
+        codegraph explain <symbol>                                # full deep-dive
+        codegraph impact <symbol>                                 # blast radius
+        codegraph test-impact <symbol>                            # test coverage
+        codegraph report                                          # generate full report
         ```
 
         ### When to Use Each Tool
 
         | Question pattern | Use |
         |-----------------|-----|
+        | "What's the overall architecture?" | Read `.codegraph/BRIEF.md` or `codegraph summary` |
         | "What calls/implements/depends on X?" | `codegraph query` |
-        | "Find things related to <domain>" | `codegraph list types --assembly <name>` |
+        | "Find things related to <domain>" | `codegraph search <term>` |
         | "How are A and B connected?" | `codegraph path --from A --to B` |
         | "What breaks if I change X?" | `codegraph impact <symbol>` |
-        | "What's the overall architecture?" | `codegraph summary` (or read REPORT.md) |
+        | "What tests cover X?" | `codegraph test-impact <symbol>` |
         | "What does this method body do?" | `grep`/`view` source files |
-        | "Find all TODO/FIXME comments" | `grep` |
+
+        ### Exit Codes
+
+        `0` success | `1` error | `2` no results found
         """;
 
     public const string OpenCodeAgentsSection = """
@@ -132,12 +155,12 @@ internal static class AgentTemplates
         Use it as your **primary** tool for structural questions — ~4× fewer tokens
         than reading source files.
 
-        > **Prefer MCP tools over CLI commands for speed** — MCP keeps the graph in memory.
-        > For non-MCP clients, run `codegraph daemon start` to keep the graph resident.
+        > **Use CLI commands** — they have zero schema overhead and work with any agent.
+        > MCP is available as an alternative for IDE-only agents.
 
         ### Strategy
 
-        1. Read `.codegraph/REPORT.md` first (free architectural overview)
+        1. Read `.codegraph/BRIEF.md` or `.codegraph/REPORT.md` first (free architectural overview)
         2. `codegraph list assemblies` to scope relevant projects
         3. `codegraph query <symbol> --depth 1 --format compact` for relationships
         4. Increase `--depth` or add `--kind calls|resolves-to|implements` to follow edges
@@ -146,17 +169,30 @@ internal static class AgentTemplates
         ### Commands
 
         ```bash
-        codegraph query <symbol> --depth 1 --format compact   # relationships
-        codegraph query <symbol> --depth 3 --kind calls        # call chains
-        codegraph query I<Name> --kind resolves-to             # DI wiring
-        codegraph list assemblies                               # project overview
-        codegraph report                                        # full report
+        codegraph brief                                          # generate BRIEF.md orientation
+        codegraph query <symbol> --depth 1 --format compact      # relationships
+        codegraph query <symbol> --depth 3 --kind calls          # call chains
+        codegraph query I<Name> --kind resolves-to               # DI wiring
+        codegraph list assemblies                                 # project overview
+        codegraph search <term>                                   # fuzzy symbol search
+        codegraph explain <symbol>                                # full deep-dive
+        codegraph impact <symbol>                                 # blast radius
+        codegraph test-impact <symbol>                            # test coverage
+        codegraph report                                          # full report
         ```
 
         ### Edge Kinds
 
         `calls`, `inherits`, `implements`, `depends-on`, `resolves-to`,
         `covers`, `covered-by`, `references`, `overrides`, `contains`
+
+        ### Exit Codes
+
+        `0` success | `1` error | `2` no results found
+
+        ### Machine-Readable Output
+
+        Add `--json` to any command for JSON output.
         """;
 
     public const string CursorRuleMd = """
@@ -165,12 +201,12 @@ internal static class AgentTemplates
         Pre-built code graph for this C# codebase. Use `codegraph` instead of
         grepping for code structure — ~4× fewer tokens.
 
-        > **Prefer MCP tools over CLI commands for speed** — MCP keeps the graph in memory.
-        > For non-MCP clients, run `codegraph daemon start` to keep the graph resident.
+        > **Use CLI commands** — they have zero schema overhead and work with any agent.
+        > MCP is available as an alternative for IDE-only contexts.
 
         ## Strategy
 
-        1. Read `.codegraph/REPORT.md` first (free overview)
+        1. Read `.codegraph/BRIEF.md` or `.codegraph/REPORT.md` first (free overview)
         2. `codegraph list assemblies` to scope
         3. `codegraph query <symbol> --depth 1 --format compact` for relationships
         4. Add `--kind calls|resolves-to|implements` to filter edges
@@ -179,17 +215,32 @@ internal static class AgentTemplates
         ## Commands
 
         ```bash
-        codegraph query <symbol> --depth 1 --format compact
-        codegraph query <symbol> --depth 3 --kind calls
-        codegraph query I<Name> --kind resolves-to
-        codegraph list assemblies
-        codegraph report
+        codegraph brief                                          # generate BRIEF.md orientation
+        codegraph query <symbol> --depth 1 --format compact      # relationships
+        codegraph query <symbol> --depth 3 --kind calls          # call chains
+        codegraph query I<Name> --kind resolves-to               # DI wiring
+        codegraph list assemblies                                 # project overview
+        codegraph search <term>                                   # fuzzy symbol search
+        codegraph explain <symbol>                                # full deep-dive
+        codegraph impact <symbol>                                 # blast radius
+        codegraph test-impact <symbol>                            # test coverage
+        codegraph report                                          # full report
         ```
 
         ## Edge Kinds
 
         `calls`, `inherits`, `implements`, `depends-on`, `resolves-to`,
         `covers`, `covered-by`, `references`, `overrides`, `contains`
+
+        ## Key Flags
+
+        `--json` machine-readable output | `--depth <n>` BFS depth |
+        `--kind <type>` edge filter | `--format compact` minimal tokens |
+        `--budget <n>` token cap | `--mode focused` high-signal only
+
+        ## Exit Codes
+
+        `0` success | `1` error | `2` no results found
         """;
 
     public const string GenericInstructionsMd = """
@@ -199,12 +250,12 @@ internal static class AgentTemplates
         of all types, methods, call chains, interface implementations, and DI wiring.
         Using CodeGraph consumes ~4× fewer tokens than reading source files directly.
 
-        > **Prefer MCP tools over CLI commands for speed** — MCP keeps the graph in memory.
-        > For non-MCP clients, run `codegraph daemon start` to keep the graph resident.
+        > **Use CLI commands** — they have zero schema overhead and work with any agent.
+        > MCP is available as an alternative for IDE-only agents that cannot run shell commands.
 
         ## Strategy — Follow This Order
 
-        1. **Orient** — read `.codegraph/REPORT.md` if it exists (free architectural overview)
+        1. **Orient** — read `.codegraph/BRIEF.md` or `.codegraph/REPORT.md` (free overview, zero tool calls)
         2. **Scope** — `codegraph list assemblies` to identify relevant projects
         3. **Query** — `codegraph query <symbol> --depth 1 --format compact` for relationships
         4. **Deepen** — increase `--depth` or add `--kind` filters to follow specific edges
@@ -214,32 +265,40 @@ internal static class AgentTemplates
 
         | Question pattern | Use |
         |-----------------|-----|
+        | "What's the overall architecture?" | Read `.codegraph/BRIEF.md` or `codegraph summary` |
         | "What calls/implements/depends on X?" | `codegraph query` |
-        | "Find things related to <domain>" | `codegraph list types --assembly <name>` |
+        | "Find things related to <domain>" | `codegraph search <term>` |
         | "How are A and B connected?" | `codegraph path --from A --to B` |
         | "What breaks if I change X?" | `codegraph impact <symbol>` |
-        | "What's the overall architecture?" | `codegraph summary` (or read REPORT.md) |
         | "Tell me everything about X" | `codegraph explain <symbol>` |
+        | "What tests cover X?" | `codegraph test-impact <symbol>` |
         | "What does this method body do?" | `grep`/`view` source files |
-        | "Find all TODO/FIXME comments" | `grep` |
 
         ## Commands
 
         ```bash
-        # Structural queries (use these FIRST)
-        codegraph query <symbol> --depth 1 --format compact   # relationships
-        codegraph query <symbol> --depth 3 --kind calls        # call chains
-        codegraph query I<Name> --kind resolves-to             # DI wiring / implementations
-        codegraph query <Base> --kind inherits                 # inheritance tree
+        # Orientation (start here)
+        codegraph brief                                          # generate BRIEF.md overview
+        codegraph report                                         # generate full REPORT.md
 
-        # Navigation
-        codegraph list assemblies                               # all projects
-        codegraph list types --project <name>                   # types in a project
-        codegraph list namespaces                               # namespace tree
+        # Structural queries
+        codegraph query <symbol> --depth 1 --format compact      # relationships
+        codegraph query <symbol> --depth 3 --kind calls          # call chains
+        codegraph query I<Name> --kind resolves-to               # DI wiring / implementations
+        codegraph query <Base> --kind inherits                   # inheritance tree
 
-        # Overview
-        codegraph report                                        # full architectural report
-        codegraph stats                                         # node/edge counts
+        # Discovery
+        codegraph search <term>                                  # fuzzy symbol search
+        codegraph list assemblies                                 # all projects
+        codegraph list types --project <name>                     # types in a project
+        codegraph list namespaces                                 # namespace tree
+
+        # Analysis
+        codegraph explain <symbol>                               # full symbol deep-dive
+        codegraph impact <symbol>                                # blast radius
+        codegraph test-impact <symbol>                           # test coverage
+        codegraph path --from A --to B                           # shortest path
+        codegraph stats                                          # node/edge counts
         ```
 
         ## Key Flags
@@ -248,18 +307,26 @@ internal static class AgentTemplates
         |------|---------|
         | `--depth <n>` | BFS depth (start at 1, increase as needed) |
         | `--kind <type>` | Filter edges: `calls`, `inherits`, `implements`, `resolves-to`, `covers`, `depends-on` |
-        | `--format compact` | Minimal output — signatures + edges only, ~3-5× fewer tokens (MCP default) |
+        | `--format compact` | Minimal output — signatures + edges only, ~3-5× fewer tokens |
+        | `--json` | Machine-readable JSON output |
         | `--budget <tokens>` | Hard cap on output token count |
-        | `--mode focused` | Only high-signal relationships — calls, inheritance, DI (MCP default) |
+        | `--mode focused` | Only high-signal relationships — calls, inheritance, DI (default) |
         | `--include-external` | Include NuGet/framework dependencies |
         | `--namespace <pat>` | Filter by namespace (wildcards ok) |
         | `--project <name>` | Filter by project/assembly |
+
+        ## Exit Codes
+
+        - `0` — success with results
+        - `1` — error (bad args, missing graph, etc.)
+        - `2` — success but no results found
 
         ## Rebuilding the Graph
 
         If the codebase has changed significantly, rebuild:
         ```bash
         codegraph index --solution <path.sln> --output .codegraph/
+        codegraph brief   # regenerate orientation
         ```
         """;
 
@@ -293,7 +360,7 @@ internal static class AgentTemplates
 
         ## Tool Preferences
 
-        Use MCP/CodeGraph tools **first** for all structural questions:
+        Use CodeGraph CLI commands **first** for all structural questions:
         ```bash
         codegraph query <symbol> --depth 1 --format compact   # relationships
         codegraph query <symbol> --depth 3 --kind calls        # call chains
@@ -324,7 +391,7 @@ internal static class AgentTemplates
         1. **Identify changed symbols** — determine which types/methods were modified
         2. **Query / Impact** — `codegraph impact <symbol>` or `codegraph query <symbol> --depth 2` for affected callers and dependents
         3. **Diff** — use `git diff` when available for file-level change context
-        4. **Test coverage** — `codegraph query <symbol> --kind covers` to find related tests
+        4. **Test coverage** — `codegraph test-impact <symbol>` to find related tests
 
         ## Output Format
 
@@ -335,11 +402,12 @@ internal static class AgentTemplates
 
         ## Tool Preferences
 
-        Use MCP/CodeGraph tools **first** for impact analysis:
+        Use CodeGraph CLI commands **first** for impact analysis:
         ```bash
         codegraph impact <symbol>                              # blast radius
+        codegraph test-impact <symbol>                         # test coverage
         codegraph query <symbol> --depth 2 --kind calls        # callers
-        codegraph query <symbol> --kind covers                 # test coverage
+        codegraph query <symbol> --kind covers                 # test edges
         codegraph query <symbol> --kind depends-on             # dependencies
         ```
 
