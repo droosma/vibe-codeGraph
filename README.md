@@ -412,6 +412,212 @@ codegraph view --graph-dir .codegraph/Api   # View specific sub-graph
 
 See [docs/view.md](docs/view.md) for the full how-to guide, including sidebar controls, node sampling, and CI usage.
 
+### `codegraph brief`
+
+Generate a compact `BRIEF.md` codebase orientation file — designed to be the **first thing an LLM agent reads**. Covers assemblies, hub types, key interfaces, domain clusters, entry points, test coverage, and suggested starter queries in ~500–1 000 tokens.
+
+```
+codegraph brief [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--graph-dir <dir>` | Directory containing `graph.db` | `.codegraph` |
+
+```bash
+codegraph brief                              # Write .codegraph/BRIEF.md
+codegraph brief --graph-dir .codegraph/Api   # Brief for a sub-graph
+```
+
+> **Tip:** Commit `.codegraph/BRIEF.md` to your repository so agents have an up-to-date orientation file before running any tools.
+
+See [docs/brief.md](docs/brief.md) for the full guide, including output sections, comparison with `report`, and CI integration.
+
+### `codegraph search`
+
+Fuzzy symbol search by name, namespace, or file path. Useful for discovery when you don't know the exact symbol name.
+
+```
+codegraph search <query> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--top <n>` | Maximum results to return | `20` |
+| `--kind <type>` | Filter by node kind: `type`, `method`, `namespace`, `property`, `field` | All kinds |
+| `--json` | Output as JSON array | `false` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph search Order                       # Find all symbols containing "Order"
+codegraph search Order --kind type           # Only types
+codegraph search Place --top 5 --json        # Top 5 results as JSON
+```
+
+### `codegraph explain`
+
+Full symbol deep-dive: signature, members, all edges, and test coverage in a single structured view.
+
+```
+codegraph explain <symbol> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--json` | Output as JSON | `false` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph explain OrderService               # Explain OrderService
+codegraph explain PlaceOrder --json          # JSON output for scripting
+```
+
+### `codegraph impact`
+
+Reverse-dependency analysis — assess the blast radius of a change to a symbol.
+
+```
+codegraph impact <symbol> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--depth <n>` | Traversal depth | `3` |
+| `--json` | Output as JSON | `false` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph impact OrderService                # Who depends on OrderService?
+codegraph impact IOrderService --depth 5     # Deeper blast radius
+```
+
+### `codegraph path`
+
+Find the shortest dependency path between two symbols in the graph.
+
+```
+codegraph path <from> <to> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--max-depth <n>` | Maximum BFS search depth | `10` |
+| `--json` | Output as JSON | `false` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph path OrderController PlaceOrder    # Path from controller to method
+codegraph path IOrderService SqlRepository   # Trace DI resolution
+```
+
+### `codegraph test-impact`
+
+Analyze test coverage for a symbol — shows direct tests (methods that cover the symbol) and indirect tests (tests that reach it through call chains).
+
+```
+codegraph test-impact <symbol> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--depth <n>` | Traversal depth for indirect coverage | `3` |
+| `--json` | Output as JSON | `false` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph test-impact OrderService           # Which tests cover OrderService?
+codegraph test-impact PlaceOrder --depth 5   # Include indirect coverage
+```
+
+### `codegraph compare`
+
+Compare two symbols structurally — shows shared and differing relationships, members, and dependencies.
+
+```
+codegraph compare <symbolA> <symbolB> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--depth <n>` | BFS traversal depth | `1` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph compare OrderService InvoiceService   # Structural diff of two services
+```
+
+### `codegraph packages`
+
+Analyze NuGet package usage across projects and detect version conflicts.
+
+```
+codegraph packages [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--project <name>` | Filter by project name | All projects |
+| `--package <name>` | Show usages of a specific package | All packages |
+| `--format json` | Output as JSON | Text |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph packages                           # All packages by project
+codegraph packages --package Newtonsoft.Json # Where is this package used?
+codegraph packages --format json             # JSON output for scripting
+```
+
+### `codegraph snapshot`
+
+Save, list, or delete named graph snapshots. Use snapshots as baselines for `codegraph diff`.
+
+```
+codegraph snapshot <save|list|delete> [name] [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph snapshot save before-refactor      # Save current graph
+codegraph snapshot list                       # List all snapshots
+codegraph snapshot delete before-refactor    # Remove a snapshot
+```
+
+---
+
+### Exit Codes
+
+All `codegraph` commands use consistent exit codes:
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success with results |
+| `1` | Error (bad arguments, missing graph, I/O failure) |
+| `2` | Success but no results (empty query, no tests found, etc.) |
+
+Exit code `2` lets scripts distinguish "command worked, but found nothing" from a genuine error.
+
+```bash
+codegraph query "NonExistent*"; echo $?  # → 2 (no results, not an error)
+codegraph query --bad-flag; echo $?      # → 1 (argument error)
+```
+
+### Pipe Detection
+
+When stdout is piped to another command, CodeGraph automatically switches to the `compact` output format to minimize whitespace and remove the metrics footer.
+
+```bash
+# Interactive: full context format with metrics
+codegraph query OrderService
+
+# Piped: compact format automatically selected
+codegraph query OrderService | grep "Implements"
+```
+
+Override pipe detection with an explicit `--format` flag.
+
 **Configuration is automatic** — `codegraph init` generates the MCP config files. To add manually:
 
 ```json
@@ -590,6 +796,7 @@ Stryker generates HTML reports in `StrykerOutput/` with mutation scores per proj
 - [Configuration Reference](docs/configuration.md)
 - [Agent Setup Guide](docs/agent-setup.md)
 - [MCP Server Guide](docs/mcp.md)
+- [Codebase Brief Guide](docs/brief.md)
 - [Graph List How-to Guide](docs/list.md)
 - [Graph Stats Reference](docs/stats.md)
 - [Graph Export Guide](docs/export.md)
