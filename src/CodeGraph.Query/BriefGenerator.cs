@@ -32,11 +32,14 @@ public static class BriefGenerator
             })
             .ToList();
 
+        const int maxAssemblies = 20;
         sb.AppendLine("## Assemblies");
         sb.AppendLine();
+        if (assemblies.Count > maxAssemblies)
+            sb.AppendLine($"_(showing top {maxAssemblies} of {assemblies.Count})_");
         sb.AppendLine("| Assembly | Types | Methods |");
         sb.AppendLine("|----------|------:|--------:|");
-        foreach (var a in assemblies)
+        foreach (var a in assemblies.Take(maxAssemblies))
             sb.AppendLine($"| {a.Name} | {a.Types} | {a.Methods} |");
         sb.AppendLine();
 
@@ -67,14 +70,17 @@ public static class BriefGenerator
         }
 
         // 5. Domain clusters
+        const int maxClusters = 15;
         var clusters = DomainClusterAnalyzer.Detect(nodes, edges);
         if (clusters.Count > 1)
         {
             sb.AppendLine("## Domain Clusters");
             sb.AppendLine();
+            if (clusters.Count > maxClusters)
+                sb.AppendLine($"_(showing top {maxClusters} of {clusters.Count})_");
             sb.AppendLine("| Domain | Types | Key Types |");
             sb.AppendLine("|--------|------:|-----------|");
-            foreach (var c in clusters)
+            foreach (var c in clusters.Take(maxClusters))
             {
                 var keyTypes = c.KeyTypes.Count > 0 ? string.Join(", ", c.KeyTypes) : "—";
                 sb.AppendLine($"| {c.Name} | {c.TypeCount} | {keyTypes} |");
@@ -83,26 +89,32 @@ public static class BriefGenerator
         }
 
         // 6. Entry points
+        const int maxEntryPoints = 20;
         var entryPoints = FindEntryPoints(nodes);
         if (entryPoints.Count > 0)
         {
             sb.AppendLine("## Entry Points");
             sb.AppendLine();
-            foreach (var ep in entryPoints)
+            if (entryPoints.Count > maxEntryPoints)
+                sb.AppendLine($"_(showing top {maxEntryPoints} of {entryPoints.Count})_");
+            foreach (var ep in entryPoints.Take(maxEntryPoints))
                 sb.AppendLine($"- {ep}");
             sb.AppendLine();
         }
 
         // 7. Test coverage summary
+        const int maxCoverage = 10;
         var coverage = CoverageAnalyzer.Analyze(nodes, edges);
         var withCoverage = coverage.Where(c => c.CoveredTypes > 0).ToList();
         if (withCoverage.Count > 0)
         {
             sb.AppendLine("## Test Coverage");
             sb.AppendLine();
+            if (withCoverage.Count > maxCoverage)
+                sb.AppendLine($"_(showing top {maxCoverage} of {withCoverage.Count})_");
             sb.AppendLine("| Assembly | Types | Covered | Coverage |");
             sb.AppendLine("|----------|------:|--------:|---------:|");
-            foreach (var c in withCoverage)
+            foreach (var c in withCoverage.Take(maxCoverage))
                 sb.AppendLine($"| {c.Assembly} | {c.TotalTypes} | {c.CoveredTypes} | {c.CoveragePercent:F1}% |");
             sb.AppendLine();
         }

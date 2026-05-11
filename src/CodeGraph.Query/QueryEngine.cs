@@ -65,7 +65,8 @@ public class QueryEngine
             results = results.Where(n => n.Kind == kindFilter.Value);
 
         return results
-            .OrderByDescending(n => n.Kind == NodeKind.Type ? 1 : 0)
+            .OrderByDescending(n => n.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+            .ThenByDescending(n => n.Kind == NodeKind.Type ? 1 : 0)
             .ThenBy(n => n.Name.Length)
             .Take(maxResults)
             .ToList();

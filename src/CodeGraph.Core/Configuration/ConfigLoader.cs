@@ -83,15 +83,26 @@ public static class ConfigLoader
         // Validate solution name uniqueness
         if (config.Solutions.Length > 1)
         {
-            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var nameToEntries = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             foreach (var entry in config.Solutions)
             {
                 var name = System.IO.Path.GetFileNameWithoutExtension(entry.Path);
-                if (!names.Add(name))
+                if (!nameToEntries.TryGetValue(name, out var list))
                 {
+                    list = new List<string>();
+                    nameToEntries[name] = list;
+                }
+                list.Add(entry.Path);
+            }
+
+            foreach (var kvp in nameToEntries)
+            {
+                if (kvp.Value.Count > 1)
+                {
+                    var conflicting = string.Join("', '", kvp.Value);
                     throw new InvalidOperationException(
-                        $"Configuration file '{path}' contains duplicate solution name '{name}'. " +
-                        "Solution names are derived from .sln filenames and must be unique.");
+                        $"Configuration file '{path}' contains solutions that resolve to the same name '{kvp.Key}'. " +
+                        $"Use --solution to specify a single solution, or manually edit codegraph.json to remove duplicates like '{conflicting}'.");
                 }
             }
         }

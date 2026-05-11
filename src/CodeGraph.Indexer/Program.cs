@@ -647,7 +647,7 @@ static async Task<int> RunImpactAsync(string[] args)
             Console.Write(ImpactFormatter.Format(result));
         }
 
-        return 0;
+        return result.Target is null ? 1 : result.TotalAffected == 0 ? 2 : 0;
     }
     catch (FileNotFoundException ex)
     {
@@ -739,7 +739,7 @@ static async Task<int> RunPathAsync(string[] args)
                 Console.WriteLine(JsonSerializer.Serialize(new { from, to, found = false, steps = Array.Empty<object>() }, s_jsonOptions));
             else
                 Console.Error.WriteLine($"No path found from '{from}' to '{to}'.");
-            return 1;
+            return 2;
         }
 
         if (json)
@@ -2092,24 +2092,97 @@ static async Task<int> RunInitAsync(string[] args)
     }
     else if (slnFiles.Length > 1)
     {
-        Console.WriteLine("Multiple solutions found:");
-        var entries = new List<SolutionEntry>();
-        foreach (var sln in slnFiles)
+        // Prefer root-level solutions over nested ones
+        var rootSlnFiles = slnFiles
+            .Where(f => Path.GetDirectoryName(f) == currentDir)
+            .ToArray();
+
+        string[] selectedSlnFiles;
+        string selectionMessage;
+
+        if (rootSlnFiles.Length == 1)
         {
-            var relativePath = Path.GetRelativePath(currentDir, sln);
-            Console.WriteLine($"  {relativePath}");
-            entries.Add(new SolutionEntry { Path = relativePath });
+            // Exactly one root-level solution — auto-select it
+            selectedSlnFiles = rootSlnFiles;
+            var rootRelPath = Path.GetRelativePath(currentDir, rootSlnFiles[0]);
+            selectionMessage = $"Found {slnFiles.Length} solutions, selected 1 root-level solution: {rootRelPath}";
+        }
+        else if (rootSlnFiles.Length > 1)
+        {
+            // Multiple root-level solutions — use only those
+            selectedSlnFiles = rootSlnFiles;
+            selectionMessage = $"Found {slnFiles.Length} solutions, selected {rootSlnFiles.Length} root-level solutions";
+        }
+        else
+        {
+            // No root-level solutions — fall back to all discovered
+            selectedSlnFiles = slnFiles;
+            selectionMessage = $"Found {slnFiles.Length} solutions (none at root level)";
         }
 
-        var config = new CodeGraphConfig
-        {
-            Solutions = entries.ToArray(),
-            Output = outputDir ?? ".codegraph"
-        };
+        Console.WriteLine(selectionMessage);
 
-        var configPath = Path.Combine(currentDir, ConfigLoader.DefaultFileName);
-        await ConfigLoader.SaveAsync(config, configPath);
-        Console.WriteLine($"Created {ConfigLoader.DefaultFileName} with {entries.Count} solutions");
+        // Deduplicate by name: if two solutions resolve to the same name, keep .sln over .slnx (or first found)
+        var deduped = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var sln in selectedSlnFiles)
+        {
+            var name = Path.GetFileNameWithoutExtension(sln);
+            if (!deduped.TryGetValue(name, out var existing))
+            {
+                deduped[name] = sln;
+            }
+            else
+            {
+                // Prefer .sln over .slnx
+                var existingExt = Path.GetExtension(existing);
+                var currentExt = Path.GetExtension(sln);
+                if (existingExt.Equals(".slnx", StringComparison.OrdinalIgnoreCase) &&
+                    currentExt.Equals(".sln", StringComparison.OrdinalIgnoreCase))
+                {
+                    deduped[name] = sln;
+                }
+                // Otherwise keep the first one found
+            }
+        }
+
+        var finalSlnFiles = deduped.Values.ToArray();
+
+        if (finalSlnFiles.Length == 1)
+        {
+            // After dedup, only one remains — use singular format
+            var foundSln = Path.GetRelativePath(currentDir, finalSlnFiles[0]);
+            Console.WriteLine($"  Selected: {foundSln}");
+
+            var config = new CodeGraphConfig
+            {
+                Solution = foundSln,
+                Output = outputDir ?? ".codegraph"
+            };
+
+            var configPath = Path.Combine(currentDir, ConfigLoader.DefaultFileName);
+            await ConfigLoader.SaveAsync(config, configPath);
+            Console.WriteLine($"Created {ConfigLoader.DefaultFileName}");
+        }
+        else
+        {
+            var entries = new List<SolutionEntry>();
+            foreach (var sln in finalSlnFiles)
+            {
+                var relativePath = Path.GetRelativePath(currentDir, sln);
+                Console.WriteLine($"  {relativePath}");
+                entries.Add(new SolutionEntry { Path = relativePath });
+            }
+
+            var config = new CodeGraphConfig
+            {
+                Solutions = entries.ToArray(),
+                Output = outputDir ?? ".codegraph"
+            };
+
+            var configPath = Path.Combine(currentDir, ConfigLoader.DefaultFileName);
+            await ConfigLoader.SaveAsync(config, configPath);
+            Console.WriteLine($"Created {ConfigLoader.DefaultFileName} with {entries.Count} solutions");
+        }
     }
 
     // Determine a primary solution name for agent config files (APM).
@@ -2303,7 +2376,15 @@ static async Task<int> RunInitAsync(string[] args)
     // --- Next steps ---
     Console.WriteLine();
     Console.WriteLine("Next steps:");
-    if (solutionFlag is null)
+    if (solutionFlag is null && selectedSln is not null)
+    {
+        Console.WriteLine("  1. Index your codebase:");
+        Console.WriteLine($"     codegraph index --solution {selectedSln} --output .codegraph/");
+        Console.WriteLine();
+        Console.WriteLine("  2. Verify it works:");
+        Console.WriteLine("     codegraph query '<any-type-name>' --depth 1");
+    }
+    else if (solutionFlag is null)
     {
         Console.WriteLine("  1. Index your codebase:");
         Console.WriteLine("     codegraph index --solution <your-solution.sln> --output .codegraph/");
