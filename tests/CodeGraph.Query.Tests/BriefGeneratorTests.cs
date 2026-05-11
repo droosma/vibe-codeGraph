@@ -232,6 +232,65 @@ public class BriefGeneratorTests
     }
 
     [Fact]
+    public void Generate_AssembliesCappedAtTop20()
+    {
+        // Create 30 assemblies — only top 20 should appear
+        var defs = new List<(string id, string name, NodeKind kind, string assembly)>();
+        for (int i = 1; i <= 30; i++)
+        {
+            var asm = $"Asm{i:D2}";
+            // Add 'i' types to each assembly so ordering is deterministic (Asm30 has most)
+            for (int t = 0; t < i; t++)
+                defs.Add(($"T{i}_{t}", $"Type{i}_{t}", NodeKind.Type, asm));
+        }
+
+        var nodes = CreateNodes(defs.ToArray());
+        var edges = new List<GraphEdge>();
+
+        var brief = BriefGenerator.Generate(CreateMetadata(), nodes, edges);
+
+        Assert.Contains("(showing top 20 of 30)", brief);
+        // Asm30 (highest count) should be shown
+        Assert.Contains("Asm30", brief);
+        // Asm01 (lowest count) should NOT be shown since we take top 20
+        Assert.DoesNotContain("| Asm01 |", brief);
+    }
+
+    [Fact]
+    public void Generate_EntryPointsCappedAtTop20()
+    {
+        // Create 25 controllers — only top 20 should appear
+        var defs = new List<(string id, string name, NodeKind kind, string assembly)>();
+        for (int i = 1; i <= 25; i++)
+            defs.Add(($"C{i}", $"Item{i:D2}Controller", NodeKind.Type, "WebApp"));
+
+        var nodes = CreateNodes(defs.ToArray());
+        var edges = new List<GraphEdge>();
+
+        var brief = BriefGenerator.Generate(CreateMetadata(), nodes, edges);
+
+        Assert.Contains("(showing top 20 of 25)", brief);
+        // Count entry point lines
+        var entryLines = brief.Split('\n')
+            .Where(l => l.StartsWith("- Controller:", StringComparison.Ordinal))
+            .ToList();
+        Assert.Equal(20, entryLines.Count);
+    }
+
+    [Fact]
+    public void Generate_NoCappingNoteWhenUnderLimit()
+    {
+        var nodes = CreateNodes(
+            ("A", "TypeA", NodeKind.Type, "Asm1"),
+            ("B", "TypeB", NodeKind.Type, "Asm2"));
+        var edges = new List<GraphEdge>();
+
+        var brief = BriefGenerator.Generate(CreateMetadata(), nodes, edges);
+
+        Assert.DoesNotContain("showing top", brief);
+    }
+
+    [Fact]
     public void FindEntryPoints_DetectsControllersProgramAndHostedServices()
     {
         var nodes = CreateNodes(

@@ -165,8 +165,10 @@ public class MultiSolutionConfigTests : IDisposable
         File.WriteAllText(configPath, json);
 
         var ex = Assert.Throws<InvalidOperationException>(() => ConfigLoader.Load(configPath));
-        Assert.Contains("duplicate solution name", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("resolve to the same name", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("MyApp", ex.Message);
+        Assert.Contains("src/a/MyApp.sln", ex.Message);
+        Assert.Contains("src/b/MyApp.sln", ex.Message);
     }
 
     [Fact]
@@ -252,7 +254,7 @@ public class MultiSolutionConfigTests : IDisposable
         File.WriteAllText(configPath, json);
 
         var ex = Assert.Throws<InvalidOperationException>(() => ConfigLoader.Load(configPath));
-        Assert.Contains("duplicate solution name", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("resolve to the same name", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
