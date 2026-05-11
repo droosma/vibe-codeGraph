@@ -1,6 +1,12 @@
 # Agent Setup Guide
 
-CodeGraph integrates with AI coding agents via **MCP** (Model Context Protocol), registering `codegraph_query` as a native tool.
+CodeGraph integrates with AI coding agents via a **three-tier approach**, designed to minimize token overhead while supporting every agent type:
+
+1. **Static files** (works everywhere) — `.codegraph/BRIEF.md` and `.codegraph/REPORT.md` provide free orientation with zero tool calls
+2. **CLI commands** (recommended) — `codegraph query`, `codegraph list`, etc. have zero schema overhead and work with any terminal-capable agent
+3. **MCP** (IDE-only fallback) — for agents like VS Code Copilot chat that cannot run shell commands
+
+> **Prefer CLI over MCP.** CLI saves ~3,500 tokens per session in schema overhead. MCP wraps the same library code — there is no difference in capability.
 
 ## Prerequisites
 
@@ -9,11 +15,11 @@ CodeGraph integrates with AI coding agents via **MCP** (Model Context Protocol),
    dotnet tool install -g CodeGraph
    ```
 
-2. **Initialize config, MCP registration, and agent skill files**:
+2. **Initialize config and agent skill files**:
    ```bash
    codegraph init
-   # → Creates codegraph.json, .vscode/mcp.json, .mcp.json, apm.yml
    # → Auto-detects your AI agents and writes skill files for each
+   # → Creates codegraph.json, .vscode/mcp.json, .mcp.json (for IDE agents)
    ```
 
 3. **Index your codebase**:
@@ -21,16 +27,66 @@ CodeGraph integrates with AI coding agents via **MCP** (Model Context Protocol),
    codegraph index --solution YourApp.sln
    ```
 
-4. **Verify the graph works**:
+4. **Generate orientation files**:
+   ```bash
+   codegraph brief    # → .codegraph/BRIEF.md (compact LLM orientation)
+   codegraph report   # → .codegraph/REPORT.md (full architectural report)
+   ```
+
+5. **Verify the graph works**:
    ```bash
    codegraph query "YourMainType" --depth 1
    ```
 
 ---
 
-## MCP Integration
+## CLI Commands (Recommended)
 
-MCP registers `codegraph_query` as a **native tool** in the agent's tool list — alongside grep, read_file, etc. The agent uses it naturally without any prompt engineering.
+All agents with terminal access should use CLI commands directly. No schema injection needed — the agent instructions teach the commands.
+
+### Quick Reference
+
+```bash
+codegraph brief                                          # generate BRIEF.md orientation
+codegraph query <symbol> --depth 1 --format compact      # relationships
+codegraph query <symbol> --depth 3 --kind calls          # call chains
+codegraph query I<Name> --kind resolves-to               # DI wiring
+codegraph list assemblies                                 # project overview
+codegraph search <term>                                   # fuzzy symbol search
+codegraph explain <symbol>                                # full deep-dive
+codegraph impact <symbol>                                 # blast radius
+codegraph test-impact <symbol>                            # test coverage
+codegraph path --from A --to B                            # shortest path
+codegraph report                                          # full report
+codegraph stats                                           # node/edge counts
+```
+
+### Key Flags
+
+| Flag | Purpose |
+|------|---------|
+| `--depth <n>` | BFS depth (start at 1, increase as needed) |
+| `--kind <type>` | Edge filter: `calls`, `inherits`, `implements`, `resolves-to`, `covers`, `depends-on` |
+| `--format compact` | Minimal tokens (default when piped) |
+| `--json` | Machine-readable JSON output |
+| `--budget <tokens>` | Hard cap on output token count |
+| `--mode focused` | High-signal edges only (default) |
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success with results |
+| `1` | Error (bad args, missing graph, etc.) |
+| `2` | Success but no results found |
+
+---
+
+## MCP Integration (IDE-only Agents)
+
+MCP registers `codegraph_query` as a **native tool** in the agent's tool list. Use MCP only for IDE-only agents (VS Code Copilot chat, Cursor inline) that cannot run shell commands directly.
+
+> **Tradeoff:** MCP injects ~3,500 tokens of tool schemas into the agent's context window at session start. CLI commands have zero schema overhead.
 
 `codegraph init` generates the config files automatically:
 
@@ -58,7 +114,7 @@ For **APM**: run `apm install` to wire the MCP server into all detected clients.
 
 ### MCP Tool Reference
 
-The MCP server exposes six tools. Agents call them like any other native tool.
+The MCP server exposes thirteen tools. Agents call them like any other native tool.
 
 #### `codegraph_query`
 

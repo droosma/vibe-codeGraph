@@ -635,33 +635,27 @@ internal sealed class McpServer
     private async Task<JsonNode> HandleToolsCallAsync(JsonNode? id, JsonNode? parameters)
     {
         var toolName = parameters?["name"]?.GetValue<string>();
-        if (toolName == "codegraph_list")
-            return await HandleListCallAsync(id, parameters);
-        if (toolName == "codegraph_search")
-            return await HandleSearchCallAsync(id, parameters);
-        if (toolName == "codegraph_summary")
-            return await HandleSummaryCallAsync(id);
-        if (toolName == "codegraph_path")
-            return await HandlePathCallAsync(id, parameters);
-        if (toolName == "codegraph_impact")
-            return await HandleImpactCallAsync(id, parameters);
-        if (toolName == "codegraph_explain")
-            return await HandleExplainCallAsync(id, parameters);
-        if (toolName == "codegraph_file")
-            return await HandleFileCallAsync(id, parameters);
-        if (toolName == "codegraph_batch")
-            return await HandleBatchCallAsync(id, parameters);
-        if (toolName == "codegraph_compare")
-            return await HandleCompareCallAsync(id, parameters);
-        if (toolName == "codegraph_test_impact")
-            return await HandleTestImpactCallAsync(id, parameters);
-        if (toolName == "codegraph_diff")
-            return await HandleDiffCallAsync(id, parameters);
-        if (toolName == "codegraph_packages")
-            return await HandlePackagesCallAsync(id, parameters);
-        if (toolName != "codegraph_query")
-            return CreateError(id, -32602, $"Unknown tool: {toolName}");
+        return toolName switch
+        {
+            "codegraph_list" => await HandleListCallAsync(id, parameters),
+            "codegraph_search" => await HandleSearchCallAsync(id, parameters),
+            "codegraph_summary" => await HandleSummaryCallAsync(id),
+            "codegraph_path" => await HandlePathCallAsync(id, parameters),
+            "codegraph_impact" => await HandleImpactCallAsync(id, parameters),
+            "codegraph_explain" => await HandleExplainCallAsync(id, parameters),
+            "codegraph_file" => await HandleFileCallAsync(id, parameters),
+            "codegraph_batch" => await HandleBatchCallAsync(id, parameters),
+            "codegraph_compare" => await HandleCompareCallAsync(id, parameters),
+            "codegraph_test_impact" => await HandleTestImpactCallAsync(id, parameters),
+            "codegraph_diff" => await HandleDiffCallAsync(id, parameters),
+            "codegraph_packages" => await HandlePackagesCallAsync(id, parameters),
+            "codegraph_query" => await HandleQueryCallAsync(id, parameters),
+            _ => CreateError(id, -32602, $"Unknown tool: {toolName}")
+        };
+    }
 
+    private async Task<JsonNode> HandleQueryCallAsync(JsonNode? id, JsonNode? parameters)
+    {
         var arguments = parameters?["arguments"];
         var symbol = arguments?["symbol"]?.GetValue<string>();
         if (string.IsNullOrEmpty(symbol))
