@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using CodeGraph.Core.Configuration;
 using CodeGraph.Core.IO;
@@ -40,10 +41,14 @@ static async Task<int> RunAsync(string[] args)
         "compare" => await RunCompareAsync(args),
         "list" => await RunListAsync(args),
         "search" => await RunSearchAsync(args),
+        "explain" => await RunExplainAsync(args),
+        "impact" => await RunImpactAsync(args),
+        "path" => await RunPathAsync(args),
         "diff" => await RunDiffAsync(args),
         "export" => await RunExportAsync(args),
         "report" => await RunReportAsync(args),
         "stats" => await RunStatsAsync(args),
+        "brief" => await RunBriefAsync(args),
         "wiki" => await RunWikiAsync(args),
         "view" => await RunViewAsync(args),
         "test-impact" => await RunTestImpactAsync(args),
@@ -87,7 +92,8 @@ static async Task<int> RunQueryAsync(string[] args)
     var kind = GetOption(argList, "--kind", (string?)null);
     var ns = GetOption(argList, "--namespace", (string?)null);
     var project = GetOption(argList, "--project", (string?)null);
-    var format = GetOption(argList, "--format", "context");
+    var format = GetOption(argList, "--format", (string?)null);
+    format ??= IsOutputPiped() ? "compact" : "context";
     var mode = GetOption(argList, "--mode", "all");
     var maxNodes = GetOption(argList, "--max-nodes", 50);
     var includeExternal = HasFlag(argList, "--include-external");
@@ -97,6 +103,8 @@ static async Task<int> RunQueryAsync(string[] args)
     var graphDir = GetOption(argList, "--graph-dir", ".codegraph");
     var fromSolution = GetOption(argList, "--from", (string?)null);
     var budget = GetOption(argList, "--budget", (int?)null);
+    var jsonFlag = HasFlag(argList, "--json");
+    if (jsonFlag) format = "json";
 
     var outputFormat = format?.ToLowerInvariant() switch
     {
@@ -165,7 +173,7 @@ static async Task<int> RunQueryAsync(string[] args)
     if (result.MatchedNodes.Count == 0)
     {
         Console.Error.WriteLine($"No nodes found matching '{pattern}'.");
-        return 1;
+        return 2;
     }
 
     var queryDesc = $"{pattern} --depth {depth} --kind {kind ?? "all"}";
@@ -251,6 +259,7 @@ static async Task<int> RunListAsync(string[] args)
     var skip = GetOption(argList, "--skip", 0);
     var filter = GetOption(argList, "--filter", (string?)null);
     var graphDir = GetOption(argList, "--graph-dir", ".codegraph");
+    var json = HasFlag(argList, "--json");
 
     Dictionary<string, GraphNode> nodes;
     List<GraphEdge> edges;
@@ -284,36 +293,84 @@ static async Task<int> RunListAsync(string[] args)
     {
         case "assemblies":
             var assemblies = list.ListAssemblies();
-            Console.WriteLine($"{"Assembly",-40} {"Types",6} {"Methods",8} {"Total",6}");
-            Console.WriteLine(new string('-', 62));
-            foreach (var a in assemblies)
-                Console.WriteLine($"{a.Name,-40} {a.TypeCount,6} {a.MethodCount,8} {a.TotalNodeCount,6}");
+            if (assemblies.Count == 0)
+            {
+                Console.Error.WriteLine("No assemblies found.");
+                return 2;
+            }
+            if (json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(assemblies, s_jsonOptions));
+            }
+            else
+            {
+                Console.WriteLine($"{"Assembly",-40} {"Types",6} {"Methods",8} {"Total",6}");
+                Console.WriteLine(new string('-', 62));
+                foreach (var a in assemblies)
+                    Console.WriteLine($"{a.Name,-40} {a.TypeCount,6} {a.MethodCount,8} {a.TotalNodeCount,6}");
+            }
             break;
 
         case "types":
             var result = list.ListTypes(assemblyFilter, top, skip, filter);
-            Console.WriteLine($"{"Type",-50} {"In",4} {"Out",4} {"Assembly",-20}");
-            Console.WriteLine(new string('-', 80));
-            foreach (var t in result.Types)
-                Console.WriteLine($"{t.Name,-50} {t.InDegree,4} {t.OutDegree,4} {t.Assembly,-20}");
-            var endIndex = Math.Min(skip + top, result.TotalCount);
-            Console.WriteLine($"\nShowing {skip + 1}-{endIndex} of {result.TotalCount:N0} types. Use --skip {endIndex} for next page.");
+            if (result.Types.Count == 0)
+            {
+                Console.Error.WriteLine("No types found.");
+                return 2;
+            }
+            if (json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(result, s_jsonOptions));
+            }
+            else
+            {
+                Console.WriteLine($"{"Type",-50} {"In",4} {"Out",4} {"Assembly",-20}");
+                Console.WriteLine(new string('-', 80));
+                foreach (var t in result.Types)
+                    Console.WriteLine($"{t.Name,-50} {t.InDegree,4} {t.OutDegree,4} {t.Assembly,-20}");
+                var endIndex = Math.Min(skip + top, result.TotalCount);
+                Console.WriteLine($"\nShowing {skip + 1}-{endIndex} of {result.TotalCount:N0} types. Use --skip {endIndex} for next page.");
+            }
             break;
 
         case "interfaces":
             var ifaces = list.ListInterfaces(assemblyFilter);
-            Console.WriteLine($"{"Interface",-50} {"Impls",6} {"Assembly",-20}");
-            Console.WriteLine(new string('-', 78));
-            foreach (var iface in ifaces)
-                Console.WriteLine($"{iface.Name,-50} {iface.ImplementationCount,6} {iface.Assembly,-20}");
+            if (ifaces.Count == 0)
+            {
+                Console.Error.WriteLine("No interfaces found.");
+                return 2;
+            }
+            if (json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(ifaces, s_jsonOptions));
+            }
+            else
+            {
+                Console.WriteLine($"{"Interface",-50} {"Impls",6} {"Assembly",-20}");
+                Console.WriteLine(new string('-', 78));
+                foreach (var iface in ifaces)
+                    Console.WriteLine($"{iface.Name,-50} {iface.ImplementationCount,6} {iface.Assembly,-20}");
+            }
             break;
 
         case "namespaces":
             var namespaces = list.ListNamespaces(assemblyFilter);
-            Console.WriteLine($"{"Namespace",-50} {"Types",6} {"Methods",8}");
-            Console.WriteLine(new string('-', 66));
-            foreach (var ns in namespaces)
-                Console.WriteLine($"{ns.Name,-50} {ns.TypeCount,6} {ns.MethodCount,8}");
+            if (namespaces.Count == 0)
+            {
+                Console.Error.WriteLine("No namespaces found.");
+                return 2;
+            }
+            if (json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(namespaces, s_jsonOptions));
+            }
+            else
+            {
+                Console.WriteLine($"{"Namespace",-50} {"Types",6} {"Methods",8}");
+                Console.WriteLine(new string('-', 66));
+                foreach (var ns in namespaces)
+                    Console.WriteLine($"{ns.Name,-50} {ns.TypeCount,6} {ns.MethodCount,8}");
+            }
             break;
 
         default:
@@ -340,6 +397,7 @@ static async Task<int> RunSearchAsync(string[] args)
     var top = GetOption(argList, "--top", 20);
     var kindStr = GetOption(argList, "--kind", (string?)null);
     var graphDir = GetOption(argList, "--graph-dir", ".codegraph");
+    var json = HasFlag(argList, "--json");
 
     NodeKind? kindFilter = kindStr?.ToLowerInvariant() switch
     {
@@ -358,18 +416,37 @@ static async Task<int> RunSearchAsync(string[] args)
 
         if (results.Count == 0)
         {
-            Console.WriteLine($"No results for '{query}'.");
-            return 0;
+            if (json)
+                Console.WriteLine("[]");
+            else
+                Console.Error.WriteLine($"No results for '{query}'.");
+            return json ? 0 : 2;
         }
 
-        foreach (var node in results)
+        if (json)
         {
-            var ns = node.ContainingNamespaceId ?? "";
-            var filePart = !string.IsNullOrEmpty(node.FilePath) ? $" ({node.FilePath})" : "";
-            Console.WriteLine($"[{node.Kind}] {node.Name}  ns={ns}{filePart}");
+            var items = results.Select(node => new
+            {
+                id = node.Id,
+                name = node.Name,
+                kind = node.Kind.ToString().ToLowerInvariant(),
+                @namespace = node.ContainingNamespaceId,
+                filePath = node.FilePath,
+                startLine = node.StartLine
+            });
+            Console.WriteLine(JsonSerializer.Serialize(items, s_jsonOptions));
         }
+        else
+        {
+            foreach (var node in results)
+            {
+                var ns = node.ContainingNamespaceId ?? "";
+                var filePart = !string.IsNullOrEmpty(node.FilePath) ? $" ({node.FilePath})" : "";
+                Console.WriteLine($"[{node.Kind}] {node.Name}  ns={ns}{filePart}");
+            }
 
-        Console.WriteLine($"\n{results.Count} result(s) for '{query}'.");
+            Console.WriteLine($"\n{results.Count} result(s) for '{query}'.");
+        }
     }
     catch (FileNotFoundException ex)
     {
@@ -379,6 +456,322 @@ static async Task<int> RunSearchAsync(string[] args)
     }
 
     return 0;
+}
+
+static async Task<int> RunExplainAsync(string[] args)
+{
+    var graphDir = ".codegraph";
+    var json = false;
+    string? symbol = null;
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--graph-dir" when i + 1 < args.Length:
+                graphDir = args[++i];
+                break;
+            case "--json":
+                json = true;
+                break;
+            case "-h" or "--help":
+                Console.WriteLine("Usage: codegraph explain <symbol> [--json] [--graph-dir <dir>]");
+                Console.WriteLine();
+                Console.WriteLine("Show detailed information about a symbol including members, edges, and test coverage.");
+                Console.WriteLine();
+                Console.WriteLine("Options:");
+                Console.WriteLine("  --json               Output as JSON");
+                Console.WriteLine("  --graph-dir <path>   Graph directory (default: .codegraph)");
+                return 0;
+            default:
+                if (!args[i].StartsWith('-') && symbol is null)
+                    symbol = args[i];
+                break;
+        }
+    }
+
+    if (string.IsNullOrEmpty(symbol))
+    {
+        Console.Error.WriteLine("Error: symbol argument is required.");
+        Console.Error.WriteLine("Usage: codegraph explain <symbol> [--json] [--graph-dir <dir>]");
+        return 1;
+    }
+
+    try
+    {
+        var dbPath = Path.Combine(graphDir, "graph.db");
+        Dictionary<string, GraphNode> nodes;
+        List<GraphEdge> edges;
+
+        if (File.Exists(dbPath))
+        {
+            var (_, n, e) = await SqliteGraphReader.ReadAsync(dbPath);
+            nodes = n;
+            edges = e;
+        }
+        else
+        {
+            var (_, n, e) = await GraphReader.ReadAsync(graphDir);
+            nodes = n;
+            edges = e;
+        }
+
+        var explainer = new SymbolExplainer(nodes, edges);
+        var result = explainer.Explain(symbol);
+
+        if (result is null)
+        {
+            Console.Error.WriteLine($"No nodes found matching '{symbol}'.");
+            return 1;
+        }
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                id = result.Node.Id,
+                name = result.Node.Name,
+                kind = result.Node.Kind.ToString().ToLowerInvariant(),
+                filePath = result.Node.FilePath,
+                startLine = result.Node.StartLine,
+                endLine = result.Node.EndLine,
+                signature = result.Node.Signature,
+                docComment = result.Node.DocComment,
+                members = result.Members.Select(m => new { id = m.Id, name = m.Name, kind = m.Kind.ToString().ToLowerInvariant() }),
+                outgoingEdges = result.OutgoingEdges.Where(e => e.Type != EdgeType.Contains).Select(e => new { type = e.Type.ToString().ToLowerInvariant(), toId = e.ToId }),
+                incomingEdges = result.IncomingEdges.Select(e => new { type = e.Type.ToString().ToLowerInvariant(), fromId = e.FromId }),
+                tests = result.Tests.Select(t => new { id = t.Id, name = t.Name })
+            }, s_jsonOptions));
+        }
+        else
+        {
+            Console.Write(ExplainFormatter.Format(result));
+        }
+
+        return 0;
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
+        return 1;
+    }
+}
+
+static async Task<int> RunImpactAsync(string[] args)
+{
+    var graphDir = ".codegraph";
+    var json = false;
+    var depth = 3;
+    string? symbol = null;
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--graph-dir" when i + 1 < args.Length:
+                graphDir = args[++i];
+                break;
+            case "--depth" when i + 1 < args.Length:
+                if (!int.TryParse(args[++i], out depth) || depth < 1)
+                {
+                    Console.Error.WriteLine("Error: --depth must be a positive integer.");
+                    return 1;
+                }
+                break;
+            case "--json":
+                json = true;
+                break;
+            case "-h" or "--help":
+                Console.WriteLine("Usage: codegraph impact <symbol> [--depth N] [--json] [--graph-dir <dir>]");
+                Console.WriteLine();
+                Console.WriteLine("Analyze the blast radius of changes to a symbol.");
+                Console.WriteLine();
+                Console.WriteLine("Options:");
+                Console.WriteLine("  --depth <n>          Traversal depth (default: 3)");
+                Console.WriteLine("  --json               Output as JSON");
+                Console.WriteLine("  --graph-dir <path>   Graph directory (default: .codegraph)");
+                return 0;
+            default:
+                if (!args[i].StartsWith('-') && symbol is null)
+                    symbol = args[i];
+                break;
+        }
+    }
+
+    if (string.IsNullOrEmpty(symbol))
+    {
+        Console.Error.WriteLine("Error: symbol argument is required.");
+        Console.Error.WriteLine("Usage: codegraph impact <symbol> [--depth N] [--json] [--graph-dir <dir>]");
+        return 1;
+    }
+
+    try
+    {
+        var dbPath = Path.Combine(graphDir, "graph.db");
+        Dictionary<string, GraphNode> nodes;
+        List<GraphEdge> edges;
+
+        if (File.Exists(dbPath))
+        {
+            var (_, n, e) = await SqliteGraphReader.ReadAsync(dbPath);
+            nodes = n;
+            edges = e;
+        }
+        else
+        {
+            var (_, n, e) = await GraphReader.ReadAsync(graphDir);
+            nodes = n;
+            edges = e;
+        }
+
+        var analyzer = new ImpactAnalyzer(nodes, edges);
+        var result = analyzer.Analyze(symbol, depth);
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                pattern = result.Pattern,
+                target = result.Target is not null ? new { id = result.Target.Id, kind = result.Target.Kind.ToString().ToLowerInvariant() } : null,
+                totalAffected = result.TotalAffected,
+                layers = result.Layers.Select(l => new
+                {
+                    depth = l.Depth,
+                    nodes = l.Nodes.Select(n => new { id = n.Id, kind = n.Kind.ToString().ToLowerInvariant(), filePath = n.FilePath, startLine = n.StartLine })
+                })
+            }, s_jsonOptions));
+        }
+        else
+        {
+            Console.Write(ImpactFormatter.Format(result));
+        }
+
+        return 0;
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
+        return 1;
+    }
+}
+
+static async Task<int> RunPathAsync(string[] args)
+{
+    var graphDir = ".codegraph";
+    var json = false;
+    var maxDepth = 10;
+    string? from = null;
+    string? to = null;
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--graph-dir" when i + 1 < args.Length:
+                graphDir = args[++i];
+                break;
+            case "--max-depth" when i + 1 < args.Length:
+                if (!int.TryParse(args[++i], out maxDepth) || maxDepth < 1)
+                {
+                    Console.Error.WriteLine("Error: --max-depth must be a positive integer.");
+                    return 1;
+                }
+                break;
+            case "--json":
+                json = true;
+                break;
+            case "-h" or "--help":
+                Console.WriteLine("Usage: codegraph path <from> <to> [--max-depth N] [--json] [--graph-dir <dir>]");
+                Console.WriteLine();
+                Console.WriteLine("Find the shortest path between two symbols in the graph.");
+                Console.WriteLine();
+                Console.WriteLine("Options:");
+                Console.WriteLine("  --max-depth <n>      Maximum search depth (default: 10)");
+                Console.WriteLine("  --json               Output as JSON");
+                Console.WriteLine("  --graph-dir <path>   Graph directory (default: .codegraph)");
+                return 0;
+            default:
+                if (!args[i].StartsWith('-'))
+                {
+                    if (from is null)
+                        from = args[i];
+                    else if (to is null)
+                        to = args[i];
+                }
+                break;
+        }
+    }
+
+    if (string.IsNullOrEmpty(from) || string.IsNullOrEmpty(to))
+    {
+        Console.Error.WriteLine("Error: both <from> and <to> arguments are required.");
+        Console.Error.WriteLine("Usage: codegraph path <from> <to> [--max-depth N] [--json] [--graph-dir <dir>]");
+        return 1;
+    }
+
+    try
+    {
+        var dbPath = Path.Combine(graphDir, "graph.db");
+        Dictionary<string, GraphNode> nodes;
+        List<GraphEdge> edges;
+
+        if (File.Exists(dbPath))
+        {
+            var (_, n, e) = await SqliteGraphReader.ReadAsync(dbPath);
+            nodes = n;
+            edges = e;
+        }
+        else
+        {
+            var (_, n, e) = await GraphReader.ReadAsync(graphDir);
+            nodes = n;
+            edges = e;
+        }
+
+        var finder = new PathFinder(nodes, edges);
+        var result = finder.FindPath(from, to, maxDepth);
+
+        if (result is null)
+        {
+            if (json)
+                Console.WriteLine(JsonSerializer.Serialize(new { from, to, found = false, steps = Array.Empty<object>() }, s_jsonOptions));
+            else
+                Console.Error.WriteLine($"No path found from '{from}' to '{to}'.");
+            return 1;
+        }
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                from = result.FromId,
+                to = result.ToId,
+                found = true,
+                steps = result.Steps.Select(s => new
+                {
+                    fromId = s.FromId,
+                    toId = s.ToId,
+                    edgeType = s.Edge.Type.ToString().ToLowerInvariant(),
+                    toKind = s.ToNode?.Kind.ToString().ToLowerInvariant(),
+                    toFilePath = s.ToNode?.FilePath
+                })
+            }, s_jsonOptions));
+        }
+        else
+        {
+            Console.Write(PathFormatter.Format(result));
+        }
+
+        return 0;
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
+        return 1;
+    }
 }
 
 static async Task<int> RunDiffAsync(string[] args)
@@ -787,10 +1180,11 @@ static async Task<int> RunSingleIndexAsync(
 
     // Run passes (parallelized per project)
     var projectResults = new ConcurrentBag<(List<GraphNode> Nodes, List<GraphEdge> Edges)>();
-    var syntaxPass = new SyntaxPass();
-    var semanticPass = new SemanticPass();
-    var diPass = new DiPass();
-    var testCoveragePass = new TestCoveragePass();
+    var passOptions = new PassPipelineOptions(
+        EnableRoutesPass: true,
+        EnableConfigurationPass: true,
+        EnableMiddlewarePass: true,
+        EnableDbContextPass: true);
 
     Parallel.ForEach(projects, project =>
     {
@@ -798,54 +1192,7 @@ static async Task<int> RunSingleIndexAsync(
 
         try
         {
-            var nodes = new List<GraphNode>();
-            var edges = new List<GraphEdge>();
-
-            var (syntaxNodes, syntaxEdges) = syntaxPass.Execute(project.Compilation, solutionRoot);
-            nodes.AddRange(syntaxNodes);
-            edges.AddRange(syntaxEdges);
-
-            var knownIds = new HashSet<string>(nodes.Select(n => n.Id));
-
-            var (externalNodes, semanticEdges) = semanticPass.Execute(project.Compilation, solutionRoot, knownIds);
-            nodes.AddRange(externalNodes);
-            edges.AddRange(semanticEdges);
-            foreach (var en in externalNodes) knownIds.Add(en.Id);
-
-            var (diEdges, diExternalNodes) = diPass.Execute(project.Compilation, solutionRoot, knownIds);
-            nodes.AddRange(diExternalNodes);
-            edges.AddRange(diEdges);
-            foreach (var en in diExternalNodes) knownIds.Add(en.Id);
-
-            var (testEdges, testExternalNodes) = testCoveragePass.Execute(project.Compilation, solutionRoot, knownIds);
-            nodes.AddRange(testExternalNodes);
-            edges.AddRange(testEdges);
-            foreach (var en in testExternalNodes) knownIds.Add(en.Id);
-
-            var routesPass = new RoutesPass();
-            var (routeEdges, routeExternalNodes) = routesPass.Execute(project.Compilation, solutionRoot, knownIds);
-            nodes.AddRange(routeExternalNodes);
-            edges.AddRange(routeEdges);
-            foreach (var en in routeExternalNodes) knownIds.Add(en.Id);
-
-            var configPass = new ConfigurationPass();
-            var (configEdges, configExternalNodes) = configPass.Execute(project.Compilation, solutionRoot, knownIds);
-            nodes.AddRange(configExternalNodes);
-            edges.AddRange(configEdges);
-            foreach (var en in configExternalNodes) knownIds.Add(en.Id);
-
-            var middlewarePass = new MiddlewarePass();
-            var (middlewareEdges, middlewareExternalNodes) = middlewarePass.Execute(project.Compilation, solutionRoot, knownIds);
-            nodes.AddRange(middlewareExternalNodes);
-            edges.AddRange(middlewareEdges);
-            foreach (var en in middlewareExternalNodes) knownIds.Add(en.Id);
-
-            var dbContextPass = new DbContextPass();
-            var (dbEdges, dbExternalNodes) = dbContextPass.Execute(project.Compilation, solutionRoot, knownIds);
-            nodes.AddRange(dbExternalNodes);
-            edges.AddRange(dbEdges);
-
-            projectResults.Add((nodes, edges));
+            projectResults.Add(PassPipelineRunner.Execute(project, solutionRoot, passOptions));
         }
         catch (Exception ex)
         {
@@ -1004,6 +1351,59 @@ static async Task<int> RunReportAsync(string[] args)
     return 0;
 }
 
+static async Task<int> RunBriefAsync(string[] args)
+{
+    var graphDir = ".codegraph";
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--graph-dir" when i + 1 < args.Length:
+                graphDir = args[++i];
+                break;
+            case "-h" or "--help":
+                PrintBriefUsage();
+                return 0;
+        }
+    }
+
+    var dbPath = Path.Combine(graphDir, "graph.db");
+    if (!File.Exists(dbPath))
+    {
+        Console.Error.WriteLine($"Error: Graph database not found at {dbPath}");
+        Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
+        return 1;
+    }
+
+    var (metadata, nodes, edges) = await SqliteGraphReader.ReadAsync(dbPath);
+    var edgeList = edges.ToList();
+
+    var brief = BriefGenerator.Generate(metadata, nodes, edgeList);
+
+    var outputPath = Path.Combine(graphDir, "BRIEF.md");
+    Directory.CreateDirectory(graphDir);
+    await File.WriteAllTextAsync(outputPath, brief);
+
+    Console.WriteLine(brief);
+    Console.WriteLine();
+    Console.WriteLine($"Brief written to {outputPath}");
+    return 0;
+}
+
+static void PrintBriefUsage()
+{
+    Console.WriteLine("""
+        Usage: codegraph brief [options]
+
+        Generates a compact BRIEF.md codebase orientation file optimized for
+        LLM agents to read as their first action.
+
+        Options:
+          --graph-dir <dir>    Directory containing graph.db (default: .codegraph)
+        """);
+}
+
 static async Task<int> RunStatsAsync(string[] args)
 {
     var graphDir = ".codegraph";
@@ -1158,6 +1558,7 @@ static async Task<int> RunTestImpactAsync(string[] args)
     var graphDir = ".codegraph";
     string? symbol = null;
     var depth = 3;
+    var json = false;
 
     for (var i = 1; i < args.Length; i++)
     {
@@ -1173,13 +1574,17 @@ static async Task<int> RunTestImpactAsync(string[] args)
                     return 1;
                 }
                 break;
+            case "--json":
+                json = true;
+                break;
             case "-h" or "--help":
-                Console.WriteLine("Usage: codegraph test-impact <symbol> [--depth N] [--graph-dir <dir>]");
+                Console.WriteLine("Usage: codegraph test-impact <symbol> [--depth N] [--json] [--graph-dir <dir>]");
                 Console.WriteLine();
                 Console.WriteLine("Analyze test coverage for a symbol, showing direct and indirect tests.");
                 Console.WriteLine();
                 Console.WriteLine("Options:");
                 Console.WriteLine("  --depth <n>          Traversal depth for indirect coverage (default: 3)");
+                Console.WriteLine("  --json               Output as JSON");
                 Console.WriteLine("  --graph-dir <path>   Graph directory (default: .codegraph)");
                 return 0;
             default:
@@ -1192,7 +1597,7 @@ static async Task<int> RunTestImpactAsync(string[] args)
     if (string.IsNullOrEmpty(symbol))
     {
         Console.Error.WriteLine("Error: symbol argument is required.");
-        Console.Error.WriteLine("Usage: codegraph test-impact <symbol> [--depth N] [--graph-dir <dir>]");
+        Console.Error.WriteLine("Usage: codegraph test-impact <symbol> [--depth N] [--json] [--graph-dir <dir>]");
         return 1;
     }
 
@@ -1201,7 +1606,23 @@ static async Task<int> RunTestImpactAsync(string[] args)
         var (_, nodes, edges) = await GraphReader.ReadAsync(graphDir);
         var analyzer = new TestImpactAnalyzer(nodes, edges);
         var result = analyzer.Analyze(symbol, depth);
-        Console.Write(TestImpactFormatter.Format(result));
+
+        if (json)
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                pattern = result.Pattern,
+                target = result.Target is not null ? new { id = result.Target.Id, kind = result.Target.Kind.ToString().ToLowerInvariant() } : null,
+                directTests = result.DirectTests.Select(t => new { testId = t.TestNode.Id, path = t.PathFromTarget.Select(n => n.Id).ToList() }),
+                indirectTests = result.IndirectTests.Select(t => new { testId = t.TestNode.Id, path = t.PathFromTarget.Select(n => n.Id).ToList() }),
+                uncoveredCallers = result.UncoveredCallers.Select(c => new { callerId = c.Caller.Id, depth = c.Depth }),
+                suggestedTestCommand = result.SuggestedTestCommand
+            }, s_jsonOptions));
+        else
+            Console.Write(TestImpactFormatter.Format(result));
+
+        if (result.Target is null || (result.DirectTests.Count == 0 && result.IndirectTests.Count == 0))
+            return 2;
+
         return 0;
     }
     catch (FileNotFoundException ex)
@@ -1984,10 +2405,14 @@ static void PrintUsage()
     Console.WriteLine("  codegraph compare <symbolA> <symbolB> [options]");
     Console.WriteLine("  codegraph list [scope] [options]");
     Console.WriteLine("  codegraph search <query> [--top N] [--kind type]");
+    Console.WriteLine("  codegraph explain <symbol> [--json] [--graph-dir <dir>]");
+    Console.WriteLine("  codegraph impact <symbol> [--depth N] [--json] [--graph-dir <dir>]");
+    Console.WriteLine("  codegraph path <from> <to> [--max-depth N] [--json] [--graph-dir <dir>]");
     Console.WriteLine("  codegraph diff [options]");
     Console.WriteLine("  codegraph export [--graph-dir <dir>] [--output <dir>]");
     Console.WriteLine("  codegraph report [--graph-dir <dir>] [--output <path>]");
     Console.WriteLine("  codegraph stats [--graph-dir <dir>]");
+    Console.WriteLine("  codegraph brief [--graph-dir <dir>]");
     Console.WriteLine("  codegraph wiki [--graph-dir <dir>] [--output <dir>]");
     Console.WriteLine("  codegraph view [--graph-dir <dir>] [--output <path>] [--max-nodes <n>] [--no-open]");
     Console.WriteLine("  codegraph test-impact <symbol> [--depth N] [--graph-dir <dir>]");
@@ -2004,10 +2429,14 @@ static void PrintUsage()
     Console.WriteLine("  compare                  Compare two symbols structurally");
     Console.WriteLine("  list                     Browse the code graph hierarchy (assemblies, types, etc.)");
     Console.WriteLine("  search                   Search for symbols by name, namespace, or file path");
+    Console.WriteLine("  explain                  Show detailed information about a symbol");
+    Console.WriteLine("  impact                   Analyze the blast radius of changes to a symbol");
+    Console.WriteLine("  path                     Find shortest path between two symbols");
     Console.WriteLine("  diff                     Compare graph snapshots and report structural changes");
     Console.WriteLine("  export                   Export graph from SQLite database to JSON files");
     Console.WriteLine("  report                   Generate a markdown report analyzing the graph");
     Console.WriteLine("  stats                    Show graph-level statistics (node/edge counts by kind)");
+    Console.WriteLine("  brief                    Generate compact BRIEF.md codebase orientation for LLM agents");
     Console.WriteLine("  wiki                     Generate navigable markdown wiki pages from the graph");
     Console.WriteLine("  view                     Open interactive 3D graph visualization in browser");
     Console.WriteLine("  test-impact              Analyze test coverage for a symbol (direct + indirect)");
@@ -2037,6 +2466,7 @@ static void PrintListUsage()
           --skip <n>             Skip N results for pagination (types only)
           --filter <pattern>     Filter by name substring, case-insensitive (types only)
           --graph-dir <path>     Graph directory (default: .codegraph)
+          --json                 Output as JSON
         """);
 }
 
@@ -2052,6 +2482,7 @@ static void PrintSearchUsage()
           --top <n>              Max results to return (default: 20)
           --kind <kind>          Filter by node kind: type, method, namespace, property, field
           --graph-dir <path>     Graph directory (default: .codegraph)
+          --json                 Output as JSON
         """);
 }
 
@@ -2198,6 +2629,7 @@ static void PrintQueryUsage()
           --from <solution>    Query only the specified solution sub-graph (multi-solution)
           --budget <tokens>    Maximum token budget for output (truncates with hint)
           --no-metrics         Suppress the compression metrics footer
+          --json               Alias for --format json
         """);
 }
 
@@ -2269,6 +2701,8 @@ static void CheckStaleness(string graphDir)
         // Ignore staleness check failures
     }
 }
+
+static bool IsOutputPiped() => Console.IsOutputRedirected;
 
 static T GetOption<T>(List<string> args, string name, T defaultValue)
 {
@@ -2385,4 +2819,15 @@ static bool WildcardMatch(string input, string pattern)
 {
     var regexPattern = "^" + Regex.Escape(pattern).Replace("\\*", ".*").Replace("\\?", ".") + "$";
     return Regex.IsMatch(input, regexPattern, RegexOptions.IgnoreCase);
+}
+
+partial class Program
+{
+    static readonly JsonSerializerOptions s_jsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
 }

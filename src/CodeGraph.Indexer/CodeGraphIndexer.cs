@@ -105,75 +105,17 @@ public class CodeGraphIndexer
         string solutionRoot)
     {
         var projectResults = new ConcurrentBag<(List<GraphNode> Nodes, List<GraphEdge> Edges)>();
-        var syntaxPass = new SyntaxPass();
-        var semanticPass = new SemanticPass();
-        var diPass = new DiPass();
-        var testCoveragePass = new TestCoveragePass();
+        var passOptions = new PassPipelineOptions(
+            EnableRoutesPass: _options.EnableRoutesPass,
+            EnableConfigurationPass: _options.EnableConfigurationPass,
+            EnableMiddlewarePass: _options.EnableMiddlewarePass,
+            EnableDbContextPass: _options.EnableDbContextPass);
 
         Parallel.ForEach(projects, project =>
         {
             try
             {
-                var nodes = new List<GraphNode>();
-                var edges = new List<GraphEdge>();
-
-                var (syntaxNodes, syntaxEdges) = syntaxPass.Execute(project.Compilation, solutionRoot);
-                nodes.AddRange(syntaxNodes);
-                edges.AddRange(syntaxEdges);
-
-                var knownIds = new HashSet<string>(nodes.Select(n => n.Id));
-
-                var (externalNodes, semanticEdges) = semanticPass.Execute(project.Compilation, solutionRoot, knownIds);
-                nodes.AddRange(externalNodes);
-                edges.AddRange(semanticEdges);
-                foreach (var en in externalNodes) knownIds.Add(en.Id);
-
-                var (diEdges, diExternalNodes) = diPass.Execute(project.Compilation, solutionRoot, knownIds);
-                nodes.AddRange(diExternalNodes);
-                edges.AddRange(diEdges);
-                foreach (var en in diExternalNodes) knownIds.Add(en.Id);
-
-                var (testEdges, testExternalNodes) = testCoveragePass.Execute(project.Compilation, solutionRoot, knownIds);
-                nodes.AddRange(testExternalNodes);
-                edges.AddRange(testEdges);
-                foreach (var en in testExternalNodes) knownIds.Add(en.Id);
-
-                if (_options.EnableRoutesPass)
-                {
-                    var routesPass = new RoutesPass();
-                    var (routeEdges, routeExternalNodes) = routesPass.Execute(project.Compilation, solutionRoot, knownIds);
-                    nodes.AddRange(routeExternalNodes);
-                    edges.AddRange(routeEdges);
-                    foreach (var en in routeExternalNodes) knownIds.Add(en.Id);
-                }
-
-                if (_options.EnableConfigurationPass)
-                {
-                    var configPass = new ConfigurationPass();
-                    var (configEdges, configExternalNodes) = configPass.Execute(project.Compilation, solutionRoot, knownIds);
-                    nodes.AddRange(configExternalNodes);
-                    edges.AddRange(configEdges);
-                    foreach (var en in configExternalNodes) knownIds.Add(en.Id);
-                }
-
-                if (_options.EnableMiddlewarePass)
-                {
-                    var middlewarePass = new MiddlewarePass();
-                    var (middlewareEdges, middlewareExternalNodes) = middlewarePass.Execute(project.Compilation, solutionRoot, knownIds);
-                    nodes.AddRange(middlewareExternalNodes);
-                    edges.AddRange(middlewareEdges);
-                    foreach (var en in middlewareExternalNodes) knownIds.Add(en.Id);
-                }
-
-                if (_options.EnableDbContextPass)
-                {
-                    var dbContextPass = new DbContextPass();
-                    var (dbEdges, dbExternalNodes) = dbContextPass.Execute(project.Compilation, solutionRoot, knownIds);
-                    nodes.AddRange(dbExternalNodes);
-                    edges.AddRange(dbEdges);
-                }
-
-                projectResults.Add((nodes, edges));
+                projectResults.Add(PassPipelineRunner.Execute(project, solutionRoot, passOptions));
             }
             catch (Exception ex)
             {
