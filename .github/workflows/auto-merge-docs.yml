@@ -83,7 +83,7 @@ jobs:
             gh pr review "$PR_NUMBER" --repo "${{ github.repository }}" --approve 2>/dev/null || true
 
             # Merge
-            if gh pr merge "$PR_NUMBER" --repo "${{ github.repository }}" --squash --admin; then
+            if gh pr merge "$PR_NUMBER" --repo "${{ github.repository }}" --squash --delete-branch --admin; then
               echo "✅ PR #$PR_NUMBER merged successfully"
             else
               echo "⚠️ PR #$PR_NUMBER could not be merged — will retry on next trigger"
