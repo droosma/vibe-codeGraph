@@ -151,7 +151,7 @@ codegraph index --solution <path.sln|path.slnx> [options]
 | `--skip-build` | Hidden alias for `--skip-restore` | `false` |
 | `--changed-only` | Incremental re-index; only re-index projects with changes since last indexed commit | `false` |
 | `--sequential` | Disable parallel multi-solution indexing (recommended on machines with < 16 GB RAM) | `false` |
-| `--extend <path>` | Path for the unified SQLite database produced after multi-solution indexing. Useful when integrating multiple solution graphs into a shared database. (Multi-solution only) | `<output-dir>/graph.db` |
+| `--extend <path>` | Merge this index into an existing unified `graph.db` (multi-solution only) | `<output-dir>/graph.db` |
 | `--verbose` | Enable verbose output | `false` |
 
 ### `codegraph query`
@@ -186,10 +186,12 @@ codegraph query <symbol-pattern> [options]
 
 | Format | Description |
 |--------|-------------|
-| `context` | Markdown-like, optimized for LLM prompts (default) |
-| `compact` | Compressed prefix-stripped format, 3–5× smaller than `context` |
+| `context` | Markdown-like, optimized for LLM prompts (default when output is a terminal) |
+| `compact` | Compressed prefix-stripped format, 3–5× smaller than `context` (default when piped) |
 | `text` | Human-readable tabular summary |
 | `json` | Machine-readable full `QueryResult` |
+
+**Exit codes:** `0` = results found; `1` = error (bad arguments, graph not found); `2` = no nodes matched the pattern.
 
 **Query suggestions:**
 
@@ -231,28 +233,6 @@ codegraph compare "MyApp.Orders.OrderService" "MyApp.Billing.InvoiceService"
 ```
 
 See [docs/compare.md](docs/compare.md) for the full how-to guide, including symbol resolution and common workflows.
-
-### `codegraph search`
-
-Search for symbols by name, namespace, or file path using case-insensitive substring matching.
-
-```
-codegraph search <query> [options]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--top <n>` | Maximum results | `20` |
-| `--kind <kind>` | Filter by kind: `type`, `method`, `namespace`, `property`, `field` | All |
-| `--graph-dir <path>` | Graph directory | `.codegraph` |
-
-```bash
-codegraph search Order                        # All symbols containing "Order"
-codegraph search OrderService --kind type     # Only types
-codegraph search PlaceOrder --kind method     # Only methods
-```
-
-See [docs/search.md](docs/search.md) for the full how-to guide.
 
 ### `codegraph diff`
 
@@ -340,7 +320,8 @@ codegraph list [scope] [options]
 | `--assembly <name>` | Filter by assembly name (applies to `types`, `interfaces`, `namespaces`) | All |
 | `--top <n>` | Maximum items to return (applies to `types` only) | `50` |
 | `--skip <n>` | Skip the first N results for pagination (applies to `types` only) | `0` |
-| `--filter <pattern>` | Filter results by name substring, case-insensitive (applies to `types` only) | All |
+| `--filter <pattern>` | Filter by node name using substring matching | All |
+| `--json` | Output as JSON | `false` |
 | `--graph-dir <path>` | Graph directory | `.codegraph` |
 
 ```bash
@@ -358,7 +339,7 @@ See [docs/list.md](docs/list.md) for the full guide, including output format det
 
 ### `codegraph search`
 
-Search for nodes in the graph by name, namespace, or file path using case-insensitive substring matching.
+Search for symbols by name, namespace, or file path using case-insensitive substring matching.
 
 ```
 codegraph search <query> [options]
@@ -367,22 +348,26 @@ codegraph search <query> [options]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--top <n>` | Maximum results to return | `20` |
-| `--kind <kind>` | Filter by node kind: `type`, `method`, `namespace`, `property`, `field` | All |
-| `--graph-dir <path>` | Graph directory | `.codegraph` |
-| `--json` | Output as JSON | Plain text |
+| `--kind <kind>` | Filter by node kind: `type`, `method`, `namespace`, `property`, `field` | All kinds |
+| `--json` | Output as JSON | `false` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
 
 ```bash
-codegraph search Order                       # Find anything named "Order"
-codegraph search Order --kind type           # Types only
-codegraph search Repository --top 50        # Up to 50 results
-codegraph search Async --kind method --json  # JSON output
+codegraph search OrderService            # Find symbols matching "OrderService"
+codegraph search Order --kind type       # Only types
+codegraph search IRepository --top 10   # Top 10 matches
+codegraph search Order --json            # Machine-readable output
 ```
+
+**Ranking**: Exact name matches and prefix matches rank higher than partial ID matches. Searching `Patient` returns `Patient` types before `List<PatientDto>`.
+
+**Exit codes:** `0` = results found; `2` = no results (when not using `--json`).
 
 See [docs/search.md](docs/search.md) for the full guide.
 
 ### `codegraph explain`
 
-Show detailed information about a single symbol: signature, doc comment, members, all edges, and linked test coverage.
+Show detailed information about a single symbol: signature, members, all outgoing and incoming edges, and linked test methods.
 
 ```
 codegraph explain <symbol> [options]
@@ -390,19 +375,21 @@ codegraph explain <symbol> [options]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--graph-dir <path>` | Graph directory | `.codegraph` |
-| `--json` | Output as JSON | Plain text |
+| `--json` | Output as JSON | `false` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
 
 ```bash
-codegraph explain OrderService               # Full deep-dive on OrderService
-codegraph explain OrderService --json        # JSON output for scripting
+codegraph explain OrderService           # Full deep-dive on OrderService
+codegraph explain PlaceOrder --json      # Machine-readable output
 ```
+
+Use `codegraph explain` when `codegraph query` returns a result you want to drill into.
 
 See [docs/explain.md](docs/explain.md) for the full guide including output format.
 
 ### `codegraph impact`
 
-Analyse the **blast radius** of a change to a symbol — walk the reverse dependency graph layer by layer to find everything that depends on it.
+Analyze the reverse-dependency blast radius of changes to a symbol — who depends on it, and transitively, what they depend on.
 
 ```
 codegraph impact <symbol> [options]
@@ -410,21 +397,30 @@ codegraph impact <symbol> [options]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--depth <n>` | Maximum traversal depth | `3` |
-| `--graph-dir <path>` | Graph directory | `.codegraph` |
-| `--json` | Output as JSON | Plain text |
+| `--depth <n>` | Traversal depth | `3` |
+| `--json` | Output as JSON | `false` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
 
 ```bash
-codegraph impact OrderService                # Blast radius at depth 3
-codegraph impact PaymentGateway --depth 5   # Wider search
-codegraph impact OrderService --json        # JSON for CI scripts
+codegraph impact OrderService            # What breaks if OrderService changes?
+codegraph impact PlaceOrder --depth 5    # Deeper traversal
+codegraph impact OrderService --json     # Machine-readable layers
 ```
+
+**Exit codes:**
+| Code | Meaning |
+|------|---------|
+| `0` | Symbol found and has dependents |
+| `1` | Symbol not found in graph |
+| `2` | Symbol found but has no dependents (safe to change) |
+
+> The exit code `2` (found, no dependents) is distinct from `1` (not found) so CI scripts can distinguish "nothing depends on this" from "symbol doesn't exist".
 
 See [docs/impact.md](docs/impact.md) for the full guide.
 
 ### `codegraph path`
 
-Find the **shortest dependency path** between two symbols.
+Find the **shortest dependency path** between two symbols through calls, inheritance, or other relationships.
 
 ```
 codegraph path <from> <to> [options]
@@ -432,14 +428,22 @@ codegraph path <from> <to> [options]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--max-depth <n>` | Maximum hops to search | `10` |
-| `--graph-dir <path>` | Graph directory | `.codegraph` |
-| `--json` | Output as JSON | Plain text |
+| `--max-depth <n>` | Maximum search depth | `10` |
+| `--json` | Output as JSON | `false` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
 
 ```bash
-codegraph path OrdersController OrderRepository    # Trace a dependency chain
-codegraph path MyApp.Domain MyApp.Infrastructure  # Check for unexpected coupling
+codegraph path OrderService PaymentGateway       # How does A reach B?
+codegraph path PlaceOrder SendEmail --max-depth 5
+codegraph path OrderService PaymentGateway --json
 ```
+
+**Exit codes:**
+| Code | Meaning |
+|------|---------|
+| `0` | Path found |
+| `1` | Missing arguments or graph not found |
+| `2` | No path found between the two symbols |
 
 See [docs/path.md](docs/path.md) for the full guide.
 
@@ -465,7 +469,7 @@ See [docs/compare.md](docs/compare.md) for the full guide.
 
 ### `codegraph brief`
 
-Generate a compact **`BRIEF.md`** codebase orientation file optimised for LLM agents to read at the start of a session.
+Generate a compact `BRIEF.md` codebase orientation file optimized for LLM agents. Use this as the first action when an agent starts a session — it provides a structured overview with zero query overhead.
 
 ```
 codegraph brief [options]
@@ -476,15 +480,27 @@ codegraph brief [options]
 | `--graph-dir <dir>` | Graph directory | `.codegraph` |
 
 ```bash
-codegraph brief                              # Generate .codegraph/BRIEF.md
-codegraph brief --graph-dir .codegraph/Api  # For a specific sub-graph
+codegraph brief                          # Generate .codegraph/BRIEF.md (also prints to stdout)
+codegraph brief --graph-dir .codegraph-prev  # Brief for an older snapshot
 ```
+
+**Output sections:**
+- **Assemblies** — project list with type/method counts _(top 20 shown for large codebases)_
+- **Hub Types** — 10 most-connected types (high in+out degree)
+- **Key Interfaces** — top interfaces by implementation count
+- **Domain Clusters** — namespace-based domain groups _(top 15 shown)_
+- **Entry Points** — HTTP/gRPC endpoints, CLI commands, message handlers _(top 20 shown)_
+- **Test Coverage** — assemblies with their test-to-type ratios _(top 10 shown)_
+
+> **Note:** For large codebases, each section shows a `(showing top N of M)` note when results are capped. This keeps the brief under ~4 KB regardless of codebase size.
+
+> **Tip:** `codegraph index` generates `BRIEF.md` automatically after every successful index run.
 
 See [docs/brief.md](docs/brief.md) for the full guide.
 
 ### `codegraph test-impact`
 
-Analyse **test coverage** for a symbol — show direct tests, indirect tests (through a call chain), and uncovered callers.
+Analyze which test methods cover a symbol, directly or transitively through the call graph.
 
 ```
 codegraph test-impact <symbol> [options]
@@ -492,14 +508,16 @@ codegraph test-impact <symbol> [options]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--depth <n>` | Traversal depth for indirect coverage | `3` |
-| `--graph-dir <path>` | Graph directory | `.codegraph` |
-| `--json` | Output as JSON | Plain text |
+| `--depth <n>` | Traversal depth for indirect tests | `3` |
+| `--json` | Output as JSON | `false` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
 
 ```bash
-codegraph test-impact OrderService           # Which tests cover OrderService?
-codegraph test-impact OrderService --json   # JSON for CI test selection
+codegraph test-impact OrderService       # Which tests cover OrderService?
+codegraph test-impact PlaceOrder --json  # Machine-readable output
 ```
+
+**Exit codes:** `0` = tests found; `1` = symbol not found or graph missing; `2` = symbol found but no tests cover it.
 
 See [docs/test-impact.md](docs/test-impact.md) for the full guide.
 
@@ -765,156 +783,6 @@ codegraph view --graph-dir .codegraph/Api   # View specific sub-graph
 ```
 
 See [docs/view.md](docs/view.md) for the full how-to guide, including sidebar controls, node sampling, and CI usage.
-
-### `codegraph brief`
-
-Generate a compact `BRIEF.md` codebase orientation file optimized for LLM agents. Use this as the first action when an agent starts a session — it provides a structured overview with zero query overhead.
-
-```
-codegraph brief [options]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--graph-dir <dir>` | Graph directory | `.codegraph` |
-
-```bash
-codegraph brief                          # Generate .codegraph/BRIEF.md (also prints to stdout)
-codegraph brief --graph-dir .codegraph-prev  # Brief for an older snapshot
-```
-
-**Output sections:**
-- **Assemblies** — project list with type/method counts _(top 20 shown for large codebases)_
-- **Hub Types** — 10 most-connected types (high in+out degree)
-- **Key Interfaces** — top interfaces by implementation count
-- **Domain Clusters** — namespace-based domain groups _(top 15 shown)_
-- **Entry Points** — HTTP/gRPC endpoints, CLI commands, message handlers _(top 20 shown)_
-- **Test Coverage** — assemblies with their test-to-type ratios _(top 10 shown)_
-
-> **Note:** For large codebases, each section shows a `(showing top N of M)` note when results are capped. This keeps the brief under ~4 KB regardless of codebase size.
-
-> **Tip:** `codegraph index` generates `BRIEF.md` automatically after every successful index run.
-
-### `codegraph search`
-
-Search for symbols by name, namespace, or file path using case-insensitive substring matching.
-
-```
-codegraph search <query> [options]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--top <n>` | Maximum results to return | `20` |
-| `--kind <kind>` | Filter by node kind: `type`, `method`, `namespace`, `property`, `field` | All kinds |
-| `--json` | Output as JSON | `false` |
-| `--graph-dir <dir>` | Graph directory | `.codegraph` |
-
-```bash
-codegraph search OrderService            # Find symbols matching "OrderService"
-codegraph search Order --kind type       # Only types
-codegraph search IRepository --top 10   # Top 10 matches
-codegraph search Order --json            # Machine-readable output
-```
-
-**Ranking**: Exact name matches and prefix matches rank higher than partial ID matches. Searching `Patient` returns `Patient` types before `List<PatientDto>`.
-
-**Exit codes:** `0` = results found; `2` = no results (when not using `--json`).
-
-### `codegraph explain`
-
-Show detailed information about a single symbol: signature, members, all outgoing and incoming edges, and linked test methods.
-
-```
-codegraph explain <symbol> [options]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--json` | Output as JSON | `false` |
-| `--graph-dir <dir>` | Graph directory | `.codegraph` |
-
-```bash
-codegraph explain OrderService           # Full deep-dive on OrderService
-codegraph explain PlaceOrder --json      # Machine-readable output
-```
-
-Use `codegraph explain` when `codegraph query` returns a result you want to drill into.
-
-### `codegraph impact`
-
-Analyze the reverse-dependency blast radius of changes to a symbol — who depends on it, and transitively, what they depend on.
-
-```
-codegraph impact <symbol> [options]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--depth <n>` | Traversal depth | `3` |
-| `--json` | Output as JSON | `false` |
-| `--graph-dir <dir>` | Graph directory | `.codegraph` |
-
-```bash
-codegraph impact OrderService            # What breaks if OrderService changes?
-codegraph impact PlaceOrder --depth 5    # Deeper traversal
-codegraph impact OrderService --json     # Machine-readable layers
-```
-
-**Exit codes:**
-| Code | Meaning |
-|------|---------|
-| `0` | Symbol found and has dependents |
-| `1` | Symbol not found in graph |
-| `2` | Symbol found but has no dependents (safe to change) |
-
-> The exit code `2` (found, no dependents) is distinct from `1` (not found) so CI scripts can distinguish "nothing depends on this" from "symbol doesn't exist".
-
-### `codegraph path`
-
-Find the shortest dependency path between two symbols through calls, inheritance, or other relationships.
-
-```
-codegraph path <from> <to> [options]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--max-depth <n>` | Maximum search depth | `10` |
-| `--json` | Output as JSON | `false` |
-| `--graph-dir <dir>` | Graph directory | `.codegraph` |
-
-```bash
-codegraph path OrderService PaymentGateway       # How does A reach B?
-codegraph path PlaceOrder SendEmail --max-depth 5
-codegraph path OrderService PaymentGateway --json
-```
-
-**Exit codes:**
-| Code | Meaning |
-|------|---------|
-| `0` | Path found |
-| `1` | Missing arguments or graph not found |
-| `2` | No path found between the two symbols |
-
-### `codegraph test-impact`
-
-Analyze which test methods cover a symbol, directly or transitively through the call graph.
-
-```
-codegraph test-impact <symbol> [options]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--depth <n>` | Traversal depth for indirect tests | `3` |
-| `--json` | Output as JSON | `false` |
-| `--graph-dir <dir>` | Graph directory | `.codegraph` |
-
-```bash
-codegraph test-impact OrderService       # Which tests cover OrderService?
-codegraph test-impact PlaceOrder --json  # Machine-readable output
-```
 
 ### `codegraph benchmark`
 
