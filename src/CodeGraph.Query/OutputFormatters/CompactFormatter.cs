@@ -7,7 +7,7 @@ namespace CodeGraph.Query.OutputFormatters;
 
 public static class CompactFormatter
 {
-    public static string Format(QueryResult result, bool includeSource = false)
+    public static string Format(QueryResult result, bool includeSource = false, bool includeDocs = true)
     {
         var sb = new StringBuilder();
 
@@ -27,13 +27,22 @@ public static class CompactFormatter
             foreach (var n in result.MatchedNodes)
                 targetIds.Add(n.Id);
 
+        var docCommentNodeId = result.TargetNode?.Id ?? result.MatchedNodes.FirstOrDefault()?.Id;
+
         // Format each target node with its relationships
         foreach (var targetId in targetIds)
         {
             if (!result.Nodes.TryGetValue(targetId, out var targetNode))
                 continue;
 
-            AppendNodeBlock(sb, targetNode, targetIds, result, prefix, includeSource);
+            AppendNodeBlock(
+                sb,
+                targetNode,
+                targetIds,
+                result,
+                prefix,
+                includeSource,
+                includeDocs && string.Equals(targetNode.Id, docCommentNodeId, StringComparison.Ordinal));
         }
 
         // Format remaining nodes (non-target matched)
@@ -67,14 +76,14 @@ public static class CompactFormatter
         return sb.ToString().TrimEnd();
     }
 
-    private static void AppendNodeBlock(StringBuilder sb, GraphNode node, HashSet<string> targetIds, QueryResult result, string prefix, bool includeSource)
+    private static void AppendNodeBlock(StringBuilder sb, GraphNode node, HashSet<string> targetIds, QueryResult result, string prefix, bool includeSource, bool showDocComment)
     {
         // Node header: Name [kind, file:lines]
         var shortId = StripPrefix(node.Id, prefix);
         var fileInfo = !string.IsNullOrEmpty(node.FilePath)
             ? $", {node.FilePath}:{node.StartLine}-{node.EndLine}"
             : "";
-        var summary = ExtractSummary(node.DocComment);
+        var summary = showDocComment ? ExtractSummary(node.DocComment) : string.Empty;
         var inlineComment = !string.IsNullOrEmpty(summary) ? $" // {summary}" : "";
         sb.AppendLine($"## {shortId} [{node.Kind.ToString().ToLowerInvariant()}{fileInfo}]{inlineComment}");
 

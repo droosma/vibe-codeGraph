@@ -98,6 +98,7 @@ static async Task<int> RunQueryAsync(string[] args)
     var maxNodes = GetOption(argList, "--max-nodes", 50);
     var includeExternal = HasFlag(argList, "--include-external");
     var includeSource = HasFlag(argList, "--include-source");
+    var includeDocs = !HasFlag(argList, "--no-docs");
     var rank = !HasFlag(argList, "--no-rank");
     var noMetrics = HasFlag(argList, "--no-metrics");
     var graphDir = GetOption(argList, "--graph-dir", ".codegraph");
@@ -182,7 +183,7 @@ static async Task<int> RunQueryAsync(string[] args)
         OutputFormat.Json => JsonFormatter.Format(result),
         OutputFormat.Text => TextFormatter.Format(result),
         OutputFormat.Context => ContextFormatter.Format(result, queryDesc, includeSource),
-        OutputFormat.Compact => CompactFormatter.Format(result, includeSource),
+        OutputFormat.Compact => CompactFormatter.Format(result, includeSource, includeDocs),
         _ => ContextFormatter.Format(result, queryDesc, includeSource)
     };
 
@@ -2701,10 +2702,11 @@ static void PrintQueryUsage()
           --mode <mode>        Traversal mode: focused, structural, all (default: all)
           --namespace <filter> Include only nodes in matching namespaces
           --project <filter>   Include only nodes in matching projects
-          --format <fmt>       json | text | context (default: context)
+          --format <fmt>       json | text | context | compact (default: context)
           --max-nodes <n>      Cap output size (default: 50)
           --include-external   Include external dependency nodes
           --include-source     Embed source code snippets in output
+          --no-docs            Suppress doc comments in compact output
           --no-rank            Disable result ranking
           --graph-dir <path>   Graph directory (default: .codegraph)
           --from <solution>    Query only the specified solution sub-graph (multi-solution)
