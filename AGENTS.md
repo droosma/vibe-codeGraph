@@ -46,6 +46,21 @@ codegraph query <changed-symbol> --kind calls-from --depth 1
 
 See [`skills/codegraph-review/SKILL.md`](skills/codegraph-review/SKILL.md) for full instructions.
 
+## APM Package Primitives
+
+CodeGraph ships [Microsoft APM](https://github.com/microsoft/apm) primitives in the `.apm/` directory for agent clients that use APM:
+
+| Primitive | File | Purpose |
+|-----------|------|---------|
+| **Instruction** | `.apm/instructions/codegraph.instructions.md` | Injected automatically for `*.cs` files — teaches agents when and how to query CodeGraph |
+| **Skill** | `.apm/skills/code-explorer/SKILL.md` | Explore C# codebase structure via the semantic graph |
+
+Install from the repository:
+
+```bash
+apm install droosma/vibe-codeGraph
+```
+
 ## Quick Start
 
 ```bash
