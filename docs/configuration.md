@@ -276,6 +276,7 @@ CLI flags take precedence over config file values:
 | `--skip-build` | Hidden alias for `--skip-restore` |
 | `--changed-only` | *(no config equivalent)* — incremental re-index only changed projects |
 | `--sequential` | *(no config equivalent)* — disable parallel multi-solution indexing |
+| `--extend <path>` | *(no config equivalent)* — custom path for the unified SQLite database created after multi-solution indexing (multi-solution only; defaults to `<output>/graph.db`) |
 | `--verbose` | *(no config equivalent)* — enable verbose output |
 | `--from <solution>` | *(query only)* — scope query to a specific solution sub-graph |
 
@@ -288,4 +289,5 @@ CLI flags take precedence over config file values:
 - **Large repos**: Increase `maxNodes` or use `--namespace` / `--project` filters to scope queries.
 - **External packages**: Add frequently-used libraries to `includeExternalPackages` to see cross-assembly call chains.
 - **Multi-solution**: Use `--sequential` flag on machines with less than 16GB RAM to avoid memory pressure during parallel indexing.
+- **Unified database path**: In multi-solution setups, use `--extend <path>` to write the merged `graph.db` to a custom location (e.g., a shared artifact directory) rather than the default `<output>/graph.db`.
 - **Solution scoping**: Use `--from <solution-name>` to query only a specific solution's graph in a multi-solution setup.
