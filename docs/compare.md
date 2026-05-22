@@ -1,6 +1,6 @@
 # How to Use `codegraph compare`
 
-`codegraph compare` performs a structural diff of two symbols. It shows what they share — interfaces, base types, and dependencies — and what is unique to each. This is useful for understanding similarities and differences between types, detecting copy-paste classes, or assessing whether two implementations are interchangeable.
+`codegraph compare` performs a **structural side-by-side comparison** of two symbols. It highlights what they share (interfaces, callers, callees) and where they differ — useful for spotting duplication, planning consolidation, or reviewing parallel implementations.
 
 ---
 
@@ -10,11 +10,14 @@
 # Index your solution first (if you haven't already)
 codegraph index --solution MyApp.sln
 
-# Compare two service implementations
-codegraph compare OrderService InvoiceService
+# Compare two service types
+codegraph compare OrderService PaymentService
 
-# Increase traversal depth to capture more relationships
-codegraph compare OrderService InvoiceService --depth 2
+# Use fully-qualified names for precision
+codegraph compare MyApp.Services.OrderService MyApp.Services.PaymentService
+
+# Increase traversal depth
+codegraph compare OrderService PaymentService --depth 2
 ```
 
 ---
@@ -29,135 +32,75 @@ codegraph compare <symbolA> <symbolB> [options]
 
 | Argument | Description |
 |----------|-------------|
-| `<symbolA>` | First symbol pattern (name, qualified name, or wildcard) |
-| `<symbolB>` | Second symbol pattern (name, qualified name, or wildcard) |
-
-Both patterns are resolved the same way as `codegraph query`: exact match, suffix match (`OrderService` matches `MyApp.Services.OrderService`), or wildcard (`Order*`).
+| `<symbolA>` | First symbol to compare (substring match) |
+| `<symbolB>` | Second symbol to compare (substring match) |
 
 ### Flags
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--depth <n>` | BFS traversal depth for collecting each symbol's relationships | `1` |
-| `--graph-dir <path>` | Directory containing the indexed graph | `.codegraph` |
+| `--depth <n>` | Traversal depth for neighbourhood comparison | `1` |
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
 | `--help`, `-h` | Show help | |
-
-### Examples
-
-```bash
-codegraph compare OrderService InvoiceService
-codegraph compare OrderService InvoiceService --depth 2
-codegraph compare "MyApp.Orders.OrderService" "MyApp.Billing.InvoiceService"
-codegraph compare IOrderRepository ISalesRepository --graph-dir .codegraph/Api
-```
 
 ---
 
-## Understanding the Output
+## Output
 
-The output is structured Markdown with four sections. Empty sections are omitted.
+The comparison report is structured as a Markdown document:
 
 ```markdown
-# Compare: MyApp.Orders.OrderService vs MyApp.Billing.InvoiceService
+# Compare: MyApp.Services.OrderService vs MyApp.Services.PaymentService
 
 ## Shared Interfaces
-  - implements → ITransactionService
+- ITransactional
+- IService
 
-## Shared Base Types
-  - inherits → BaseService
+## Shared Callers
+- MyApp.Api.CheckoutController
 
-## Shared Dependencies
-  - depends-on → Order
-  - calls → IEventBus.PublishAsync(OrderPlacedEvent)
+## Shared Callees
+- MyApp.Data.UnitOfWork
 
-## Unique to MyApp.Orders.OrderService
-  - depends-on → OrderRequest
-  - calls → IOrderRepository.SaveAsync(Order)
+## Only in OrderService
+- Calls: MyApp.Data.OrderRepository
+- Implements: IOrderService
 
-## Unique to MyApp.Billing.InvoiceService
-  - depends-on → InvoiceRequest
-  - calls → IInvoiceRepository.SaveAsync(Invoice)
+## Only in PaymentService
+- Calls: MyApp.Payments.PaymentGateway
+- Implements: IPaymentService
 ```
-
-| Section | Description |
-|---------|-------------|
-| **Shared Interfaces** | Interfaces implemented by both symbols |
-| **Shared Base Types** | Base classes inherited by both symbols |
-| **Shared Dependencies** | Edges (calls, depends-on, etc.) that appear in both symbols' subgraphs |
-| **Unique to A / B** | Edges present in one symbol's subgraph but not the other |
 
 ---
 
 ## Common Workflows
 
-### Identifying Candidate Abstractions
-
-When two types share many dependencies, they may benefit from a shared base class or interface:
+### Spot duplication before refactoring
 
 ```bash
-codegraph compare OrderService InvoiceService --depth 2
-# If Shared Dependencies is long, consider extracting a shared abstraction.
+# Do these two handlers share enough structure to merge?
+codegraph compare CreateOrderCommandHandler UpdateOrderCommandHandler
 ```
 
-### Verifying Two Implementations Are Interchangeable
-
-Check whether two classes that implement the same interface have equivalent dependency structures:
+### Review parallel implementations
 
 ```bash
+# Compare two implementations of the same interface
 codegraph compare SqlOrderRepository InMemoryOrderRepository
-# Shared Interfaces: IOrderRepository ✓
-# If Unique sections are empty, both implementations depend on the same things.
 ```
 
-### Detecting Copy-Paste Code
+### Check before extracting a base class
 
 ```bash
-codegraph compare UserValidator OrderValidator
-# Large Shared Dependencies section with small Unique sections suggests shared logic
-# that could be extracted.
-```
-
-### Pre-Merge Impact Assessment
-
-Before merging a branch that changes one service, compare it to a related service to understand divergence:
-
-```bash
-codegraph compare OldPaymentService NewPaymentService --depth 2
+# What do these two services share that could move to a base class?
+codegraph compare OrderService SubscriptionService --depth 2
 ```
 
 ---
 
-## Symbol Resolution
+## Exit Codes
 
-If a symbol is not found, the output reports it explicitly:
-
-```markdown
-# Compare: MyApp.Orders.OrderService vs (not found)
-⚠ Symbol B not found
-```
-
-Use [`codegraph search`](search.md) to locate the correct symbol name if needed:
-
-```bash
-codegraph search InvoiceService
-# → [Type] InvoiceService  ns=MyApp.Billing
-codegraph compare OrderService "MyApp.Billing.InvoiceService"
-```
-
----
-
-## Multi-Solution Usage
-
-In a [multi-solution setup](configuration.md#multi-solution-configuration), scope the comparison to a specific sub-graph with `--graph-dir`:
-
-```bash
-codegraph compare OrderService InvoiceService --graph-dir .codegraph/Api
-```
-
----
-
-## See Also
-
-- [`codegraph query`](../README.md#codegraph-query) — explore relationships for a single symbol
-- [`codegraph search`](search.md) — locate symbols by name before comparing
-- [`codegraph diff`](diff.md) — compare two graph *snapshots* for structural changes across the whole codebase
+| Code | Meaning |
+|------|---------|
+| `0` | Comparison complete |
+| `1` | One or both symbols not found, or graph not built |
