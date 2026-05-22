@@ -605,7 +605,7 @@ internal sealed class McpServer
         var packagesTool = new JsonObject
         {
             ["name"] = "codegraph_packages",
-            ["description"] = "Analyze NuGet package usage across the solution. Shows which packages each project uses, how many internal types reference them, and detects version conflicts. BEST FOR: 'What packages does this project use?', 'Are there version conflicts?', 'Why is this package referenced?'",
+            ["description"] = "Analyze NuGet package usage across the solution. List packages per project, find which types or methods depend on a package, or detect cross-project version conflicts.",
             ["inputSchema"] = new JsonObject
             {
                 ["type"] = "object",
@@ -614,12 +614,24 @@ internal sealed class McpServer
                     ["project"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Filter to a specific project name"
+                        ["description"] = "Filter to a specific project or assembly name"
                     },
-                    ["package"] = new JsonObject
+                    ["who_uses"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Filter to a specific package name"
+                        ["description"] = "Package name to trace back to dependent types and methods"
+                    },
+                    ["conflicts"] = new JsonObject
+                    {
+                        ["type"] = "boolean",
+                        ["description"] = "When true, return only version conflicts across projects"
+                    },
+                    ["format"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["enum"] = new JsonArray("text", "json"),
+                        ["description"] = "Output format (default: text)",
+                        ["default"] = "text"
                     }
                 }
             }
@@ -1163,27 +1175,34 @@ internal sealed class McpServer
     {
         var arguments = parameters?["arguments"];
         var projectFilter = arguments?["project"]?.GetValue<string>();
-        var packageFilter = arguments?["package"]?.GetValue<string>();
+        var whoUsesPackage = arguments?["who_uses"]?.GetValue<string>();
+        var conflictsOnly = arguments?["conflicts"]?.GetValue<bool>() ?? false;
+        var format = arguments?["format"]?.GetValue<string>() ?? "text";
+        var formatJson = format.Equals("json", StringComparison.OrdinalIgnoreCase);
+
+        if (conflictsOnly && !string.IsNullOrWhiteSpace(whoUsesPackage))
+            return CreateToolError(id, "conflicts cannot be combined with who_uses");
 
         try
         {
             var engine = await GetOrLoadEngineAsync();
-            var analyzer = new PackageAnalyzer(engine.Nodes, engine.Edges);
+            var packageEngine = new PackageQueryEngine(engine.Nodes, engine.Edges);
 
             string output;
-            if (!string.IsNullOrEmpty(packageFilter))
+            if (conflictsOnly)
             {
-                var usages = analyzer.AnalyzeByPackage(packageFilter);
-                output = PackageFormatter.FormatUsage(usages);
+                var conflicts = packageEngine.FindConflicts();
+                output = formatJson ? PackageFormatter.FormatConflictsAsJson(conflicts) : PackageFormatter.FormatConflicts(conflicts);
+            }
+            else if (!string.IsNullOrWhiteSpace(whoUsesPackage))
+            {
+                var dependents = packageEngine.FindWhoUses(whoUsesPackage, projectFilter);
+                output = formatJson ? PackageFormatter.FormatDependentsAsJson(dependents) : PackageFormatter.FormatDependents(dependents);
             }
             else
             {
-                var usages = analyzer.AnalyzeByProject(projectFilter);
-                output = PackageFormatter.FormatUsage(usages);
-
-                var conflicts = analyzer.FindConflicts();
-                if (conflicts.Count > 0)
-                    output += "\n" + PackageFormatter.FormatConflicts(conflicts);
+                var usages = packageEngine.ListPackages(projectFilter);
+                output = formatJson ? PackageFormatter.FormatUsageAsJson(usages) : PackageFormatter.FormatUsage(usages);
             }
 
             return CreateToolResult(id, output, false);
