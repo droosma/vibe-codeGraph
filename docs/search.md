@@ -1,8 +1,24 @@
 # How to Use `codegraph search`
 
-`codegraph search` performs a **fast, fuzzy name lookup** across all symbols in the graph — types, methods, namespaces, properties, and fields. Use it to discover symbol names before running `codegraph query` or `codegraph compare`.
+`codegraph search` finds nodes in the graph by name, namespace, or file path using fast case-insensitive substring matching. Use it when you know part of a symbol's name but not its exact identifier, or when `codegraph query` pattern matching returns too many results.
 
-Unlike `codegraph query`, which traverses relationships, `codegraph search` only returns a flat list of matching node names with their kind, namespace, and file location. It does not follow edges or compute subgraphs.
+---
+
+## Quick Start
+
+```bash
+# Index your solution first (if you haven't already)
+codegraph index --solution MyApp.sln
+
+# Search for anything containing "Order"
+codegraph search Order
+
+# Narrow to types only
+codegraph search Order --kind type
+
+# Return up to 50 results
+codegraph search Repository --top 50
+```
 
 ---
 
@@ -12,101 +28,100 @@ Unlike `codegraph query`, which traverses relationships, `codegraph search` only
 codegraph search <query> [options]
 ```
 
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `<query>` | Text to search for (case-insensitive substring match) |
+
+### Flags
+
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--top <n>` | Maximum results to return | `20` |
+| `--top <n>` | Maximum number of results to return | `20` |
 | `--kind <kind>` | Filter by node kind: `type`, `method`, `namespace`, `property`, `field` | All kinds |
 | `--graph-dir <path>` | Graph directory | `.codegraph` |
+| `--json` | Output results as JSON | Plain text |
 | `--help`, `-h` | Show help | |
-
-`<query>` is a **case-insensitive substring** matched against node names, namespace names, and file paths.
 
 ---
 
-## Output Format
+## What Gets Searched
 
-Each matching node is printed on one line:
+The search engine matches against:
 
-```
-[Kind] Name  ns=<namespace>  (<file-path>)
-```
+- **Type names** — classes, interfaces, enums, structs, records
+- **Method names** — includes constructors and operators
+- **Property names**
+- **Field names**
+- **Namespace names**
+- **File paths** — partial file path matches
 
-Example:
-
-```
-[Type] OrderService  ns=MyApp.Services  (src/Services/OrderService.cs)
-[Method] PlaceOrder  ns=MyApp.Services  (src/Services/OrderService.cs)
-[Type] OrderRepository  ns=MyApp.Data  (src/Data/OrderRepository.cs)
-
-3 result(s) for 'Order'.
-```
+Results are deduped and ranked by relevance.
 
 ---
 
 ## Examples
 
-### Find all symbols containing "Order"
-
 ```bash
-codegraph search Order
-```
+# Find all symbols containing "Service"
+codegraph search Service
 
-### Restrict to types only
+# Find types named "Handler"
+codegraph search Handler --kind type
 
-```bash
-codegraph search Order --kind type
-```
+# Find methods mentioning "Async"
+codegraph search Async --kind method
 
-### Find methods by partial name
+# Find namespaces containing "Infrastructure"
+codegraph search Infrastructure --kind namespace
 
-```bash
-codegraph search PlaceOrder --kind method
-```
+# Get up to 100 results for a broad search
+codegraph search Repository --top 100
 
-### Increase result count
+# JSON output for scripting
+codegraph search Order --json
 
-```bash
-codegraph search Service --top 50
-```
-
-### Search in a specific graph directory
-
-```bash
-codegraph search Repository --graph-dir .codegraph/Backend
+# Use a different graph directory
+codegraph search Order --graph-dir .codegraph/MyService
 ```
 
 ---
 
-## Typical Workflow
+## JSON Output
 
-Use `search` as a discovery step before running `query`:
+With `--json`, each result is an object:
 
-```bash
-# 1. Discover the exact name
-codegraph search PaymentProcessor --kind type
-
-# 2. Query with the full qualified name
-codegraph query "MyApp.Payments.PaymentProcessor" --depth 2
-
-# 3. (Optional) Compare with a related type
-codegraph compare "MyApp.Payments.PaymentProcessor" "MyApp.Payments.RefundProcessor"
+```json
+[
+  {
+    "id": "MyApp.Services.OrderService",
+    "name": "OrderService",
+    "kind": "type",
+    "namespace": "MyApp.Services",
+    "filePath": "src/MyApp.Services/OrderService.cs",
+    "startLine": 12
+  }
+]
 ```
 
 ---
 
-## When to Use `search` vs `query`
+## Choosing Between `search` and `query`
 
-| Task | Recommended command |
-|------|---------------------|
-| Discover symbol names by substring | `codegraph search <substring>` |
-| Explore relationships of a known symbol | `codegraph query <symbol>` |
-| Browse all assemblies and types | `codegraph list` |
-| Find callers or callees | `codegraph query <symbol> --kind calls-from` |
+| Use case | Command |
+|----------|---------|
+| You know part of a name | `codegraph search <partial-name>` |
+| You want callers/callees of a specific symbol | `codegraph query <symbol> --kind calls-to` |
+| You want to traverse the graph from a symbol | `codegraph query <symbol> --depth 2` |
+| You want detailed information about one symbol | `codegraph explain <symbol>` |
 
 ---
 
-## See Also
+## Exit Codes
 
-- [`codegraph query`](../README.md#codegraph-query) — Explore relationships after finding a symbol
-- [`codegraph list`](list.md) — Browse the graph hierarchy by assembly, type, or namespace
-- [`codegraph compare`](compare.md) — Structurally compare two symbols
+| Code | Meaning |
+|------|---------|
+| `0` | Results found |
+| `1` | Error (graph not found, run `codegraph index` first) |
+| `2` | No results found (non-JSON mode) |

@@ -1,6 +1,24 @@
 # How to Use `codegraph compare`
 
-`codegraph compare` performs a **structural side-by-side comparison** of two symbols in the graph. It identifies what the two symbols have in common (shared interfaces, shared base types, shared dependencies) and what is unique to each — giving you a focused diff of two code elements without needing to read their source.
+`codegraph compare` performs a **structural side-by-side comparison** of two symbols. It highlights what they share (interfaces, callers, callees) and where they differ — useful for spotting duplication, planning consolidation, or reviewing parallel implementations.
+
+---
+
+## Quick Start
+
+```bash
+# Index your solution first (if you haven't already)
+codegraph index --solution MyApp.sln
+
+# Compare two service types
+codegraph compare OrderService PaymentService
+
+# Use fully-qualified names for precision
+codegraph compare MyApp.Services.OrderService MyApp.Services.PaymentService
+
+# Increase traversal depth
+codegraph compare OrderService PaymentService --depth 2
+```
 
 ---
 
@@ -10,103 +28,79 @@
 codegraph compare <symbolA> <symbolB> [options]
 ```
 
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `<symbolA>` | First symbol to compare (substring match) |
+| `<symbolB>` | Second symbol to compare (substring match) |
+
+### Flags
+
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--depth <n>` | Traversal depth for relationship collection | `1` |
+| `--depth <n>` | Traversal depth for neighbourhood comparison | `1` |
 | `--graph-dir <path>` | Graph directory | `.codegraph` |
 | `--help`, `-h` | Show help | |
 
-`<symbolA>` and `<symbolB>` are symbol patterns (same syntax as `codegraph query`). Wildcards are supported.
-
 ---
 
-## Output Format
+## Output
 
-The command outputs Markdown sections:
-
-| Section | Description |
-|---------|-------------|
-| `## Shared Interfaces` | Interfaces implemented by **both** symbols |
-| `## Shared Base Types` | Base types inherited by **both** symbols |
-| `## Shared Dependencies` | Edges (calls, depends-on, etc.) that appear in **both** symbols' subgraphs |
-| `## Unique to <A>` | Relationships present only in symbolA's subgraph |
-| `## Unique to <B>` | Relationships present only in symbolB's subgraph |
-
-If either symbol is not found in the graph, a warning line is printed and the relevant sections are omitted.
-
----
-
-## Examples
-
-### Compare two service implementations
-
-```bash
-codegraph compare OrderService InvoiceService
-```
-
-Example output:
+The comparison report is structured as a Markdown document:
 
 ```markdown
-# Compare: MyApp.Services.OrderService vs MyApp.Services.InvoiceService
+# Compare: MyApp.Services.OrderService vs MyApp.Services.PaymentService
 
 ## Shared Interfaces
-  - ITransactionalService
+- ITransactional
+- IService
 
-## Shared Dependencies
-  - calls → IRepository.SaveAsync(...)
-  - depends-on → MyApp.Domain.Money
+## Shared Callers
+- MyApp.Api.CheckoutController
 
-## Unique to MyApp.Services.OrderService
-  - calls → IEventBus.PublishAsync(OrderPlacedEvent)
-  - depends-on → MyApp.Domain.OrderRequest
+## Shared Callees
+- MyApp.Data.UnitOfWork
 
-## Unique to MyApp.Services.InvoiceService
-  - calls → IPdfGenerator.GenerateAsync(Invoice)
-  - depends-on → MyApp.Domain.InvoiceRequest
-```
+## Only in OrderService
+- Calls: MyApp.Data.OrderRepository
+- Implements: IOrderService
 
-### Compare with deeper traversal
-
-```bash
-codegraph compare CacheService SessionService --depth 2
-```
-
-### Compare using wildcard patterns
-
-```bash
-codegraph compare "*OrderRepo*" "*InvoiceRepo*"
+## Only in PaymentService
+- Calls: MyApp.Payments.PaymentGateway
+- Implements: IPaymentService
 ```
 
 ---
 
-## When to Use `compare` vs `query`
+## Common Workflows
 
-| Task | Recommended command |
-|------|---------------------|
-| Understand a single symbol's relationships | `codegraph query <symbol>` |
-| Find what two symbols share or differ | `codegraph compare <A> <B>` |
-| Trace full dependency graph | `codegraph query <symbol> --depth 3` |
-| Assess impact of changing a symbol | `codegraph impact` (via MCP) |
-
----
-
-## Workflow: Refactoring two similar classes
-
-When considering merging or extracting a shared base class, `compare` reveals whether the extraction is safe:
+### Spot duplication before refactoring
 
 ```bash
-# 1. Find what they share
-codegraph compare UserNotificationService AdminNotificationService
+# Do these two handlers share enough structure to merge?
+codegraph compare CreateOrderCommandHandler UpdateOrderCommandHandler
+```
 
-# 2. Query each in depth to confirm
-codegraph query UserNotificationService --depth 2
-codegraph query AdminNotificationService --depth 2
+### Review parallel implementations
+
+```bash
+# Compare two implementations of the same interface
+codegraph compare SqlOrderRepository InMemoryOrderRepository
+```
+
+### Check before extracting a base class
+
+```bash
+# What do these two services share that could move to a base class?
+codegraph compare OrderService SubscriptionService --depth 2
 ```
 
 ---
 
-## See Also
+## Exit Codes
 
-- [`codegraph query`](../README.md#codegraph-query) — Query a single symbol
-- [`codegraph search`](search.md) — Find symbols by name before comparing
-- [`codegraph diff`](diff.md) — Compare graph snapshots (structural changes over time)
+| Code | Meaning |
+|------|---------|
+| `0` | Comparison complete |
+| `1` | One or both symbols not found, or graph not built |
