@@ -260,7 +260,7 @@ The query engine compares the graph's `commitHash` in `meta.json` against the cu
 | Format | Class | Use Case |
 |--------|-------|----------|
 | `context` | `ContextFormatter` | Default. Markdown-like, optimized for LLM prompts. Shows target node, outgoing/incoming edges grouped by type. |
-| `compact` | `CompactFormatter` | Prefix-stripped compressed format, 3–5× smaller than `context`. Best for large result sets or constrained token budgets. |
+| `compact` | `CompactFormatter` | Prefix-stripped compressed format, 3–5× smaller than `context`. Inlines the `<summary>` from XML doc comments on the primary symbol's header (truncated at 120 chars; suppress with `--no-docs`). Best for large result sets or constrained token budgets. |
 | `json` | `JsonFormatter` | Machine-readable. Serializes the full `QueryResult` (camelCase, enums as strings). |
 | `text` | `TextFormatter` | Human-readable tabular format with stats and edge summaries. |
 

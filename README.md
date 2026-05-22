@@ -176,6 +176,7 @@ codegraph query <symbol-pattern> [options]
 | `--max-nodes <n>` | Maximum nodes in result | `50` |
 | `--include-external` | Include external assembly dependencies | `false` |
 | `--include-source` | Embed source code snippets alongside node references in output | `false` |
+| `--no-docs` | Suppress XML doc comment summaries from compact output headers | (docs shown by default) |
 | `--no-rank` | Disable relevance ranking | (ranking enabled by default) |
 | `--budget <tokens>` | Maximum token budget; output is truncated with a hint when exceeded | (none) |
 | `--no-metrics` | Suppress the compression metrics footer | `false` |
@@ -187,7 +188,7 @@ codegraph query <symbol-pattern> [options]
 | Format | Description |
 |--------|-------------|
 | `context` | Markdown-like, optimized for LLM prompts (default when output is a terminal) |
-| `compact` | Compressed prefix-stripped format, 3–5× smaller than `context` (default when piped) |
+| `compact` | Compressed prefix-stripped format, 3–5× smaller than `context` (default when piped). Inlines the `<summary>` from XML doc comments on the primary symbol's header. Use `--no-docs` to suppress. |
 | `text` | Human-readable tabular summary |
 | `json` | Machine-readable full `QueryResult` |
 
