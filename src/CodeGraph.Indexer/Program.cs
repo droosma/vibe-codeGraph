@@ -2676,7 +2676,7 @@ static void PrintViewUsage()
 
         Options:
           --graph-dir <dir>    Directory containing graph data (default: .codegraph)
-          --output, -o <path>  Output HTML file (default: .codegraph/graph.html)
+          --output, -o <path>  Output HTML file (default: system temp directory)
           --max-nodes <n>      Maximum nodes to render (default: 5000)
           --no-open            Don't open browser automatically
           --help, -h           Show this help
