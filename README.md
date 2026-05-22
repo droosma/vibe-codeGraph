@@ -210,7 +210,7 @@ After each query, the CLI prints `💡 Suggested next queries:` to stderr with u
 
 ### `codegraph compare`
 
-Compare two symbols structurally — show their shared interfaces, base types, and dependencies, plus what makes each one unique.
+Compare two symbols structurally — shared interfaces, base types, and dependencies vs. what is unique to each.
 
 ```
 codegraph compare <symbolA> <symbolB> [options]
@@ -218,19 +218,20 @@ codegraph compare <symbolA> <symbolB> [options]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--depth <n>` | BFS traversal depth for gathering edges | `1` |
+| `--depth <n>` | BFS traversal depth | `1` |
 | `--graph-dir <path>` | Graph directory | `.codegraph` |
 
 ```bash
 codegraph compare OrderService InvoiceService
-codegraph compare SqlOrderRepository InMemoryOrderRepository --depth 2
+codegraph compare OrderService InvoiceService --depth 2
+codegraph compare "MyApp.Orders.OrderService" "MyApp.Billing.InvoiceService"
 ```
 
-See [docs/compare.md](docs/compare.md) for the full guide, including output format and common workflows.
+See [docs/compare.md](docs/compare.md) for the full how-to guide, including symbol resolution and common workflows.
 
 ### `codegraph search`
 
-Search for symbols by name, namespace, or file path using case-insensitive substring matching. The fastest way to discover symbols when you only know part of the name.
+Search for symbols by name, namespace, or file path using case-insensitive substring matching.
 
 ```
 codegraph search <query> [options]
@@ -238,17 +239,17 @@ codegraph search <query> [options]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--top <n>` | Maximum results to return | `20` |
-| `--kind <kind>` | Filter by kind: `type`, `method`, `namespace`, `property`, `field` | All kinds |
+| `--top <n>` | Maximum results | `20` |
+| `--kind <kind>` | Filter by kind: `type`, `method`, `namespace`, `property`, `field` | All |
 | `--graph-dir <path>` | Graph directory | `.codegraph` |
 
 ```bash
-codegraph search payment                    # Find anything related to "payment"
-codegraph search order --kind type          # Only types whose name/path contains "order"
-codegraph search Controllers/Order          # Find by file path fragment
+codegraph search Order                        # All symbols containing "Order"
+codegraph search OrderService --kind type     # Only types
+codegraph search PlaceOrder --kind method     # Only methods
 ```
 
-See [docs/search.md](docs/search.md) for the full guide, including how search differs from `query` and `list`.
+See [docs/search.md](docs/search.md) for the full how-to guide.
 
 ### `codegraph diff`
 
