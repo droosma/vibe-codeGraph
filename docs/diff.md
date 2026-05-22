@@ -255,3 +255,11 @@ codegraph index --solution MyApp.sln --skip-restore  # only if packages are alre
 **Empty diff despite code changes**
 
 Not all code changes produce graph changes. Changes to method bodies (without signature changes), comments, whitespace, and formatting are invisible to the graph. The diff only reflects structural and semantic changes visible to Roslyn's symbol model.
+
+---
+
+## See Also
+
+- [`codegraph compare`](compare.md) — structural side-by-side comparison of two symbols (not snapshots)
+- [`codegraph stats`](stats.md) — print graph statistics for quick size comparisons
+- [`codegraph report`](report.md) — full Markdown analysis report

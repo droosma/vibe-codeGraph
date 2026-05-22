@@ -175,6 +175,7 @@ codegraph query <symbol-pattern> [options]
 | `--format <fmt>` | Output format: `json`, `text`, `context`, `compact` | `context` |
 | `--max-nodes <n>` | Maximum nodes in result | `50` |
 | `--include-external` | Include external assembly dependencies | `false` |
+| `--include-source` | Embed source code snippets alongside node references in output | `false` |
 | `--no-rank` | Disable relevance ranking | (ranking enabled by default) |
 | `--budget <tokens>` | Maximum token budget; output is truncated with a hint when exceeded | (none) |
 | `--no-metrics` | Suppress the compression metrics footer | `false` |
@@ -339,7 +340,9 @@ codegraph list [scope] [options]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--assembly <name>` | Filter by assembly name (applies to `types`, `interfaces`, `namespaces`) | All |
-| `--top <n>` | Maximum items to return (applies to `types` only) | `20` |
+| `--top <n>` | Maximum items to return (applies to `types` only) | `50` |
+| `--skip <n>` | Skip the first N results for pagination (applies to `types` only) | `0` |
+| `--filter <pattern>` | Filter results by name substring, case-insensitive (applies to `types` only) | All |
 | `--graph-dir <path>` | Graph directory | `.codegraph` |
 
 ```bash
@@ -348,6 +351,8 @@ codegraph list types                        # Most-connected types across all as
 codegraph list types --assembly MyApp.Core  # Types in a specific assembly
 codegraph list interfaces --top 10          # Top 10 most-implemented interfaces
 codegraph list namespaces                   # All namespaces
+codegraph list types --filter Order         # Types whose name contains "Order"
+codegraph list types --top 20 --skip 20     # Page 2 of types
 ```
 
 See [docs/list.md](docs/list.md) for the full guide, including output format details and orientation workflows.
@@ -718,16 +723,23 @@ codegraph mcp [--graph-dir <dir>]
 |------|-------------|---------|
 | `--graph-dir <dir>` | Graph directory | `.codegraph` |
 
-The server exposes six tools. Agents call them like any other tool (no shell commands, no prompt engineering). The server starts on demand via stdio and exits when the agent disconnects.
+The server exposes 13 tools. Agents call them like any other tool (no shell commands, no prompt engineering). The server starts on demand via stdio and exits when the agent disconnects.
 
 | MCP Tool | Description |
 |----------|-------------|
 | `codegraph_query` | Query the graph by symbol pattern with depth, edge-type, and format options |
+| `codegraph_search` | Search for symbols by name, namespace, or file path |
 | `codegraph_list` | Browse the graph hierarchy (assemblies, types, interfaces, namespaces) |
+| `codegraph_file` | Find all symbols defined in a file path |
+| `codegraph_batch` | Query multiple symbols in one call |
 | `codegraph_summary` | Generate an overview report: hub types, assembly boundaries, test coverage |
 | `codegraph_path` | Find the shortest dependency path between two symbols |
 | `codegraph_impact` | Reverse-dependency analysis — assess the blast radius of a change |
 | `codegraph_explain` | Full symbol deep-dive: signature, members, all edges, test coverage |
+| `codegraph_compare` | Compare two symbols structurally |
+| `codegraph_test_impact` | Analyze test coverage: direct tests, indirect tests, `dotnet test --filter` |
+| `codegraph_diff` | Compare two graph snapshots to find structural changes |
+| `codegraph_packages` | Analyze NuGet package usage; detect version conflicts |
 
 See [docs/mcp.md](docs/mcp.md) for the full guide, including per-agent configuration and troubleshooting.
 
@@ -1071,8 +1083,8 @@ For a deep dive, see [docs/architecture.md](docs/architecture.md).
 Push a version tag to trigger the NuGet publish workflow:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 This runs `.github/workflows/publish.yml` which builds, tests, packs, and pushes to NuGet.org. You'll need to add a `NUGET_API_KEY` secret to your GitHub repository.

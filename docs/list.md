@@ -42,7 +42,9 @@ codegraph list [scope] [options]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--assembly <name>` | Filter by assembly name (applies to `types`, `interfaces`, `namespaces`) | All assemblies |
-| `--top <n>` | Maximum items to return (applies to `types` scope only) | `20` |
+| `--top <n>` | Maximum items to return (applies to `types` scope only) | `50` |
+| `--skip <n>` | Skip the first N results for pagination (applies to `types` scope only) | `0` |
+| `--filter <pattern>` | Filter results by name substring, case-insensitive (applies to `types` scope only) | All |
 | `--graph-dir <path>` | Directory containing the indexed graph | `.codegraph` |
 | `--help`, `-h` | Show help | |
 
@@ -52,9 +54,11 @@ codegraph list [scope] [options]
 codegraph list                                   # All assemblies (default)
 codegraph list assemblies                        # Explicit scope
 
-codegraph list types                             # Top 20 types by connectivity
-codegraph list types --top 50                    # Top 50 types
+codegraph list types                             # Top 50 types by connectivity
+codegraph list types --top 20                    # Top 20 types
 codegraph list types --assembly MyApp.Core       # Types in a specific assembly
+codegraph list types --filter Order              # Types whose name contains "Order"
+codegraph list types --top 20 --skip 20          # Page 2 (results 21-40)
 
 codegraph list interfaces                        # All interfaces
 codegraph list interfaces --assembly MyApp.Api   # Interfaces in one assembly
@@ -157,6 +161,7 @@ codegraph list types --graph-dir .codegraph/Workers
 
 ## See Also
 
+- [`codegraph search`](search.md) — find symbols by name when you don't know the exact identifier
 - [`codegraph query`](../README.md#codegraph-query) — query for specific symbols and their relationships
 - [`codegraph stats`](stats.md) — print numeric statistics (node/edge counts)
 - [`codegraph report`](report.md) — full Markdown analysis report

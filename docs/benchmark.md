@@ -1,23 +1,28 @@
 # How to Use `codegraph benchmark`
 
-`codegraph benchmark` runs a set of named query scenarios against your indexed graph and reports timing statistics (min, max, median, mean) alongside result sizes (nodes, edges, estimated tokens). It is useful for measuring query performance before and after changes to the graph or query engine, and for validating that your graph is fast enough for interactive agent use.
+`codegraph benchmark` runs a set of query scenarios against the indexed graph and measures execution time. Use it to validate query performance regressions, compare graph sizes, or establish a performance baseline for CI.
+
+This command measures **graph query performance** (how fast CodeGraph answers questions). For the A/B benchmark that compares agent effectiveness with vs. without CodeGraph, see [BENCHMARK-PLAYBOOK.md](BENCHMARK-PLAYBOOK.md).
 
 ---
 
 ## Quick Start
 
 ```bash
-# Index your solution first (if you haven't already)
+# Index the codebase first
 codegraph index --solution MyApp.sln
 
-# Run the built-in default scenarios (5 iterations each)
+# Run the built-in scenarios (5 iterations each)
 codegraph benchmark
 
-# Run with more iterations for stable measurements
+# Use a custom scenarios file
+codegraph benchmark --scenarios benchmarks/scenarios.json
+
+# More iterations for stable averages
 codegraph benchmark --iterations 20
 
-# Use a custom scenario file
-codegraph benchmark --scenarios benchmarks/scenarios.json
+# Output as JSON for CI artifact ingestion
+codegraph benchmark --format json > benchmark-results.json
 ```
 
 ---
@@ -25,50 +30,39 @@ codegraph benchmark --scenarios benchmarks/scenarios.json
 ## CLI Reference
 
 ```
-codegraph benchmark [options]
+codegraph benchmark [--scenarios <path>] [--iterations N] [--format json] [--graph-dir <dir>]
 ```
-
-### Flags
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--scenarios <path>` | Path to a JSON scenarios file | Built-in defaults |
+| `--scenarios <path>` | Path to a JSON scenarios file | Built-in scenarios |
 | `--iterations <n>` | Number of times to run each scenario | `5` |
-| `--format <fmt>` | Output format: `text` (Markdown table) or `json` | `text` |
-| `--graph-dir <path>` | Directory containing the indexed graph | `.codegraph` |
+| `--format json` | Output as JSON instead of Markdown | Markdown |
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
 | `--help`, `-h` | Show help | |
-
-### Examples
-
-```bash
-codegraph benchmark                                      # Built-in scenarios, 5 iterations
-codegraph benchmark --iterations 20                      # More stable measurements
-codegraph benchmark --scenarios my-scenarios.json        # Custom scenarios
-codegraph benchmark --format json > results.json         # JSON output for CI
-codegraph benchmark --graph-dir .codegraph/Api           # Benchmark a sub-graph
-```
 
 ---
 
-## Scenario File Format
+## Scenarios File Format
 
-Scenarios are defined in a JSON file. Each scenario specifies a command and its arguments:
+Scenarios are defined in a JSON file:
 
 ```json
 {
   "scenarios": [
     {
-      "name": "query-order-service",
+      "name": "query-single",
       "description": "Single type query at depth 1",
       "command": "query",
       "args": {
         "pattern": "OrderService",
-        "depth": 1
+        "depth": 1,
+        "format": "compact"
       }
     },
     {
-      "name": "search-service",
-      "description": "Broad search for Service types",
+      "name": "search-broad",
+      "description": "Broad semantic search",
       "command": "search",
       "args": {
         "query": "Service",
@@ -87,85 +81,83 @@ Scenarios are defined in a JSON file. Each scenario specifies a command and its 
 }
 ```
 
-The repository ships with a default `benchmarks/scenarios.json` that covers common query patterns.
+The built-in scenarios file ships with CodeGraph at `benchmarks/scenarios.json` (next to the executable). If it exists, it is used by default; otherwise three minimal built-in scenarios run instead.
+
+### Supported `command` values
+
+| Value | Maps to |
+|-------|---------|
+| `query` | `codegraph query` |
+| `search` | `codegraph search` (semantic search) |
+| `list` | `codegraph list` |
 
 ---
 
-## Understanding the Output
+## Example Output
 
 ### Markdown (default)
 
 ```markdown
-## Benchmark Results
+## CodeGraph Benchmark Results
 
-| Scenario        | Iterations | Min   | Max   | Median | Mean  | Nodes | Edges | Tokens |
-|-----------------|------------|-------|-------|--------|-------|-------|-------|--------|
-| query-single    | 5          | 12ms  | 18ms  | 14ms   | 14ms  | 23    | 41    | 1240   |
-| search-broad    | 5          | 8ms   | 11ms  | 9ms    | 9ms   | 50    | 0     | 620    |
-| list-assemblies | 5          | 3ms   | 5ms   | 4ms    | 4ms   | 0     | 0     | 180    |
+| Scenario       | Description                  | Iterations | Avg (ms) | Min (ms) | Max (ms) |
+|----------------|------------------------------|------------|----------|----------|----------|
+| query-single   | Single type query at depth 1 | 5          | 12       | 10       | 18       |
+| search-broad   | Broad semantic search        | 5          | 34       | 30       | 41       |
+| list-assemblies| List all assemblies          | 5          | 8        | 7        | 11       |
 ```
-
-**Min/Max/Median/Mean** — wall-clock timing across all iterations.
-
-**Nodes / Edges** — result size of the last iteration.
-
-**Tokens** — estimated LLM token count of the formatted output, useful for checking context window fit.
 
 ### JSON (`--format json`)
 
 ```json
-[
-  {
-    "scenario": "query-single",
-    "iterations": 5,
-    "min_ms": 12.1,
-    "max_ms": 18.3,
-    "median_ms": 14.0,
-    "mean_ms": 14.2,
-    "result_nodes": 23,
-    "result_edges": 41,
-    "output_tokens": 1240
-  }
-]
+{
+  "scenarios": [
+    {
+      "name": "query-single",
+      "description": "Single type query at depth 1",
+      "iterations": 5,
+      "avgMs": 12,
+      "minMs": 10,
+      "maxMs": 18
+    }
+  ]
+}
 ```
 
 ---
 
-## Common Workflows
+## CI Integration
 
-### Baseline + Regression Check
-
-```bash
-# Measure before a change
-codegraph benchmark --iterations 20 --format json > before.json
-
-# Make changes, re-index
-codegraph index --solution MyApp.sln
-
-# Measure after
-codegraph benchmark --iterations 20 --format json > after.json
-
-# Compare manually or with jq
-jq '[.[] | {scenario, mean_ms}]' before.json after.json
-```
-
-### CI Performance Gate
+Track query performance across commits:
 
 ```yaml
-- name: Run graph benchmarks
+# .github/workflows/benchmark.yml
+- name: Run benchmarks
   run: codegraph benchmark --iterations 10 --format json > benchmark-results.json
 
-- name: Upload benchmark results
+- name: Upload benchmark artifact
   uses: actions/upload-artifact@v4
   with:
     name: benchmark-results
     path: benchmark-results.json
 ```
 
+To fail CI when a scenario exceeds a threshold:
+
+```bash
+result=$(codegraph benchmark --format json)
+slow=$(echo "$result" | jq '[.scenarios[] | select(.avgMs > 100)] | length')
+if [ "$slow" -gt 0 ]; then
+  echo "Performance regression detected:" >&2
+  echo "$result" | jq '.scenarios[] | select(.avgMs > 100)' >&2
+  exit 1
+fi
+```
+
 ---
 
 ## See Also
 
-- [`codegraph query`](../README.md#codegraph-query) — run individual queries
-- [`codegraph stats`](stats.md) — quick graph size overview
-- [BENCHMARK-PLAYBOOK.md](BENCHMARK-PLAYBOOK.md) — A/B benchmark methodology for validating CodeGraph's effectiveness
+- [BENCHMARK-PLAYBOOK.md](BENCHMARK-PLAYBOOK.md) — methodology for A/B benchmarking agent effectiveness
+- [`codegraph daemon`](daemon.md) — persistent daemon that eliminates process-spawn overhead
+- [`codegraph index`](../README.md#codegraph-index) — required before benchmarking
