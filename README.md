@@ -130,6 +130,8 @@ Auto-detects which AI agents are configured in the repo (looks for `.claude/`, `
 | `--output <dir>` | Output directory for graph data (default: `.codegraph`) |
 | `--force` | Overwrite existing skill files |
 
+**Solution auto-discovery:** When no `--solution` flag is given, `codegraph init` scans the repo for `.sln` and `.slnx` files. It prefers root-level solutions over nested ones, and if both a `.sln` and `.slnx` exist with the same name, the `.sln` takes precedence.
+
 ### `codegraph index`
 
 Build the semantic graph from your C# solution.
@@ -484,9 +486,140 @@ codegraph view --graph-dir .codegraph/Api   # View specific sub-graph
 
 See [docs/view.md](docs/view.md) for the full how-to guide, including sidebar controls, node sampling, and CI usage.
 
+### `codegraph brief`
+
+Generate a compact `BRIEF.md` codebase orientation file optimized for LLM agents. Use this as the first action when an agent starts a session — it provides a structured overview with zero query overhead.
+
+```
+codegraph brief [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph brief                          # Generate .codegraph/BRIEF.md (also prints to stdout)
+codegraph brief --graph-dir .codegraph-prev  # Brief for an older snapshot
+```
+
+**Output sections:**
+- **Assemblies** — project list with type/method counts _(top 20 shown for large codebases)_
+- **Hub Types** — 10 most-connected types (high in+out degree)
+- **Key Interfaces** — top interfaces by implementation count
+- **Domain Clusters** — namespace-based domain groups _(top 15 shown)_
+- **Entry Points** — HTTP/gRPC endpoints, CLI commands, message handlers _(top 20 shown)_
+- **Test Coverage** — assemblies with their test-to-type ratios _(top 10 shown)_
+
+> **Note:** For large codebases, each section shows a `(showing top N of M)` note when results are capped. This keeps the brief under ~4 KB regardless of codebase size.
+
+> **Tip:** `codegraph index` generates `BRIEF.md` automatically after every successful index run.
+
+### `codegraph search`
+
+Search for symbols by name, namespace, or file path using case-insensitive substring matching.
+
+```
+codegraph search <query> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--top <n>` | Maximum results to return | `20` |
+| `--kind <kind>` | Filter by node kind: `type`, `method`, `namespace`, `property`, `field` | All kinds |
+| `--json` | Output as JSON | `false` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph search OrderService            # Find symbols matching "OrderService"
+codegraph search Order --kind type       # Only types
+codegraph search IRepository --top 10   # Top 10 matches
+codegraph search Order --json            # Machine-readable output
+```
+
+**Ranking**: Exact name matches and prefix matches rank higher than partial ID matches. Searching `Patient` returns `Patient` types before `List<PatientDto>`.
+
+**Exit codes:** `0` = results found; `2` = no results (when not using `--json`).
+
+### `codegraph explain`
+
+Show detailed information about a single symbol: signature, members, all outgoing and incoming edges, and linked test methods.
+
+```
+codegraph explain <symbol> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--json` | Output as JSON | `false` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph explain OrderService           # Full deep-dive on OrderService
+codegraph explain PlaceOrder --json      # Machine-readable output
+```
+
+Use `codegraph explain` when `codegraph query` returns a result you want to drill into.
+
+### `codegraph impact`
+
+Analyze the reverse-dependency blast radius of changes to a symbol — who depends on it, and transitively, what they depend on.
+
+```
+codegraph impact <symbol> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--depth <n>` | Traversal depth | `3` |
+| `--json` | Output as JSON | `false` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph impact OrderService            # What breaks if OrderService changes?
+codegraph impact PlaceOrder --depth 5    # Deeper traversal
+codegraph impact OrderService --json     # Machine-readable layers
+```
+
+**Exit codes:**
+| Code | Meaning |
+|------|---------|
+| `0` | Symbol found and has dependents |
+| `1` | Symbol not found in graph |
+| `2` | Symbol found but has no dependents (safe to change) |
+
+> The exit code `2` (found, no dependents) is distinct from `1` (not found) so CI scripts can distinguish "nothing depends on this" from "symbol doesn't exist".
+
+### `codegraph path`
+
+Find the shortest dependency path between two symbols through calls, inheritance, or other relationships.
+
+```
+codegraph path <from> <to> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--max-depth <n>` | Maximum search depth | `10` |
+| `--json` | Output as JSON | `false` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph path OrderService PaymentGateway       # How does A reach B?
+codegraph path PlaceOrder SendEmail --max-depth 5
+codegraph path OrderService PaymentGateway --json
+```
+
+**Exit codes:**
+| Code | Meaning |
+|------|---------|
+| `0` | Path found |
+| `1` | Missing arguments or graph not found |
+| `2` | No path found between the two symbols |
+
 ### `codegraph test-impact`
 
-Analyze test coverage for a symbol — direct tests, indirect tests (through call chains), and uncovered callers.
+Analyze which test methods cover a symbol, directly or transitively through the call graph.
 
 ```
 codegraph test-impact <symbol> [options]
@@ -494,87 +627,14 @@ codegraph test-impact <symbol> [options]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--depth <n>` | Traversal depth for indirect coverage | `3` |
-| `--graph-dir <path>` | Graph directory | `.codegraph` |
+| `--depth <n>` | Traversal depth for indirect tests | `3` |
+| `--json` | Output as JSON | `false` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
 
 ```bash
-codegraph test-impact OrderService           # Which tests cover OrderService?
-codegraph test-impact OrderService --depth 5 # Include deeper indirect paths
+codegraph test-impact OrderService       # Which tests cover OrderService?
+codegraph test-impact PlaceOrder --json  # Machine-readable output
 ```
-
-See [docs/test-impact.md](docs/test-impact.md) for the full guide, including pre-change risk assessment and CI test-selection workflows.
-
-### `codegraph packages`
-
-Analyze NuGet package usage across your indexed solution — which packages each project references, usage counts, and version conflicts.
-
-```
-codegraph packages [options]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--project <name>` | Scope to a specific project | All projects |
-| `--package <name>` | Show details for a specific package | All packages |
-| `--format <fmt>` | Output format: `text` or `json` | `text` |
-| `--graph-dir <path>` | Graph directory | `.codegraph` |
-
-```bash
-codegraph packages                              # All packages, all projects
-codegraph packages --package Newtonsoft.Json    # Who uses it and how?
-codegraph packages --format json > audit.json   # JSON export
-```
-
-See [docs/packages.md](docs/packages.md) for full workflows, including dependency audits and version conflict resolution.
-
-### `codegraph benchmark`
-
-Run named query scenarios and report timing statistics (min, max, median, mean) alongside result sizes (nodes, edges, token estimates).
-
-```
-codegraph benchmark [options]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--scenarios <path>` | Path to JSON scenarios file | Built-in defaults |
-| `--iterations <n>` | Runs per scenario | `5` |
-| `--format <fmt>` | Output format: `text` (Markdown table) or `json` | `text` |
-| `--graph-dir <path>` | Graph directory | `.codegraph` |
-
-```bash
-codegraph benchmark                              # Built-in scenarios, 5 iterations
-codegraph benchmark --iterations 20              # More stable measurements
-codegraph benchmark --format json > results.json
-```
-
-See [docs/benchmark.md](docs/benchmark.md) for custom scenario files and CI performance-gate workflows.
-
-### `codegraph daemon`
-
-Run a persistent background process that keeps the graph loaded in memory, serving queries over a named pipe. Eliminates graph-loading latency for interactive agent sessions.
-
-```
-codegraph daemon <start|stop|status> [options]
-```
-
-| Sub-command | Description |
-|-------------|-------------|
-| `start` | Start the background daemon |
-| `stop` | Stop the running daemon |
-| `status` | Print daemon status (PID, pipe name) |
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--graph-dir <path>` | Graph directory the daemon watches | `.codegraph` |
-
-```bash
-codegraph daemon start    # Start in foreground (or background with &)
-codegraph daemon status   # Is it running?
-codegraph daemon stop     # Shut it down
-```
-
-See [docs/daemon.md](docs/daemon.md) for editor-integration and session-workflow patterns.
 
 **Configuration is automatic** — `codegraph init` generates the MCP config files. To add manually:
 
