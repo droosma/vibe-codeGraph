@@ -1,6 +1,6 @@
 # How to Use `codegraph test-impact`
 
-`codegraph test-impact` analyzes the test coverage graph for a symbol, showing which tests directly or indirectly exercise it and which callers remain uncovered. It is designed for understanding risk before making changes and for finding coverage gaps without running the test suite.
+`codegraph test-impact` analyses **test coverage** for a symbol — it shows which test methods cover it directly (by calling it or its members) and which cover it indirectly (through a chain of calls), plus which callers of the symbol have no test coverage at all.
 
 ---
 
@@ -10,11 +10,17 @@
 # Index your solution first (if you haven't already)
 codegraph index --solution MyApp.sln
 
-# See which tests cover OrderService
+# Find tests for OrderService
 codegraph test-impact OrderService
 
-# Include indirect coverage through deeper call chains (depth 5)
+# Use a fully-qualified name
+codegraph test-impact MyApp.Services.OrderService
+
+# Increase depth to find more indirect tests
 codegraph test-impact OrderService --depth 5
+
+# Get JSON for scripting or CI
+codegraph test-impact OrderService --json
 ```
 
 ---
@@ -29,92 +35,113 @@ codegraph test-impact <symbol> [options]
 
 | Argument | Description |
 |----------|-------------|
-| `<symbol>` | Symbol to analyze (partial name or exact match) |
+| `<symbol>` | Symbol name or pattern (substring match) |
 
 ### Flags
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--depth <n>` | Traversal depth for indirect coverage (how many hops from the target to reach tests) | `3` |
-| `--graph-dir <path>` | Directory containing the indexed graph | `.codegraph` |
+| `--depth <n>` | Traversal depth for indirect coverage | `3` |
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
+| `--json` | Output as JSON | Plain text |
 | `--help`, `-h` | Show help | |
-
-### Examples
-
-```bash
-codegraph test-impact OrderService
-codegraph test-impact OrderService --depth 5
-codegraph test-impact PlaceOrder --depth 2
-codegraph test-impact OrderService --graph-dir .codegraph/Api
-```
 
 ---
 
-## Understanding the Output
+## Output
+
+### Plain Text
 
 ```
-# Test impact for MyApp.Orders.OrderService
+Test Impact: OrderService
+Target: MyApp.Services.OrderService (Type)
 
-## Direct coverage (3 tests)
-  ✓ OrderServiceTests.PlaceOrder_ShouldPublishEvent
-  ✓ OrderServiceTests.PlaceOrder_WhenInvalid_ShouldReturnError
-  ✓ OrderServiceTests.CancelOrder_ShouldUpdateStatus
+Direct Tests (2):
+  ✓ OrderServiceTests.PlaceOrder_ValidInput_ReturnsOrderId
+      Path: OrderService → PlaceOrder → [test]
+  ✓ OrderServiceTests.CancelOrder_AlreadyCancelled_Throws
 
-## Indirect coverage (2 tests)
-  ⚠ IntegrationTests.OrderFlow_EndToEnd
-    via: OrderController.Post → OrderService
-  ⚠ IntegrationTests.CheckoutPipeline_HappyPath
-    via: CheckoutService.Checkout → OrderService
+Indirect Tests (1):
+  ~ CheckoutIntegrationTests.FullCheckoutFlow_Succeeds
+      Path: OrderService → OrderRepository → [test covers OrderRepository]
 
-## Uncovered callers (1 path)
-  ✗ ReportingService.GenerateMonthlyReport [depth: 2]
+Uncovered Callers (1):
+  ✗ MyApp.Jobs.OrderCleanupJob  (depth 2)
+      — no test reaches this caller
 
-## Suggested test command
-  dotnet test --filter "OrderServiceTests"
+Suggested test command:
+  dotnet test --filter "FullyQualifiedName~OrderServiceTests"
 ```
 
-### Sections
+### JSON
 
-**Direct coverage** — test methods that call the target symbol directly (via a `Covers` edge in the graph). These are the tests most likely to catch regressions.
-
-**Indirect coverage** — test methods that reach the target through intermediate call hops, up to `--depth` hops away. The `via:` path shows the call chain. These tests may catch regressions but with lower signal-to-noise.
-
-**Uncovered callers** — callers of the target that are not reached by any test. These represent coverage gaps — production code paths with no test exercise.
-
-**Suggested test command** — a `dotnet test --filter` command derived from the direct coverage tests.
+```json
+{
+  "pattern": "OrderService",
+  "target": { "id": "MyApp.Services.OrderService", "kind": "type" },
+  "directTests": [
+    {
+      "testId": "MyApp.Tests.OrderServiceTests.PlaceOrder_ValidInput_ReturnsOrderId",
+      "path": ["MyApp.Services.OrderService", "MyApp.Services.OrderService.PlaceOrder"]
+    }
+  ],
+  "indirectTests": [
+    {
+      "testId": "MyApp.Tests.CheckoutIntegrationTests.FullCheckoutFlow_Succeeds",
+      "path": ["MyApp.Services.OrderService", "MyApp.Data.OrderRepository"]
+    }
+  ],
+  "uncoveredCallers": [
+    { "callerId": "MyApp.Jobs.OrderCleanupJob", "depth": 2 }
+  ],
+  "suggestedTestCommand": "dotnet test --filter \"FullyQualifiedName~OrderServiceTests\""
+}
+```
 
 ---
 
 ## Common Workflows
 
-### Pre-Change Risk Assessment
+### Find gaps before a refactor
 
 ```bash
-# About to refactor OrderService — which tests will catch regressions?
-codegraph test-impact OrderService
-# Check DirectCoverage count. If low or zero, add tests before refactoring.
+# Are there uncovered callers that will be silently broken?
+codegraph test-impact PaymentGateway --json | jq '.uncoveredCallers'
 ```
 
-### Finding Coverage Gaps
+### Run only the tests that cover changed code
 
 ```bash
-# Find callers with no test coverage
-codegraph test-impact PaymentProcessor --depth 3
-# Look at "Uncovered callers" — these are the riskiest call sites.
+# In a pre-commit hook or CI step
+codegraph test-impact "$CHANGED_SYMBOL" --json | \
+  jq -r '[.directTests[].testId, .indirectTests[].testId] | unique[]' | \
+  xargs -I{} dotnet test --filter "FullyQualifiedName~{}"
 ```
 
-### CI Test Selection
+### Check coverage threshold in CI
 
 ```bash
-# Identify tests to run for a changed symbol (faster than running everything)
-codegraph test-impact ChangedService --depth 2
-# Use the suggested test command in CI.
+UNCOVERED=$(codegraph test-impact OrderService --json | jq '.uncoveredCallers | length')
+if [ "$UNCOVERED" -gt 0 ]; then
+  echo "Warning: $UNCOVERED uncovered callers found."
+fi
 ```
 
 ---
 
-## See Also
+## Choosing Between `test-impact` and `impact`
 
-- [`codegraph query`](../README.md#codegraph-query) — query a symbol's full relationship graph (including `--kind covers`)
-- [`codegraph report`](report.md) — full coverage analysis across all assemblies
-- [`codegraph diff`](diff.md) — detect structural changes between commits
+| Use case | Command |
+|----------|---------|
+| Which tests exercise this symbol? | `codegraph test-impact <symbol>` |
+| Which production code depends on this symbol? | `codegraph impact <symbol>` |
+
+---
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Tests found |
+| `1` | Error (graph not built) |
+| `2` | Symbol not found, or no tests found |

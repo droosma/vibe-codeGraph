@@ -1,6 +1,6 @@
 # How to Use `codegraph packages`
 
-`codegraph packages` analyzes NuGet package usage across your indexed solution. It shows which packages each project references, how many external types and internal usages are attributed to each package, and highlights version conflicts where the same package is referenced at different versions.
+`codegraph packages` analyses **NuGet package usage** across your solution — which packages each project depends on, at what versions, and where version conflicts exist between projects.
 
 ---
 
@@ -10,14 +10,17 @@
 # Index your solution first (if you haven't already)
 codegraph index --solution MyApp.sln
 
-# List all packages by project
+# List all NuGet packages across all projects
 codegraph packages
 
-# Show which projects reference a specific package
+# Show packages for a specific project
+codegraph packages --project MyApp.Api
+
+# Show which projects use a specific package
 codegraph packages --package Newtonsoft.Json
 
-# Scope to a specific project
-codegraph packages --project MyApp.Core
+# JSON output for scripting
+codegraph packages --format json
 ```
 
 ---
@@ -32,107 +35,99 @@ codegraph packages [options]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--project <name>` | Scope output to a single project (substring match) | All projects |
-| `--package <name>` | Show usage details for a specific package (substring match) | All packages |
-| `--format <fmt>` | Output format: `text` or `json` | `text` |
-| `--graph-dir <path>` | Directory containing the indexed graph | `.codegraph` |
+| `--project <name>` | Filter to a specific project | All projects |
+| `--package <name>` | Show which projects use this package | All packages |
+| `--format json` | Output as JSON | Plain text |
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
 | `--help`, `-h` | Show help | |
-
-### Examples
-
-```bash
-codegraph packages                                  # All packages, all projects
-codegraph packages --project MyApp.Core             # Only MyApp.Core's packages
-codegraph packages --package Newtonsoft.Json        # Who uses Newtonsoft.Json and how?
-codegraph packages --format json                    # JSON output
-codegraph packages --format json > packages.json    # Write to file
-```
 
 ---
 
-## Understanding the Output
+## Output
 
-### Default (project view)
-
-```
-# Package usage (12 entries)
-
-## MyApp.Core
-- Newtonsoft.Json v13.0.3
-  Types: 4, Usages: 27
-  External symbols: JObject, JToken, JsonConvert, JsonSerializer
-  Internal users: OrderSerializer, PaymentSerializer
-
-- Microsoft.Extensions.Logging.Abstractions v8.0.0
-  Types: 2, Usages: 41
-  External symbols: ILogger, ILoggerFactory
-  Internal users: OrderService, PaymentProcessor, ...
-
-## MyApp.Infrastructure
-- Microsoft.EntityFrameworkCore v8.0.0
-  Types: 8, Usages: 63
-  External symbols: DbContext, DbSet<T>, ...
-  Internal users: AppDbContext, OrderRepository, ...
-```
-
-**Types** — number of distinct external types from this package that appear in the graph.
-
-**Usages** — number of edges in the graph that reference external symbols from this package.
-
-**External symbols** — a sample of the external types/methods referenced.
-
-**Internal users** — a sample of your internal types that reference this package.
-
-### Version conflicts
-
-When the same package is referenced at different versions, a conflicts section is appended:
+### Plain Text (all projects)
 
 ```
-# Version conflicts (1 package)
+NuGet Package Usage
 
-## Newtonsoft.Json
-  MyApp.Core: v13.0.3
-  MyApp.Legacy: v12.0.1
+MyApp.Api
+  Microsoft.AspNetCore.OpenApi    8.0.0
+  Swashbuckle.AspNetCore          6.5.0
+  Newtonsoft.Json                 13.0.3
+
+MyApp.Data
+  Microsoft.EntityFrameworkCore   8.0.0
+  Newtonsoft.Json                 13.0.1   ⚠ version conflict
+
+Version Conflicts:
+  Newtonsoft.Json
+    MyApp.Api      13.0.3
+    MyApp.Data     13.0.1
+```
+
+### Plain Text (by package)
+
+```
+Newtonsoft.Json usage:
+
+  MyApp.Api      13.0.3
+  MyApp.Data     13.0.1   ⚠ conflict
+```
+
+### JSON
+
+```json
+[
+  {
+    "project": "MyApp.Api",
+    "packages": [
+      { "name": "Newtonsoft.Json", "version": "13.0.3" }
+    ]
+  }
+]
 ```
 
 ---
 
 ## Common Workflows
 
-### Dependency Audit
+### Audit all NuGet dependencies
 
 ```bash
-# Get a full picture of all external dependencies
-codegraph packages --format json > audit.json
-```
-
-### Finding Over-Used Packages
-
-```bash
-# Find packages with high internal usage counts — candidates for abstraction
 codegraph packages
-# Packages with "Usages: 100+" are likely worth wrapping in an abstraction layer.
 ```
 
-### Resolving Version Conflicts
+### Find which projects use a deprecated package
 
 ```bash
-# Check for conflicts before upgrading
+codegraph packages --package Newtonsoft.Json
+```
+
+### Detect version conflicts across projects
+
+```bash
+# Conflicts are highlighted automatically in plain text output
 codegraph packages
-# Look for the "Version conflicts" section at the bottom.
+
+# In CI, fail if any conflicts are found
+CONFLICTS=$(codegraph packages --format json | jq '[.[] | select(.conflicts != null)] | length')
+if [ "$CONFLICTS" -gt 0 ]; then
+  echo "Package version conflicts detected — resolve before merging."
+  exit 1
+fi
 ```
 
-### Package Impact Analysis
+### Audit a single project
 
 ```bash
-# Which types in MyApp.Core depend on Newtonsoft.Json?
-codegraph packages --package Newtonsoft.Json --project MyApp.Core
+codegraph packages --project MyApp.Infrastructure
 ```
 
 ---
 
-## See Also
+## Exit Codes
 
-- [`codegraph report`](report.md) — full Markdown analysis report including assembly and dependency summaries
-- [`codegraph list`](list.md) — browse assemblies and types without package focus
-- [`codegraph diff`](diff.md) — detect structural changes (including added/removed package edges)
+| Code | Meaning |
+|------|---------|
+| `0` | Analysis complete |
+| `1` | Error (graph not built — run `codegraph index` first) |

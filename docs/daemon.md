@@ -1,6 +1,6 @@
 # How to Use `codegraph daemon`
 
-`codegraph daemon` runs a persistent background process that keeps your code graph loaded in memory, serving queries over a named pipe. It eliminates the graph-loading latency on every query — particularly valuable in interactive agent sessions where a developer or AI assistant fires many queries in rapid succession.
+`codegraph daemon` runs a **persistent background server** that keeps the graph loaded in memory, enabling near-instant responses to repeated queries. Without the daemon, each `codegraph query` invocation loads the graph from disk — the daemon eliminates that cold-start overhead.
 
 ---
 
@@ -13,13 +13,10 @@ codegraph index --solution MyApp.sln
 # Start the daemon
 codegraph daemon start
 
-# The daemon is now running in the background.
-# Subsequent codegraph query/search/list commands connect to it automatically.
-
-# Check daemon status
+# Check whether it's running
 codegraph daemon status
 
-# Stop the daemon when done
+# Stop the daemon
 codegraph daemon stop
 ```
 
@@ -28,115 +25,107 @@ codegraph daemon stop
 ## CLI Reference
 
 ```
-codegraph daemon <start|stop|status> [options]
+codegraph daemon <subcommand> [options]
 ```
 
-### Sub-commands
+### Subcommands
 
-| Sub-command | Description |
-|-------------|-------------|
-| `start` | Start the background daemon and keep it running |
-| `stop` | Stop the running daemon |
-| `status` | Print daemon status (running / not running, PID, pipe name) |
+| Subcommand | Description |
+|-----------|-------------|
+| `start` | Start the daemon and keep it running in the foreground |
+| `stop` | Stop a running daemon by sending a kill signal |
+| `status` | Report whether the daemon is running and its PID |
 
 ### Flags
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--graph-dir <path>` | Graph directory the daemon watches | `.codegraph` |
+| `--graph-dir <path>` | Graph directory to serve | `.codegraph` |
 | `--help`, `-h` | Show help | |
-
-### Examples
-
-```bash
-codegraph daemon start                             # Start for .codegraph/
-codegraph daemon start --graph-dir .codegraph/Api # Start for a sub-graph
-codegraph daemon status                            # Is it running?
-codegraph daemon stop                              # Shut it down
-```
-
----
-
-## Understanding the Output
-
-### `daemon start`
-
-```
-Starting daemon for /path/to/project/.codegraph...
-Pipe: \\.\pipe\codegraph-<hash>
-```
-
-The process stays in the foreground until stopped. Run it in a dedicated terminal or as a background job (`codegraph daemon start &` on Linux/macOS).
-
-### `daemon status`
-
-```
-Daemon is running (PID 12345).
-Pipe: \\.\pipe\codegraph-<hash>
-```
-
-or
-
-```
-No daemon is running.
-```
-
-### `daemon stop`
-
-```
-Daemon (PID 12345) stopped.
-```
 
 ---
 
 ## How It Works
 
-The daemon loads the graph from `.codegraph/` into memory on startup and listens on a named pipe for query requests. When a client (another `codegraph` invocation) sends a request, the daemon responds directly without re-reading disk files. This makes subsequent queries significantly faster than cold-start invocations.
+The daemon:
 
-A PID file is written to the graph directory on start and deleted on stop, allowing `daemon status` and `daemon stop` to locate the running process.
+1. Loads the graph from `graph.db` into memory on startup
+2. Listens on a named pipe (platform-specific, derived from the graph directory path)
+3. Handles query requests from other `codegraph` invocations via the pipe
+4. Writes a PID file to the graph directory so `daemon stop` and `daemon status` can find it
+
+The pipe name is printed to stdout on startup:
+
+```
+Starting daemon for /home/user/myapp/.codegraph...
+Pipe: codegraph-abc123
+```
+
+---
+
+## Running the Daemon in the Background
+
+`codegraph daemon start` runs in the **foreground** by design so it can be managed by your process supervisor. To run it in the background:
+
+```bash
+# Unix/macOS — detach with nohup
+nohup codegraph daemon start > /tmp/codegraph-daemon.log 2>&1 &
+
+# Or use your process manager (systemd, launchd, etc.)
+```
+
+### systemd example
+
+```ini
+[Unit]
+Description=CodeGraph Daemon
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/codegraph daemon start --graph-dir /srv/myapp/.codegraph
+Restart=on-failure
+WorkingDirectory=/srv/myapp
+
+[Install]
+WantedBy=multi-user.target
+```
 
 ---
 
 ## Common Workflows
 
-### Interactive Agent Session
+### Keep the daemon alive during a dev session
 
 ```bash
-# Start the daemon at the beginning of your session
-codegraph daemon start &
+# In one terminal
+codegraph daemon start
 
-# Your AI agent can now fire many rapid queries without load overhead
+# In another terminal — queries are served from in-memory graph
 codegraph query OrderService --depth 2
-codegraph search PaymentGateway
-codegraph list types --assembly MyApp.Core
-
-# End of session
-codegraph daemon stop
+codegraph search Repository
+codegraph impact PaymentGateway
 ```
 
-### VS Code / Editor Integration
+### Check status and restart if down
 
-Add a task to your `.vscode/tasks.json` to start the daemon when opening the workspace:
+```bash
+codegraph daemon status || codegraph daemon start &
+```
 
-```json
-{
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "label": "Start CodeGraph daemon",
-      "type": "shell",
-      "command": "codegraph daemon start",
-      "isBackground": true,
-      "problemMatcher": []
-    }
-  ]
-}
+### Multi-solution setup
+
+Each graph directory runs its own independent daemon instance.
+
+```bash
+codegraph daemon start --graph-dir .codegraph/MyApp.Services
+codegraph daemon start --graph-dir .codegraph/MyApp.Api
 ```
 
 ---
 
-## See Also
+## Exit Codes
 
-- [`codegraph query`](../README.md#codegraph-query) — query the graph (connects to daemon automatically when running)
-- [`codegraph mcp`](mcp.md) — MCP server mode for AI agent integration
-- [`codegraph index`](../README.md#codegraph-index) — rebuild the graph (restart the daemon afterward to pick up changes)
+| Code | Meaning |
+|------|---------|
+| `0` | Subcommand completed successfully |
+| `1` | Error (e.g., no daemon running when `stop`/`status` called) |
