@@ -209,6 +209,49 @@ After each query, the CLI prints `💡 Suggested next queries:` to stderr with u
 | `contains` | Contains |
 | `all` | No filter |
 
+### `codegraph compare`
+
+Compare two symbols structurally — shared interfaces, base types, and dependencies vs. what is unique to each.
+
+```
+codegraph compare <symbolA> <symbolB> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--depth <n>` | BFS traversal depth | `1` |
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph compare OrderService InvoiceService
+codegraph compare OrderService InvoiceService --depth 2
+codegraph compare "MyApp.Orders.OrderService" "MyApp.Billing.InvoiceService"
+```
+
+See [docs/compare.md](docs/compare.md) for the full how-to guide, including symbol resolution and common workflows.
+
+### `codegraph search`
+
+Search for symbols by name, namespace, or file path using case-insensitive substring matching.
+
+```
+codegraph search <query> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--top <n>` | Maximum results | `20` |
+| `--kind <kind>` | Filter by kind: `type`, `method`, `namespace`, `property`, `field` | All |
+| `--graph-dir <path>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph search Order                        # All symbols containing "Order"
+codegraph search OrderService --kind type     # Only types
+codegraph search PlaceOrder --kind method     # Only methods
+```
+
+See [docs/search.md](docs/search.md) for the full how-to guide.
+
 ### `codegraph diff`
 
 Compare two graph snapshots and report structural changes.
