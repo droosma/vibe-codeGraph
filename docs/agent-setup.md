@@ -77,8 +77,18 @@ codegraph stats                                           # node/edge counts
 | Code | Meaning |
 |------|---------|
 | `0` | Success with results |
-| `1` | Error (bad args, missing graph, etc.) |
+| `1` | Error (bad args, missing graph, symbol not found, etc.) |
 | `2` | Success but no results found |
+
+**Command-specific notes:**
+
+| Command | Code `1` | Code `2` |
+|---------|----------|----------|
+| `codegraph impact <symbol>` | Symbol not found in graph | Symbol found but has no dependents (safe to change) |
+| `codegraph path <from> <to>` | Missing arguments or graph not found | No path exists between the two symbols |
+| `codegraph search <query>` | _(not used)_ | No symbols match the query (text output only; `--json` always exits `0`) |
+
+> Use exit code `2` in CI scripts to detect "symbol exists but nothing depends on it" vs "symbol not found" (`1`) — these have different meanings for impact analysis.
 
 ---
 
