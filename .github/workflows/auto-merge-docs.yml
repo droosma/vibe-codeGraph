@@ -76,6 +76,9 @@ jobs:
               -f context="CI Gate" \
               -f description="Docs-only PR — CI skipped" || true
 
+            # Give GitHub time to propagate the status check
+            sleep 5
+
             # Approve (will fail for self-authored PRs, that's fine)
             gh pr review "$PR_NUMBER" --repo "${{ github.repository }}" --approve 2>/dev/null || true
 
