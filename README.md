@@ -268,9 +268,7 @@ codegraph diff [options]
 | `--head <dir>` | Head graph snapshot directory | `.codegraph` |
 | `--ref <git-ref>` | Use `.codegraph-<ref>` as base snapshot | (none) |
 | `--only <types>` | Comma-separated: `added`, `removed`, `signature-changed`, `added-nodes`, `removed-nodes`, `added-edges`, `removed-edges` | All change types |
-| `--format <fmt>` | Output format: `json`, `text`, `context` | `context` |
-
-See [docs/diff.md](docs/diff.md) for the full how-to guide.
+| `--format <fmt>` | Output format: `json`, `text`, `context`, `compact` | `context` |
 
 ### `codegraph compare`
 
@@ -349,7 +347,8 @@ codegraph list [scope] [options]
 codegraph list                              # List all assemblies
 codegraph list types                        # Most-connected types across all assemblies
 codegraph list types --assembly MyApp.Core  # Types in a specific assembly
-codegraph list interfaces --top 10          # Top 10 most-implemented interfaces
+codegraph list types --top 10               # Top 10 most-connected types
+codegraph list interfaces                   # All interfaces with implementation counts
 codegraph list namespaces                   # All namespaces
 codegraph list types --filter Order         # Types whose name contains "Order"
 codegraph list types --top 20 --skip 20     # Page 2 of types
