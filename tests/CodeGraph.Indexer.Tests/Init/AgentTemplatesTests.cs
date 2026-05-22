@@ -10,6 +10,8 @@ public class AgentTemplatesTests
         Assert.Contains("codegraph query", AgentTemplates.ClaudeSkillMd);
         Assert.Contains("--depth", AgentTemplates.ClaudeSkillMd);
         Assert.Contains("--kind", AgentTemplates.ClaudeSkillMd);
+        Assert.Contains("--include-source", AgentTemplates.ClaudeSkillMd);
+        Assert.Contains("codegraph_file", AgentTemplates.ClaudeSkillMd);
     }
 
     [Fact]

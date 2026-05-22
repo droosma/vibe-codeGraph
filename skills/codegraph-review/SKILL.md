@@ -137,6 +137,14 @@ Use `--format json` when you need to process multiple queries programmatically:
 codegraph query OrderService --depth 1 --format json
 ```
 
+When you need to inspect a changed implementation, first identify the affected symbol, then pull in a small snippet with:
+
+```bash
+codegraph query PlaceOrder --include-source --source-max-lines 12
+```
+
+If the review starts from a changed file path instead of a symbol, use the MCP `codegraph_file` tool to list the symbols in that file before querying one of them.
+
 ## Fallback Behavior
 
 1. **Graph is stale** → Re-index: `codegraph index --solution <path.sln|path.slnx> --changed-only`

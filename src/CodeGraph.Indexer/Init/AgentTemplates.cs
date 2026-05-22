@@ -20,14 +20,15 @@ internal static class AgentTemplates
         2. **Scope** — `codegraph list assemblies` to find relevant projects
         3. **Query** — `codegraph query <symbol> --depth 1 --format compact` for relationships
         4. **Deepen** — increase `--depth` or add `--kind` filters to follow specific edges
-        5. **Detail** — only grep/view specific source lines when you need method bodies
+        5. **Detail** — use `codegraph query <symbol> --include-source --source-max-lines 12` for a small inline snippet after narrowing to one symbol; use `codegraph_file` / grep-view only when you need file-level context
 
         CLI defaults are optimized for token efficiency:
         - Format defaults to `compact` when output is piped (~3-5× fewer tokens than `context`)
         - Mode defaults to `focused` (high-signal edges only)
         - Use `--format context` when you need full signatures and metadata
         - Use `--mode all` only for exhaustive analysis
-        - Use `--include-source` only AFTER narrowing to a specific method — snippets are capped at 20 lines
+        - Use `--include-source` only AFTER narrowing to a specific method or type
+        - Keep `--source-max-lines` low (default: 20) to stay token-safe
         - Use `--json` on any command for machine-readable output
 
         This strategy uses ~4× fewer tokens than reading source files directly.
@@ -107,10 +108,11 @@ internal static class AgentTemplates
         2. **Scope** — `codegraph list assemblies` to find relevant projects
         3. **Query** — `codegraph query <symbol> --depth 1 --format compact`
         4. **Deepen** — increase `--depth` or add `--kind` to follow edges
-        5. **Detail** — only grep/view source when you need method bodies
+        5. **Detail** — use `codegraph query <symbol> --include-source --source-max-lines 12` for a small inline snippet after narrowing to one symbol; use `codegraph_file` or grep/view when you need file-level context
 
         CLI defaults are token-optimized: `compact` format + `focused` mode when piped.
         Use `--json` for machine-readable output. Use `--format context` for full detail.
+        Keep `--source-max-lines` low (default: 20) when you inline source.
 
         > **Use CLI commands** — they have zero schema overhead. MCP is available
         > as an alternative for IDE-only agents that cannot run shell commands.
@@ -164,7 +166,7 @@ internal static class AgentTemplates
         2. `codegraph list assemblies` to scope relevant projects
         3. `codegraph query <symbol> --depth 1 --format compact` for relationships
         4. Increase `--depth` or add `--kind calls|resolves-to|implements` to follow edges
-        5. Only grep/view source files when you need method bodies
+        5. Use `codegraph query <symbol> --include-source --source-max-lines 12` for a small inline snippet after narrowing to one symbol; use `codegraph_file` or grep/view when you need file-level context
 
         ### Commands
 

@@ -141,6 +141,8 @@ Query the graph by symbol pattern.
 | `format` | `string` | | `"context"` | Output format: `"context"` (Markdown), `"compact"` (prefix-stripped, 3–5× smaller), `"json"`, or `"text"`. |
 | `max_nodes` | `integer` | | `50` | Maximum nodes to return. |
 | `include_external` | `boolean` | | `false` | Include external (NuGet) dependency nodes. |
+| `include_source` | `boolean` | | `false` | Inline a source snippet for each matched symbol after you've narrowed the query. |
+| `source_max_lines` | `integer` | | `20` | Maximum lines per embedded source snippet. Lower this to stay token-safe. |
 | `confidence` | `string` | | all | Minimum edge confidence: `verified`, `inferred`, or `unresolved` (default: all). |
 | `budget` | `integer` | | (none) | Maximum token budget. Output is truncated with a hint when exceeded. |
 | `solution` | `string` | | all solutions | Scope query to a specific solution name (multi-solution support). |
@@ -205,7 +207,7 @@ Get a comprehensive view of a single symbol: its type, file location, signature,
 
 #### `codegraph_file`
 
-Find all symbols defined in a source file by file path. Use when you know the file but not the individual symbol names — for example, after receiving a list of changed files from `git diff`.
+Find all symbols defined in a source file by file path. Use when you know the file but not the individual symbol names — for example, after receiving a list of changed files from `git diff`. Once you have the symbol, switch to `codegraph_query` with `include_source` for a capped inline snippet.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
