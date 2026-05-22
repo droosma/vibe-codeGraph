@@ -111,6 +111,8 @@ codegraph query <symbol-pattern> [options]
 | `--format <fmt>` | Output: `context`, `json`, `text` | `context` |
 | `--max-nodes <n>` | Maximum nodes in result | `50` |
 | `--include-external` | Include NuGet/external dependencies | `false` |
+| `--include-source` | Embed a capped source snippet for the matched symbol | `false` |
+| `--source-max-lines <n>` | Maximum lines per embedded source snippet | `20` |
 | `--graph-dir <dir>` | Graph directory | `.codegraph` |
 
 **Edge kind aliases:**
@@ -152,6 +154,15 @@ Signature: public class OrderService : IOrderService
 
 Use `--format json` when you need structured data for programmatic processing.
 
+### Source Retrieval
+
+```bash
+# After you narrow to one symbol, pull in a small implementation snippet
+codegraph query PlaceOrder --include-source --source-max-lines 12
+```
+
+Use `--include-source` only after you have the right symbol and want a token-safe inline body preview. If you only know the file path, use the MCP `codegraph_file` tool first to discover the symbols in that file, then come back to `codegraph query` for a snippet.
+
 ## Fallback Behavior
 
 If the query returns no results or the graph is unavailable:
@@ -170,4 +181,5 @@ If the query returns no results or the graph is unavailable:
 4. **Keep max-nodes ≤ 50** — large results overwhelm context windows
 5. **Prefer `context` format** — it's designed for LLM consumption with structured markdown
 6. **Use `json` for chaining** — when you need to process results programmatically
-7. **Query interfaces** — use `--kind resolves-to` or `--kind implements` to discover implementations
+7. **Use source snippets sparingly** — start with `--source-max-lines 8-20` and only inline source after the symbol is narrowed down
+8. **Query interfaces** — use `--kind resolves-to` or `--kind implements` to discover implementations
