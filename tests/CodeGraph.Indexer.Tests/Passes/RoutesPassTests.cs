@@ -35,38 +35,52 @@ namespace Microsoft.AspNetCore.Mvc
     public class ApiControllerAttribute : System.Attribute { }
     public class RouteAttribute : System.Attribute
     {
+        public RouteAttribute() { }
         public RouteAttribute(string template) { Template = template; }
-        public string Template { get; }
+        public string Template { get; set; } = string.Empty;
     }
     public class HttpGetAttribute : System.Attribute
     {
         public HttpGetAttribute() { }
         public HttpGetAttribute(string template) { Template = template; }
-        public string Template { get; }
+        public string Template { get; set; } = string.Empty;
     }
     public class HttpPostAttribute : System.Attribute
     {
         public HttpPostAttribute() { }
         public HttpPostAttribute(string template) { Template = template; }
-        public string Template { get; }
+        public string Template { get; set; } = string.Empty;
     }
     public class HttpPutAttribute : System.Attribute
     {
         public HttpPutAttribute() { }
         public HttpPutAttribute(string template) { Template = template; }
-        public string Template { get; }
+        public string Template { get; set; } = string.Empty;
     }
     public class HttpDeleteAttribute : System.Attribute
     {
         public HttpDeleteAttribute() { }
         public HttpDeleteAttribute(string template) { Template = template; }
-        public string Template { get; }
+        public string Template { get; set; } = string.Empty;
     }
     public class HttpPatchAttribute : System.Attribute
     {
         public HttpPatchAttribute() { }
         public HttpPatchAttribute(string template) { Template = template; }
-        public string Template { get; }
+        public string Template { get; set; } = string.Empty;
+    }
+}
+";
+
+    private const string MinimalApiStubs = @"
+namespace Microsoft.AspNetCore.Builder
+{
+    public interface IEndpointRouteBuilder { }
+    public sealed class WebApplication : IEndpointRouteBuilder { }
+
+    public static class EndpointRouteBuilderExtensions
+    {
+        public static object MapGet(this IEndpointRouteBuilder app, string pattern, System.Func<string> handler) => null;
     }
 }
 ";
@@ -83,7 +97,7 @@ namespace Microsoft.AspNetCore.Mvc
 namespace MyApp
 {{
     using Microsoft.AspNetCore.Mvc;
-
+ 
     [ApiController]
     [Route(""api/[controller]"")]
     public class OrderController : ControllerBase
@@ -110,7 +124,7 @@ namespace MyApp
 namespace MyApp
 {
     using Microsoft.AspNetCore.Mvc;
-
+ 
     [ApiController]
     [Route(""api/[controller]"")]
     public class OrderController : ControllerBase
@@ -122,13 +136,18 @@ namespace MyApp
 
         var compilation = CreateCompilation(code);
         var pass = new RoutesPass();
-        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+        var (edges, externalNodes) = pass.Execute(compilation, "/root", new HashSet<string>());
 
         var edge = Assert.Single(edges);
-        Assert.Equal("MyApp.OrderController.GetById(int)", edge.FromId);
-        Assert.Equal("GET /api/Order/{id}", edge.ToId);
+        Assert.Equal("GET /api/Order/{id}", edge.FromId);
+        Assert.Equal("MyApp.OrderController.GetById(int)", edge.ToId);
         Assert.Equal("/api/Order/{id}", edge.Metadata["route"]);
         Assert.Equal("GET", edge.Metadata["httpMethod"]);
+
+        var routeNode = Assert.Single(externalNodes.Where(node => node.Id == "GET /api/Order/{id}"));
+        Assert.Equal("GET /api/Order/{id}", routeNode.Name);
+        Assert.Equal(NodeKind.Property, routeNode.Kind);
+        Assert.Equal("Route: GET /api/Order/{id}", routeNode.Signature);
     }
 
     [Fact]
@@ -138,7 +157,7 @@ namespace MyApp
 namespace MyApp
 {
     using Microsoft.AspNetCore.Mvc;
-
+ 
     [ApiController]
     [Route(""api/[controller]"")]
     public class OrderController : ControllerBase
@@ -153,7 +172,8 @@ namespace MyApp
         var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
 
         var edge = Assert.Single(edges);
-        Assert.Equal("POST /api/Order", edge.ToId);
+        Assert.Equal("POST /api/Order", edge.FromId);
+        Assert.Equal("MyApp.OrderController.Create(object)", edge.ToId);
         Assert.Equal("/api/Order", edge.Metadata["route"]);
     }
 
@@ -164,7 +184,7 @@ namespace MyApp
 namespace MyApp
 {
     using Microsoft.AspNetCore.Mvc;
-
+ 
     public class NotAController
     {
         [HttpGet(""test"")]
@@ -186,7 +206,7 @@ namespace MyApp
 namespace MyApp
 {
     using Microsoft.AspNetCore.Mvc;
-
+ 
     [ApiController]
     [Route(""api/[controller]"")]
     public class OrderController : ControllerBase
@@ -194,7 +214,7 @@ namespace MyApp
         [HttpGet]
         public object GetAll() => null;
     }
-
+ 
     [ApiController]
     [Route(""api/[controller]"")]
     public class ProductController : ControllerBase
@@ -209,8 +229,8 @@ namespace MyApp
         var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
 
         Assert.Equal(2, edges.Count);
-        Assert.Contains(edges, e => e.ToId == "GET /api/Order");
-        Assert.Contains(edges, e => e.ToId == "GET /api/Product");
+        Assert.Contains(edges, e => e.FromId == "GET /api/Order");
+        Assert.Contains(edges, e => e.FromId == "GET /api/Product");
     }
 
     [Fact]
@@ -220,7 +240,7 @@ namespace MyApp
 namespace MyApp
 {
     using Microsoft.AspNetCore.Mvc;
-
+ 
     [ApiController]
     [Route(""api/[controller]"")]
     public class CustomerController : ControllerBase
@@ -235,7 +255,7 @@ namespace MyApp
         var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
 
         var edge = Assert.Single(edges);
-        Assert.Equal("GET /api/Customer", edge.ToId);
+        Assert.Equal("GET /api/Customer", edge.FromId);
     }
 
     [Fact]
@@ -245,7 +265,7 @@ namespace MyApp
 namespace MyApp
 {
     using Microsoft.AspNetCore.Mvc;
-
+ 
     [Route(""api/[controller]"")]
     public class ItemController : Controller
     {
@@ -259,7 +279,7 @@ namespace MyApp
         var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
 
         var edge = Assert.Single(edges);
-        Assert.Equal("GET /api/Item", edge.ToId);
+        Assert.Equal("GET /api/Item", edge.FromId);
     }
 
     [Fact]
@@ -269,7 +289,7 @@ namespace MyApp
 namespace MyApp
 {
     using Microsoft.AspNetCore.Mvc;
-
+ 
     [ApiController]
     public class SimpleController : ControllerBase
     {
@@ -283,7 +303,7 @@ namespace MyApp
         var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
 
         var edge = Assert.Single(edges);
-        Assert.Equal("GET /items/{id}", edge.ToId);
+        Assert.Equal("GET /items/{id}", edge.FromId);
     }
 
     [Fact]
@@ -293,7 +313,7 @@ namespace MyApp
 namespace MyApp
 {
     using Microsoft.AspNetCore.Mvc;
-
+ 
     [ApiController]
     [Route(""api/[controller]"")]
     public class DualController : ControllerBase
@@ -309,7 +329,116 @@ namespace MyApp
         var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
 
         Assert.Equal(2, edges.Count);
-        Assert.Contains(edges, e => e.Metadata["httpMethod"] == "GET");
-        Assert.Contains(edges, e => e.Metadata["httpMethod"] == "POST");
+        Assert.Contains(edges, e => e.FromId == "GET /api/Dual" && e.Metadata["httpMethod"] == "GET");
+        Assert.Contains(edges, e => e.FromId == "POST /api/Dual" && e.Metadata["httpMethod"] == "POST");
+    }
+
+    [Fact]
+    public void ActionPlaceholder_IsResolvedInRouteTemplate()
+    {
+        var code = StubAttributes + @"
+namespace MyApp
+{
+    using Microsoft.AspNetCore.Mvc;
+
+    [ApiController]
+    [Route(""api/[controller]/[action]"")]
+    public class OrderController : ControllerBase
+    {
+        [HttpGet]
+        public object ListOpen() => null;
+    }
+}";
+
+        var compilation = CreateCompilation(code);
+        var pass = new RoutesPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var edge = Assert.Single(edges);
+        Assert.Equal("GET /api/Order/ListOpen", edge.FromId);
+        Assert.Equal("/api/Order/ListOpen", edge.Metadata["route"]);
+    }
+
+    [Fact]
+    public void NamedTemplateArguments_AreExtracted()
+    {
+        var code = StubAttributes + @"
+namespace MyApp
+{
+    using Microsoft.AspNetCore.Mvc;
+
+    [ApiController]
+    [Route(Template = ""api/[controller]"")]
+    public class OrderController : ControllerBase
+    {
+        [HttpGet(Template = ""{id}"")]
+        public object GetById(int id) => null;
+    }
+}";
+
+        var compilation = CreateCompilation(code);
+        var pass = new RoutesPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var edge = Assert.Single(edges);
+        Assert.Equal("GET /api/Order/{id}", edge.FromId);
+    }
+
+    [Fact]
+    public void MethodRouteAttribute_WithoutHttpVerb_EmitsAnyRoute()
+    {
+        var code = StubAttributes + @"
+namespace MyApp
+{
+    using Microsoft.AspNetCore.Mvc;
+
+    [ApiController]
+    [Route(""api/[controller]"")]
+    public class SearchController : ControllerBase
+    {
+        [Route(""find"")]
+        public object Find() => null;
+    }
+}";
+
+        var compilation = CreateCompilation(code);
+        var pass = new RoutesPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var edge = Assert.Single(edges);
+        Assert.Equal("ANY /api/Search/find", edge.FromId);
+        Assert.Equal("ANY", edge.Metadata["httpMethod"]);
+    }
+
+    [Fact]
+    public void MinimalApi_MapGet_EmitsRouteToHandlerEdge()
+    {
+        var code = MinimalApiStubs + @"
+namespace MyApp
+{
+    using Microsoft.AspNetCore.Builder;
+
+    public static class Program
+    {
+        public static void Configure(WebApplication app)
+        {
+            app.MapGet(""/orders/{id}"", HandleOrder);
+        }
+
+        public static string HandleOrder() => string.Empty;
+    }
+}";
+
+        var compilation = CreateCompilation(code);
+        var pass = new RoutesPass();
+        var (edges, externalNodes) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var edge = Assert.Single(edges);
+        Assert.Equal("GET /orders/{id}", edge.FromId);
+        Assert.Equal("MyApp.Program.HandleOrder()", edge.ToId);
+        Assert.Equal("/orders/{id}", edge.Metadata["route"]);
+        Assert.Equal("GET", edge.Metadata["httpMethod"]);
+
+        Assert.Contains(externalNodes, node => node.Id == "GET /orders/{id}");
     }
 }
