@@ -215,7 +215,7 @@ After each query, the CLI prints `💡 Suggested next queries:` to stderr with u
 
 ### `codegraph compare`
 
-Compare two symbols structurally — shared interfaces, base types, and dependencies vs. what is unique to each.
+Perform a **structural side-by-side comparison** of two symbols — shared interfaces, shared callers, shared callees, shared dependencies, and what is unique to each.
 
 ```
 codegraph compare <symbolA> <symbolB> [options]
@@ -229,8 +229,11 @@ codegraph compare <symbolA> <symbolB> [options]
 ```bash
 codegraph compare OrderService InvoiceService
 codegraph compare OrderService InvoiceService --depth 2
+codegraph compare IRepository IOrderRepository         # Interface comparison
 codegraph compare "MyApp.Orders.OrderService" "MyApp.Billing.InvoiceService"
 ```
+
+Use `codegraph compare` to understand similarities and differences between two types — for example when deciding whether to extract a shared base class or interface.
 
 See [docs/compare.md](docs/compare.md) for the full how-to guide, including symbol resolution and common workflows.
 
@@ -250,26 +253,15 @@ codegraph diff [options]
 | `--only <types>` | Comma-separated: `added`, `removed`, `signature-changed`, `added-nodes`, `removed-nodes`, `added-edges`, `removed-edges` | All change types |
 | `--format <fmt>` | Output format: `json`, `text`, `context`, `compact` | `context` |
 
-### `codegraph compare`
-
-Compare two symbols structurally. Shows shared interfaces, common base types, shared dependencies, and the unique relationships of each symbol.
-
-```
-codegraph compare <symbolA> <symbolB> [options]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--depth <n>` | Traversal depth | `1` |
-| `--graph-dir <dir>` | Graph directory | `.codegraph` |
-
 ```bash
-codegraph compare OrderService InvoiceService          # Structural diff of two services
-codegraph compare IRepository IOrderRepository         # Interface comparison
-codegraph compare OrderService InvoiceService --depth 2
+codegraph diff                                     # Compare .codegraph-prev → .codegraph
+codegraph diff --base .codegraph-prev              # Explicit base path
+codegraph diff --ref main                          # Use .codegraph-main as base
+codegraph diff --only added,removed                # Show only additions and removals
+codegraph diff --format json                       # Machine-readable output
 ```
 
-Use `codegraph compare` to understand similarities and differences between two types — for example when deciding whether to extract a shared base class or interface.
+See [docs/diff.md](docs/diff.md) for the full guide, including CI workflows and snapshot integration.
 
 ### `codegraph snapshot`
 
@@ -299,6 +291,8 @@ codegraph snapshot save pre-v2
 # ... make changes and re-index ...
 codegraph diff --base .codegraph-snapshots/pre-v2
 ```
+
+See [docs/snapshot.md](docs/snapshot.md) for the full guide.
 
 ### `codegraph list`
 
@@ -447,26 +441,6 @@ codegraph path OrderService PaymentGateway --json
 
 See [docs/path.md](docs/path.md) for the full guide.
 
-### `codegraph compare`
-
-Perform a **structural side-by-side comparison** of two symbols — shared interfaces, shared callers, shared callees, and what each has exclusively.
-
-```
-codegraph compare <symbolA> <symbolB> [options]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--depth <n>` | Traversal depth for neighbourhood | `1` |
-| `--graph-dir <path>` | Graph directory | `.codegraph` |
-
-```bash
-codegraph compare OrderService PaymentService         # Compare two services
-codegraph compare SqlOrderRepository InMemoryOrderRepository --depth 2
-```
-
-See [docs/compare.md](docs/compare.md) for the full guide.
-
 ### `codegraph brief`
 
 Generate a compact `BRIEF.md` codebase orientation file optimized for LLM agents. Use this as the first action when an agent starts a session — it provides a structured overview with zero query overhead.
@@ -521,34 +495,6 @@ codegraph test-impact PlaceOrder --json  # Machine-readable output
 
 See [docs/test-impact.md](docs/test-impact.md) for the full guide.
 
-### `codegraph snapshot`
-
-Save, list, or delete **named graph snapshots** — the foundation for diff workflows.
-
-```
-codegraph snapshot <save|list|delete> [name] [options]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--graph-dir <path>` | Graph directory | `.codegraph` |
-
-```bash
-codegraph snapshot save before-refactor      # Save current graph
-codegraph snapshot list                      # List all snapshots
-codegraph snapshot delete old-experiment     # Remove a snapshot
-```
-
-Use with `codegraph diff` to compare graph states:
-
-```bash
-codegraph snapshot save baseline
-# ... make code changes and re-index ...
-codegraph diff --base .codegraph/snapshots/baseline --head .codegraph
-```
-
-See [docs/snapshot.md](docs/snapshot.md) for the full guide.
-
 ### `codegraph packages`
 
 Analyse **NuGet package usage** across the solution — list packages per project and detect version conflicts.
@@ -568,27 +514,39 @@ codegraph packages [options]
 codegraph packages                            # All packages across all projects
 codegraph packages --package Newtonsoft.Json  # Who uses this package?
 codegraph packages --project MyApp.Api        # Packages for one project
+codegraph packages --format json              # Machine-readable output
 ```
+
+**Conflict detection:** When multiple projects reference the same package at different versions, the output includes a `Conflicts` section listing the package name, the differing versions, and which projects declare each version.
 
 See [docs/packages.md](docs/packages.md) for the full guide.
 
 ### `codegraph daemon`
 
-Run a **persistent background server** that keeps the graph in memory for near-instant query responses.
+Run a **persistent background server** that keeps the graph in memory for near-instant query responses. Useful in development environments where repeated CLI queries would otherwise incur cold-start overhead.
 
 ```
 codegraph daemon <start|stop|status> [options]
 ```
+
+| Sub-command | Description |
+|-------------|-------------|
+| `start` | Start the daemon and keep it running (blocks until stopped) |
+| `stop` | Send a stop signal to the running daemon |
+| `status` | Report whether a daemon is running and its PID |
 
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--graph-dir <path>` | Graph directory to serve | `.codegraph` |
 
 ```bash
-codegraph daemon start     # Start the daemon (foreground)
-codegraph daemon status    # Check if running
-codegraph daemon stop      # Stop the daemon
+codegraph daemon start                       # Start daemon (run in background shell)
+codegraph daemon status                      # Check if daemon is running
+codegraph daemon stop                        # Stop the running daemon
+codegraph daemon start --graph-dir .codegraph/Api
 ```
+
+> **Note:** The daemon exposes a named pipe for IPC. Normal `codegraph query` / `codegraph search` invocations automatically use the daemon if one is running, making repeated queries significantly faster.
 
 See [docs/daemon.md](docs/daemon.md) for the full guide, including background execution and systemd configuration.
 
@@ -630,30 +588,6 @@ Edges by type:
 ```
 
 See [docs/stats.md](docs/stats.md) for common workflows including CI monitoring and snapshot comparison.
-
-### `codegraph packages`
-
-Analyze NuGet package usage across projects and detect version conflicts.
-
-```
-codegraph packages [options]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--project <name>` | Filter by project name | All projects |
-| `--package <name>` | Filter by package name (shows which projects use it) | All packages |
-| `--format json` | Output as JSON | Text |
-| `--graph-dir <dir>` | Graph directory | `.codegraph` |
-
-```bash
-codegraph packages                             # All package usage + conflicts
-codegraph packages --project MyApp.Api         # Packages in a specific project
-codegraph packages --package Newtonsoft.Json   # Which projects use this package?
-codegraph packages --format json               # Machine-readable output
-```
-
-**Conflict detection:** When multiple projects reference the same package at different versions, the output includes a `Conflicts` section listing the package name, the differing versions, and which projects declare each version.
 
 ### `codegraph report`
 
@@ -807,34 +741,7 @@ codegraph benchmark --iterations 10 --format json     # More iterations, JSON ou
 
 The built-in scenarios cover single-symbol queries, broad searches, and assembly listing. Custom scenario files follow the same JSON structure as `benchmarks/scenarios.json` in this repository.
 
-See [docs/BENCHMARK-PLAYBOOK.md](docs/BENCHMARK-PLAYBOOK.md) for the full playbook, including how to write custom scenarios and interpret results.
-
-### `codegraph daemon`
-
-Start a persistent background process that keeps the graph in memory for low-latency queries. Useful in development environments where repeated CLI queries would otherwise incur cold-start overhead.
-
-```
-codegraph daemon <start|stop|status> [options]
-```
-
-| Sub-command | Description |
-|-------------|-------------|
-| `start` | Start the daemon and keep it running (blocks until stopped) |
-| `stop` | Send a stop signal to the running daemon |
-| `status` | Report whether a daemon is running and its PID |
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--graph-dir <dir>` | Graph directory to serve | `.codegraph` |
-
-```bash
-codegraph daemon start                    # Start daemon (run in background shell)
-codegraph daemon status                   # Check if daemon is running
-codegraph daemon stop                     # Stop the running daemon
-codegraph daemon start --graph-dir .codegraph/Api
-```
-
-> **Note:** The daemon exposes a named pipe for IPC. Normal `codegraph query` / `codegraph search` invocations automatically use the daemon if one is running, making repeated queries significantly faster.
+See [docs/benchmark.md](docs/benchmark.md) for the full guide, including custom scenario format, CI integration, and result interpretation. For the agent A/B benchmark methodology, see [docs/BENCHMARK-PLAYBOOK.md](docs/BENCHMARK-PLAYBOOK.md).
 
 ---
 
@@ -1012,6 +919,8 @@ Stryker generates HTML reports in `StrykerOutput/` with mutation scores per proj
 - [Interactive Graph Visualization](docs/view.md)
 - [Graph Report Reference](docs/report.md)
 - [Wiki Generator Guide](docs/wiki.md)
+- [Performance Benchmark Guide](docs/benchmark.md)
+- [Agent A/B Benchmark Playbook](docs/BENCHMARK-PLAYBOOK.md)
 
 ---
 
