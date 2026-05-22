@@ -166,30 +166,44 @@ internal static class AgentSkillWriter
 
     private static async Task<List<WriteResult>> WriteAgentDefinitionsAsync(string repoRoot, bool force)
     {
-        var results = new List<WriteResult>();
-
-        var architectPath = Path.Combine(repoRoot, ".codegraph", "agents", "codegraph-architect.md");
-        results.Add(await WriteFileAsync(architectPath, AgentTemplates.ArchitectAgentMd,
-            ".codegraph/agents/codegraph-architect.md", force));
-
-        var reviewerPath = Path.Combine(repoRoot, ".codegraph", "agents", "codegraph-reviewer.md");
-        results.Add(await WriteFileAsync(reviewerPath, AgentTemplates.ReviewerAgentMd,
-            ".codegraph/agents/codegraph-reviewer.md", force));
-
-        return results;
+        return await WriteAgentDefinitionSetAsync(
+            repoRoot,
+            Path.Combine(".codegraph", "agents"),
+            ".codegraph/agents",
+            force);
     }
 
     private static async Task<List<WriteResult>> WriteClaudeAgentDefinitionsAsync(string repoRoot, bool force)
     {
+        return await WriteAgentDefinitionSetAsync(
+            repoRoot,
+            Path.Combine(".claude", "agents"),
+            ".claude/agents",
+            force);
+    }
+
+    private static async Task<List<WriteResult>> WriteAgentDefinitionSetAsync(
+        string repoRoot,
+        string relativeDirectory,
+        string relativePathPrefix,
+        bool force)
+    {
         var results = new List<WriteResult>();
+        var definitionRoot = Path.Combine(repoRoot, relativeDirectory);
 
-        var architectPath = Path.Combine(repoRoot, ".claude", "agents", "codegraph-architect.md");
-        results.Add(await WriteFileAsync(architectPath, AgentTemplates.ArchitectAgentMd,
-            ".claude/agents/codegraph-architect.md", force));
+        var definitions = new[]
+        {
+            (FileName: "codegraph-architecture.md", Content: AgentTemplates.ArchitectureAgentMd),
+            (FileName: "codegraph-impact.md", Content: AgentTemplates.ImpactAgentMd),
+            (FileName: "codegraph-review.md", Content: AgentTemplates.CodeReviewAgentMd)
+        };
 
-        var reviewerPath = Path.Combine(repoRoot, ".claude", "agents", "codegraph-reviewer.md");
-        results.Add(await WriteFileAsync(reviewerPath, AgentTemplates.ReviewerAgentMd,
-            ".claude/agents/codegraph-reviewer.md", force));
+        foreach (var definition in definitions)
+        {
+            var fullPath = Path.Combine(definitionRoot, definition.FileName);
+            var relativePath = $"{relativePathPrefix}/{definition.FileName}";
+            results.Add(await WriteFileAsync(fullPath, definition.Content, relativePath, force));
+        }
 
         return results;
     }

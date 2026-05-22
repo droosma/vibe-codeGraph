@@ -2399,7 +2399,7 @@ static async Task<int> RunInitAsync(string[] args)
     }
     Console.WriteLine();
     Console.WriteLine("  Commit the skill files:");
-    Console.WriteLine("     git add .claude/ .github/ .codegraph/INSTRUCTIONS.md");
+    Console.WriteLine("     git add .claude/ .github/ AGENTS.md .cursor/ .codegraph/");
     Console.WriteLine("     git commit -m 'Add CodeGraph agent skills'");
 
     return 0;
