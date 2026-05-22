@@ -1,3 +1,4 @@
+using System.Text;
 using CodeGraph.Core;
 using CodeGraph.Core.Models;
 using CodeGraph.Query.OutputFormatters;
@@ -1222,5 +1223,48 @@ public class ContextFormatterTests
         var output = ContextFormatter.Format(result);
 
         Assert.Contains("Confidence: Unresolved", output);
+    }
+
+    [Fact]
+    public void Format_IncludeSource_UsesRequestedSourceMaxLines()
+    {
+        var filePath = Path.Combine(AppContext.BaseDirectory, $"ContextFormatterTests_{Guid.NewGuid():N}.cs");
+        File.WriteAllText(filePath, string.Join(Environment.NewLine, Enumerable.Range(1, 6).Select(i => $"line{i}")), Encoding.UTF8);
+
+        try
+        {
+            var target = new GraphNode
+            {
+                Id = "MyApp.Service.Run",
+                Name = "Run",
+                Kind = NodeKind.Method,
+                FilePath = filePath,
+                StartLine = 1,
+                EndLine = 6,
+                Accessibility = Accessibility.Public
+            };
+
+            var result = new QueryResult
+            {
+                TargetNode = target,
+                MatchedNodes = new List<GraphNode> { target },
+                Nodes = new Dictionary<string, GraphNode> { [target.Id] = target },
+                Edges = new List<GraphEdge>(),
+                Metadata = DefaultMeta
+            };
+
+            var output = ContextFormatter.Format(result, includeSource: true, sourceMaxLines: 3);
+
+            Assert.Contains("line1", output);
+            Assert.Contains("line2", output);
+            Assert.Contains("line3", output);
+            Assert.DoesNotContain("line4", output);
+            Assert.Contains("// ... (3 more lines)", output);
+        }
+        finally
+        {
+            if (File.Exists(filePath))
+                File.Delete(filePath);
+        }
     }
 }
