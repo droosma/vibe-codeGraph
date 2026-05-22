@@ -718,16 +718,23 @@ codegraph mcp [--graph-dir <dir>]
 |------|-------------|---------|
 | `--graph-dir <dir>` | Graph directory | `.codegraph` |
 
-The server exposes six tools. Agents call them like any other tool (no shell commands, no prompt engineering). The server starts on demand via stdio and exits when the agent disconnects.
+The server exposes 13 tools. Agents call them like any other tool (no shell commands, no prompt engineering). The server starts on demand via stdio and exits when the agent disconnects.
 
 | MCP Tool | Description |
 |----------|-------------|
 | `codegraph_query` | Query the graph by symbol pattern with depth, edge-type, and format options |
+| `codegraph_search` | Search for symbols by name, namespace, or file path |
 | `codegraph_list` | Browse the graph hierarchy (assemblies, types, interfaces, namespaces) |
+| `codegraph_file` | Find all symbols defined in a file path |
+| `codegraph_batch` | Query multiple symbols in one call |
 | `codegraph_summary` | Generate an overview report: hub types, assembly boundaries, test coverage |
 | `codegraph_path` | Find the shortest dependency path between two symbols |
 | `codegraph_impact` | Reverse-dependency analysis — assess the blast radius of a change |
 | `codegraph_explain` | Full symbol deep-dive: signature, members, all edges, test coverage |
+| `codegraph_compare` | Compare two symbols structurally |
+| `codegraph_test_impact` | Analyze test coverage: direct tests, indirect tests, `dotnet test --filter` |
+| `codegraph_diff` | Compare two graph snapshots to find structural changes |
+| `codegraph_packages` | Analyze NuGet package usage; detect version conflicts |
 
 See [docs/mcp.md](docs/mcp.md) for the full guide, including per-agent configuration and troubleshooting.
 
