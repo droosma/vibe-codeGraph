@@ -151,6 +151,7 @@ codegraph index --solution <path.sln|path.slnx> [options]
 | `--skip-build` | Hidden alias for `--skip-restore` | `false` |
 | `--changed-only` | Incremental re-index; only re-index projects with changes since last indexed commit | `false` |
 | `--sequential` | Disable parallel multi-solution indexing (recommended on machines with < 16 GB RAM) | `false` |
+| `--extend <path>` | Path for the unified SQLite database produced after multi-solution indexing. Useful when integrating multiple solution graphs into a shared database. (Multi-solution only) | `<output-dir>/graph.db` |
 | `--verbose` | Enable verbose output | `false` |
 
 ### `codegraph query`
@@ -167,6 +168,7 @@ codegraph query <symbol-pattern> [options]
 |------|-------------|---------|
 | `--depth <n>` | BFS traversal depth | `1` |
 | `--kind <type>` | Edge filter (see table below) | All kinds |
+| `--file <path>` | Find all symbols in the given source file instead of querying by pattern | (none) |
 | `--mode <mode>` | Traversal mode: `focused` (high-signal edges only), `structural` (includes containment), `all` | `all` |
 | `--namespace <pattern>` | Namespace filter (supports wildcards) | All namespaces |
 | `--project <name>` | Project filter | All projects |
@@ -210,7 +212,7 @@ After each query, the CLI prints `💡 Suggested next queries:` to stderr with u
 
 ### `codegraph compare`
 
-Compare two symbols structurally — shared interfaces, shared base types, shared dependencies, and unique relationships for each.
+Compare two symbols structurally — shared interfaces, base types, and dependencies vs. what is unique to each.
 
 ```
 codegraph compare <symbolA> <symbolB> [options]
@@ -222,16 +224,16 @@ codegraph compare <symbolA> <symbolB> [options]
 | `--graph-dir <path>` | Graph directory | `.codegraph` |
 
 ```bash
-codegraph compare OrderService PaymentService
-codegraph compare OrderService PaymentService --depth 2
-codegraph compare IOrderRepository ISqlRepository
+codegraph compare OrderService InvoiceService
+codegraph compare OrderService InvoiceService --depth 2
+codegraph compare "MyApp.Orders.OrderService" "MyApp.Billing.InvoiceService"
 ```
 
-See [docs/compare.md](docs/compare.md) for the full guide, including output format details and architecture-review workflows.
+See [docs/compare.md](docs/compare.md) for the full how-to guide, including symbol resolution and common workflows.
 
 ### `codegraph search`
 
-Search for symbols by name, namespace, or file path using case-insensitive substring matching. The fastest way to find a fully-qualified identifier before querying.
+Search for symbols by name, namespace, or file path using case-insensitive substring matching.
 
 ```
 codegraph search <query> [options]
@@ -239,17 +241,17 @@ codegraph search <query> [options]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--top <n>` | Maximum results to return | `20` |
-| `--kind <kind>` | Filter by kind: `type`, `method`, `namespace`, `property`, `field` | All kinds |
+| `--top <n>` | Maximum results | `20` |
+| `--kind <kind>` | Filter by kind: `type`, `method`, `namespace`, `property`, `field` | All |
 | `--graph-dir <path>` | Graph directory | `.codegraph` |
 
 ```bash
-codegraph search Order                       # All symbols containing "Order"
-codegraph search Order --kind type           # Only types
-codegraph search Repository --top 10
+codegraph search Order                        # All symbols containing "Order"
+codegraph search OrderService --kind type     # Only types
+codegraph search PlaceOrder --kind method     # Only methods
 ```
 
-See [docs/search.md](docs/search.md) for the full guide.
+See [docs/search.md](docs/search.md) for the full how-to guide.
 
 ### `codegraph diff`
 
@@ -269,9 +271,30 @@ codegraph diff [options]
 
 See [docs/diff.md](docs/diff.md) for the full how-to guide.
 
+### `codegraph compare`
+
+Compare two symbols structurally. Shows shared interfaces, common base types, shared dependencies, and the unique relationships of each symbol.
+
+```
+codegraph compare <symbolA> <symbolB> [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--depth <n>` | Traversal depth | `1` |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph compare OrderService InvoiceService          # Structural diff of two services
+codegraph compare IRepository IOrderRepository         # Interface comparison
+codegraph compare OrderService InvoiceService --depth 2
+```
+
+Use `codegraph compare` to understand similarities and differences between two types — for example when deciding whether to extract a shared base class or interface.
+
 ### `codegraph snapshot`
 
-Save, list, and delete named graph snapshots. Snapshots are the building block for `codegraph diff` — save before a change, re-index after, then diff the two.
+Save, list, or delete named snapshots of the current graph. Snapshots enable reproducible `codegraph diff` comparisons without relying on filesystem conventions like `.codegraph-prev`.
 
 ```
 codegraph snapshot <save|list|delete> [name] [options]
@@ -279,24 +302,24 @@ codegraph snapshot <save|list|delete> [name] [options]
 
 | Sub-command | Description |
 |-------------|-------------|
-| `save <name>` | Save the current graph as a named snapshot |
-| `list` | Print all saved snapshots |
-| `delete <name>` | Delete a named snapshot |
+| `save <name>` | Copy the current graph to a named snapshot |
+| `list` | List all saved snapshots with creation timestamps |
+| `delete <name>` | Remove a named snapshot |
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--graph-dir <path>` | Graph directory | `.codegraph` |
+| `--graph-dir <dir>` | Graph directory to snapshot | `.codegraph` |
 
 ```bash
-codegraph snapshot save before-refactor
-codegraph snapshot list
-codegraph snapshot delete before-refactor
+codegraph snapshot save before-refactor   # Snapshot the current graph
+codegraph snapshot list                   # Show all saved snapshots
+codegraph snapshot delete before-refactor # Remove a snapshot
 
-# Then diff against the snapshot:
-codegraph diff --base .codegraph-snapshots/before-refactor
+# Use with diff:
+codegraph snapshot save pre-v2
+# ... make changes and re-index ...
+codegraph diff --base .codegraph-snapshots/pre-v2
 ```
-
-See [docs/snapshot.md](docs/snapshot.md) for full workflows.
 
 ### `codegraph list`
 
@@ -586,6 +609,30 @@ Edges by type:
 
 See [docs/stats.md](docs/stats.md) for common workflows including CI monitoring and snapshot comparison.
 
+### `codegraph packages`
+
+Analyze NuGet package usage across projects and detect version conflicts.
+
+```
+codegraph packages [options]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--project <name>` | Filter by project name | All projects |
+| `--package <name>` | Filter by package name (shows which projects use it) | All packages |
+| `--format json` | Output as JSON | Text |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph packages                             # All package usage + conflicts
+codegraph packages --project MyApp.Api         # Packages in a specific project
+codegraph packages --package Newtonsoft.Json   # Which projects use this package?
+codegraph packages --format json               # Machine-readable output
+```
+
+**Conflict detection:** When multiple projects reference the same package at different versions, the output includes a `Conflicts` section listing the package name, the differing versions, and which projects declare each version.
+
 ### `codegraph report`
 
 Generate a Markdown report that summarises the graph: hub types (highest connectivity), assembly boundaries, test coverage by assembly, and suggested starter queries.
@@ -858,33 +905,57 @@ codegraph test-impact OrderService       # Which tests cover OrderService?
 codegraph test-impact PlaceOrder --json  # Machine-readable output
 ```
 
-**Configuration is automatic** — `codegraph init` generates the MCP config files. To add manually:
+### `codegraph benchmark`
 
-```json
-// .vscode/mcp.json (VS Code Copilot, Cursor)
-{
-  "servers": {
-    "codegraph": {
-      "type": "stdio",
-      "command": "dotnet",
-      "args": ["codegraph", "mcp"],
-      "cwd": "${workspaceFolder}"
-    }
-  }
-}
+Run performance benchmarks against the code graph — useful for catching query regressions or measuring the impact of graph-size growth.
+
+```
+codegraph benchmark [options]
 ```
 
-```json
-// .mcp.json (Claude Code)
-{
-  "mcpServers": {
-    "codegraph": {
-      "command": "dotnet",
-      "args": ["codegraph", "mcp"]
-    }
-  }
-}
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--scenarios <path>` | Path to a JSON scenarios file | Built-in defaults |
+| `--iterations <n>` | Number of iterations per scenario | `5` |
+| `--format json` | Output as JSON instead of Markdown | Markdown |
+| `--graph-dir <dir>` | Graph directory | `.codegraph` |
+
+```bash
+codegraph benchmark                                    # Run built-in scenarios
+codegraph benchmark --scenarios benchmarks/my.json    # Custom scenario file
+codegraph benchmark --iterations 10 --format json     # More iterations, JSON output
 ```
+
+The built-in scenarios cover single-symbol queries, broad searches, and assembly listing. Custom scenario files follow the same JSON structure as `benchmarks/scenarios.json` in this repository.
+
+See [docs/BENCHMARK-PLAYBOOK.md](docs/BENCHMARK-PLAYBOOK.md) for the full playbook, including how to write custom scenarios and interpret results.
+
+### `codegraph daemon`
+
+Start a persistent background process that keeps the graph in memory for low-latency queries. Useful in development environments where repeated CLI queries would otherwise incur cold-start overhead.
+
+```
+codegraph daemon <start|stop|status> [options]
+```
+
+| Sub-command | Description |
+|-------------|-------------|
+| `start` | Start the daemon and keep it running (blocks until stopped) |
+| `stop` | Send a stop signal to the running daemon |
+| `status` | Report whether a daemon is running and its PID |
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--graph-dir <dir>` | Graph directory to serve | `.codegraph` |
+
+```bash
+codegraph daemon start                    # Start daemon (run in background shell)
+codegraph daemon status                   # Check if daemon is running
+codegraph daemon stop                     # Stop the running daemon
+codegraph daemon start --graph-dir .codegraph/Api
+```
+
+> **Note:** The daemon exposes a named pipe for IPC. Normal `codegraph query` / `codegraph search` invocations automatically use the daemon if one is running, making repeated queries significantly faster.
 
 ---
 
