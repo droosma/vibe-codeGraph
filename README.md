@@ -113,15 +113,15 @@ codegraph init [--agent <name>] [--solution <path.sln|path.slnx>] [--output <dir
 
 **Step 2 — Agent skill files** (auto-detected or explicit):
 
-Auto-detects which AI agents are configured in the repo (looks for `.claude/`, `CLAUDE.md`, `.github/copilot-instructions.md`, `AGENTS.md`, `.cursorrules`, `.cursor/rules/`), then writes agent-specific skill files so each agent understands how to use CodeGraph:
+Auto-detects which AI agents are configured in the repo (looks for `.claude/`, `CLAUDE.md`, `.github/copilot-instructions.md`, `AGENTS.md`, `.cursorrules`, `.cursor/rules/`), then writes agent-specific skill files plus reusable delegatable agent definitions:
 
 | Agent | Detection | File(s) written |
 |-------|-----------|-----------------|
-| Claude Code | `.claude/` dir or `CLAUDE.md` | `.claude/skills/codegraph/SKILL.md`, `.claude/skills/codegraph/scripts/query-wrapper.sh` |
-| GitHub Copilot | `.github/copilot-instructions.md` | Appends CodeGraph section to `.github/copilot-instructions.md` |
-| OpenCode / Codex | `AGENTS.md` | Appends CodeGraph section to `AGENTS.md` |
+| Claude Code | `.claude/` dir or `CLAUDE.md` | `.claude/skills/codegraph/SKILL.md`, `.claude/skills/codegraph/scripts/query-wrapper.sh`, `.claude/agents/codegraph-architecture.md`, `.claude/agents/codegraph-impact.md`, `.claude/agents/codegraph-review.md` |
+| GitHub Copilot | `.github/copilot-instructions.md` | Appends CodeGraph section to `.github/copilot-instructions.md` with delegatable-agent guidance |
+| OpenCode / Codex | `AGENTS.md` | Appends CodeGraph section to `AGENTS.md` with delegatable-agent guidance |
 | Cursor | `.cursorrules` or `.cursor/rules/` | `.cursor/rules/codegraph.md` |
-| *(all agents)* | — | `.codegraph/INSTRUCTIONS.md` (generic instructions, always written) |
+| *(all agents)* | — | `.codegraph/INSTRUCTIONS.md`, `.codegraph/agents/codegraph-architecture.md`, `.codegraph/agents/codegraph-impact.md`, `.codegraph/agents/codegraph-review.md` |
 
 | Flag | Description |
 |------|-------------|
@@ -176,7 +176,7 @@ codegraph query <symbol-pattern> [options]
 | `--max-nodes <n>` | Maximum nodes in result | `50` |
 | `--include-external` | Include external assembly dependencies | `false` |
 | `--include-source` | Embed source code snippets alongside node references in output | `false` |
-| `--no-docs` | Suppress XML doc comment summaries from compact output headers | (docs shown by default) |
+| `--source-max-lines <n>` | Maximum lines per embedded source snippet | `20` |
 | `--no-rank` | Disable relevance ranking | (ranking enabled by default) |
 | `--budget <tokens>` | Maximum token budget; output is truncated with a hint when exceeded | (none) |
 | `--no-metrics` | Suppress the compression metrics footer | `false` |
@@ -197,6 +197,10 @@ codegraph query <symbol-pattern> [options]
 **Query suggestions:**
 
 After each query, the CLI prints `💡 Suggested next queries:` to stderr with up to three contextual follow-up commands — deeper traversal, call-chain exploration, DI wiring, or cross-assembly scoping. AI agents can follow these hints automatically to navigate the graph efficiently without additional prompting.
+
+**Source retrieval:**
+
+Use `--include-source` after you've narrowed to a specific method or type and want a small inline implementation snippet. Keep `--source-max-lines` low (default: `20`) to stay token-safe. Use the MCP `codegraph_file` tool instead when you only know the file path, need to discover which symbols live in that file, or want to pivot from a changed file to a symbol-level query.
 
 **Edge kind aliases:**
 
@@ -679,10 +683,10 @@ The server exposes 13 tools. Agents call them like any other tool (no shell comm
 
 | MCP Tool | Description |
 |----------|-------------|
-| `codegraph_query` | Query the graph by symbol pattern with depth, edge-type, and format options |
+| `codegraph_query` | Query the graph by symbol pattern with depth, edge-type, and format options; add `include_source` for a capped inline snippet |
 | `codegraph_search` | Search for symbols by name, namespace, or file path |
 | `codegraph_list` | Browse the graph hierarchy (assemblies, types, interfaces, namespaces) |
-| `codegraph_file` | Find all symbols defined in a file path |
+| `codegraph_file` | Find all symbols defined in a file path when you know the file but not the exact symbol |
 | `codegraph_batch` | Query multiple symbols in one call |
 | `codegraph_summary` | Generate an overview report: hub types, assembly boundaries, test coverage |
 | `codegraph_path` | Find the shortest dependency path between two symbols |

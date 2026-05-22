@@ -141,6 +141,8 @@ Query the graph by symbol pattern.
 | `format` | `string` | | `"context"` | Output format: `"context"` (Markdown), `"compact"` (prefix-stripped, 3–5× smaller), `"json"`, or `"text"`. |
 | `max_nodes` | `integer` | | `50` | Maximum nodes to return. |
 | `include_external` | `boolean` | | `false` | Include external (NuGet) dependency nodes. |
+| `include_source` | `boolean` | | `false` | Inline a source snippet for each matched symbol after you've narrowed the query. |
+| `source_max_lines` | `integer` | | `20` | Maximum lines per embedded source snippet. Lower this to stay token-safe. |
 | `confidence` | `string` | | all | Minimum edge confidence: `verified`, `inferred`, or `unresolved` (default: all). |
 | `budget` | `integer` | | (none) | Maximum token budget. Output is truncated with a hint when exceeded. |
 | `solution` | `string` | | all solutions | Scope query to a specific solution name (multi-solution support). |
@@ -205,7 +207,7 @@ Get a comprehensive view of a single symbol: its type, file location, signature,
 
 #### `codegraph_file`
 
-Find all symbols defined in a source file by file path. Use when you know the file but not the individual symbol names — for example, after receiving a list of changed files from `git diff`.
+Find all symbols defined in a source file by file path. Use when you know the file but not the individual symbol names — for example, after receiving a list of changed files from `git diff`. Once you have the symbol, switch to `codegraph_query` with `include_source` for a capped inline snippet.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -291,10 +293,12 @@ For each detected agent, the matching skill files are written. The generic `.cod
 |-------|---------|---------|
 | Claude Code | `.claude/skills/codegraph/SKILL.md` | Created (skipped if exists without `--force`) |
 | Claude Code | `.claude/skills/codegraph/scripts/query-wrapper.sh` | Created (skipped if exists without `--force`) |
-| GitHub Copilot | `.github/copilot-instructions.md` | CodeGraph section appended (idempotent via marker) |
-| OpenCode / Codex | `AGENTS.md` | CodeGraph section appended (idempotent via marker) |
+| Claude Code | `.claude/agents/codegraph-architecture.md`, `.claude/agents/codegraph-impact.md`, `.claude/agents/codegraph-review.md` | Created (skipped if exists without `--force`) |
+| GitHub Copilot | `.github/copilot-instructions.md` | CodeGraph section appended (idempotent via marker), including delegatable-agent references |
+| OpenCode / Codex | `AGENTS.md` | CodeGraph section appended (idempotent via marker), including delegatable-agent references |
 | Cursor | `.cursor/rules/codegraph.md` | Created (skipped if exists without `--force`) |
 | *(all agents)* | `.codegraph/INSTRUCTIONS.md` | Created (skipped if exists without `--force`) |
+| *(all agents)* | `.codegraph/agents/codegraph-architecture.md`, `.codegraph/agents/codegraph-impact.md`, `.codegraph/agents/codegraph-review.md` | Created (skipped if exists without `--force`) |
 
 ### Explicit Agent Selection
 
@@ -323,7 +327,7 @@ codegraph init --force
 Commit the generated skill files so everyone on the team and every CI agent gets them automatically:
 
 ```bash
-git add .claude/ .github/copilot-instructions.md AGENTS.md .cursor/ .codegraph/INSTRUCTIONS.md
+git add .claude/ .github/copilot-instructions.md AGENTS.md .cursor/ .codegraph/
 git commit -m "Add CodeGraph agent skills"
 ```
 

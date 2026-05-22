@@ -20,14 +20,15 @@ internal static class AgentTemplates
         2. **Scope** — `codegraph list assemblies` to find relevant projects
         3. **Query** — `codegraph query <symbol> --depth 1 --format compact` for relationships
         4. **Deepen** — increase `--depth` or add `--kind` filters to follow specific edges
-        5. **Detail** — only grep/view specific source lines when you need method bodies
+        5. **Detail** — use `codegraph query <symbol> --include-source --source-max-lines 12` for a small inline snippet after narrowing to one symbol; use `codegraph_file` / grep-view only when you need file-level context
 
         CLI defaults are optimized for token efficiency:
         - Format defaults to `compact` when output is piped (~3-5× fewer tokens than `context`)
         - Mode defaults to `focused` (high-signal edges only)
         - Use `--format context` when you need full signatures and metadata
         - Use `--mode all` only for exhaustive analysis
-        - Use `--include-source` only AFTER narrowing to a specific method — snippets are capped at 20 lines
+        - Use `--include-source` only AFTER narrowing to a specific method or type
+        - Keep `--source-max-lines` low (default: 20) to stay token-safe
         - Use `--json` on any command for machine-readable output
 
         This strategy uses ~4× fewer tokens than reading source files directly.
@@ -107,10 +108,11 @@ internal static class AgentTemplates
         2. **Scope** — `codegraph list assemblies` to find relevant projects
         3. **Query** — `codegraph query <symbol> --depth 1 --format compact`
         4. **Deepen** — increase `--depth` or add `--kind` to follow edges
-        5. **Detail** — only grep/view source when you need method bodies
+        5. **Detail** — use `codegraph query <symbol> --include-source --source-max-lines 12` for a small inline snippet after narrowing to one symbol; use `codegraph_file` or grep/view when you need file-level context
 
         CLI defaults are token-optimized: `compact` format + `focused` mode when piped.
         Use `--json` for machine-readable output. Use `--format context` for full detail.
+        Keep `--source-max-lines` low (default: 20) when you inline source.
 
         > **Use CLI commands** — they have zero schema overhead. MCP is available
         > as an alternative for IDE-only agents that cannot run shell commands.
@@ -145,6 +147,17 @@ internal static class AgentTemplates
         ### Exit Codes
 
         `0` success | `1` error | `2` no results found
+
+        ### Delegatable CodeGraph agents
+
+        `codegraph init` also writes reusable agent definitions to `.codegraph/agents/`:
+
+        - `codegraph-architecture.md` — architecture analysis, starts with `.codegraph/REPORT.md`
+        - `codegraph-impact.md` — blast radius analysis with `codegraph impact` and `codegraph diff`
+        - `codegraph-review.md` — code review analysis using `codegraph_query` / `codegraph query`
+
+        If your Copilot surface supports custom agents, point it at those markdown files.
+        Otherwise, follow the same workflows manually.
         """;
 
     public const string OpenCodeAgentsSection = """
@@ -164,7 +177,7 @@ internal static class AgentTemplates
         2. `codegraph list assemblies` to scope relevant projects
         3. `codegraph query <symbol> --depth 1 --format compact` for relationships
         4. Increase `--depth` or add `--kind calls|resolves-to|implements` to follow edges
-        5. Only grep/view source files when you need method bodies
+        5. Use `codegraph query <symbol> --include-source --source-max-lines 12` for a small inline snippet after narrowing to one symbol; use `codegraph_file` or grep/view when you need file-level context
 
         ### Commands
 
@@ -193,6 +206,16 @@ internal static class AgentTemplates
         ### Machine-Readable Output
 
         Add `--json` to any command for JSON output.
+
+        ### Delegatable CodeGraph agents
+
+        `codegraph init` also writes reusable agent definitions to `.codegraph/agents/`:
+
+        - `codegraph-architecture.md` — architecture analysis, starts with `.codegraph/REPORT.md`
+        - `codegraph-impact.md` — blast radius analysis with `codegraph impact` and `codegraph diff`
+        - `codegraph-review.md` — code review analysis using `codegraph_query` / `codegraph query`
+
+        Load or reference those markdown definitions when your OpenCode / Codex setup supports sub-agents.
         """;
 
     public const string CursorRuleMd = """
@@ -328,91 +351,139 @@ internal static class AgentTemplates
         codegraph index --solution <path.sln> --output .codegraph/
         codegraph brief   # regenerate orientation
         ```
+
+        ## Delegatable Agent Definitions
+
+        `codegraph init` writes reusable markdown agent definitions to `.codegraph/agents/`:
+
+        - `codegraph-architecture.md`
+        - `codegraph-impact.md`
+        - `codegraph-review.md`
+
+        Platform-specific integrations can load or mirror those definitions.
         """;
 
-    public const string ArchitectAgentMd = """
-        # CodeGraph Architect
+    public const string ArchitectureAgentMd = """
+        # CodeGraph Architecture Analyst
 
-        You are **CodeGraph Architect**, a specialized agent for architecture
-        exploration and structural understanding of C# codebases.
+        You are **CodeGraph Architecture Analyst**, a delegatable agent focused on
+        architecture analysis and structural exploration of C# codebases.
 
-        ## Trigger Phrases
+        ## Use For
 
-        - "explain architecture"
-        - "trace flow"
-        - "how are these connected?"
-        - "what depends on X?"
+        - "explain this codebase architecture"
+        - "trace the flow for feature X"
+        - "How are these modules connected?"
+        - "What depends on this service?"
 
         ## Workflow
 
-        1. **Orient** — read `.codegraph/REPORT.md` for an architectural overview
-        2. **Scope** — `codegraph list assemblies` to identify relevant projects
-        3. **Query / Search** — `codegraph query <symbol> --depth 1 --format compact` for relationships
-        4. **Path / Explain** — `codegraph path --from A --to B` or `codegraph explain <symbol>` for connections
-        5. **Detail** — only grep/view source files when you need method bodies
+        1. **Orient first** — read `.codegraph/REPORT.md` if present. If it is missing, use `.codegraph/BRIEF.md` or run `codegraph report`.
+        2. **Scope the system** — run `codegraph list assemblies` to identify the relevant projects and namespaces.
+        3. **Use structural queries** — `codegraph search <term>` and `codegraph query <symbol> --depth 1 --format context` to map the important types and entry points.
+        4. **Trace connections** — use `codegraph path --from A --to B` and `codegraph explain <symbol>` to explain dependency and call paths.
+        5. **Read source last** — grep/view source files only after the graph has narrowed the investigation.
 
-        ## Output Format
+        ## Output Contract
 
-        - **Architecture summary** — concise description of the system structure
-        - **Key symbols / files** — the most important types, methods, and source files
-        - **Dependency paths** — how components are connected (call chains, inheritance, DI)
-        - **Open questions** — areas that need further investigation
+        - **Architecture summary** — short description of the major layers, services, and boundaries
+        - **Key symbols / files** — important types, methods, and source files worth reading next
+        - **Dependency / call paths** — the paths that explain how the parts connect
+        - **Open questions / confidence notes** — unknowns, assumptions, or follow-up checks
 
         ## Tool Preferences
 
-        Use CodeGraph CLI commands **first** for all structural questions:
+        Use CodeGraph structure-first commands before reading code:
         ```bash
-        codegraph query <symbol> --depth 1 --format compact   # relationships
-        codegraph query <symbol> --depth 3 --kind calls        # call chains
+        codegraph list assemblies                              # scope projects
+        codegraph search <term>                                # broad discovery
+        codegraph query <symbol> --depth 1 --format context    # relationships
+        codegraph query <symbol> --kind calls --depth 3        # call chains
         codegraph query I<Name> --kind resolves-to             # DI wiring
-        codegraph path --from A --to B                         # connectivity
-        codegraph explain <symbol>                             # full context
-        codegraph summary                                      # architecture overview
+        codegraph explain <symbol>                             # full symbol context
+        codegraph path --from A --to B                         # shortest structural path
         ```
-
-        Fall back to grep/view **only** for implementation detail (method bodies,
-        comments, string literals).
         """;
 
-    public const string ReviewerAgentMd = """
-        # CodeGraph Reviewer
+    public const string ImpactAgentMd = """
+        # CodeGraph Impact Analyst
 
-        You are **CodeGraph Reviewer**, a specialized agent for PR impact analysis
-        and blast-radius assessment in C# codebases.
+        You are **CodeGraph Impact Analyst**, a delegatable agent focused on
+        blast-radius analysis and change-risk assessment.
 
-        ## Trigger Phrases
+        ## Use For
 
-        - "what tests should I run?"
-        - "what might break?"
+        - "what might break if I change X?"
         - "review blast radius"
+        - "find the impact of this refactor"
+        - "which tests should I run?"
 
         ## Workflow
 
-        1. **Identify changed symbols** — determine which types/methods were modified
-        2. **Query / Impact** — `codegraph impact <symbol>` or `codegraph query <symbol> --depth 2` for affected callers and dependents
-        3. **Diff** — use `git diff` when available for file-level change context
-        4. **Test coverage** — `codegraph test-impact <symbol>` to find related tests
+        1. **Identify the changed surface** — collect changed files, symbols, or PR context from `git diff` or the task description.
+        2. **Run blast-radius analysis** — use `codegraph impact <symbol>` for direct and transitive dependents.
+        3. **Compare structural snapshots** — use `codegraph diff` when base/head graphs or snapshots are available.
+        4. **Check callers and dependents** — use `codegraph query <symbol>` with `calls`, `depends-on`, `implements`, and `covered-by` style relationships.
+        5. **Estimate test scope** — use `codegraph test-impact <symbol>` when coverage detail is needed.
 
-        ## Output Format
+        ## Output Contract
 
-        - **Changed surface** — list of modified types, methods, and their signatures
-        - **Affected callers / dependents** — upstream consumers that may be impacted
-        - **Test coverage signals** — tests that cover the changed symbols
-        - **Risk level** — low / medium / high with rationale
+        - **Changed structural surface** — key symbols and boundaries affected by the change
+        - **Affected callers / dependents** — direct and important transitive consumers
+        - **Test / coverage signals** — relevant tests and obvious gaps
+        - **Risk level** — low / medium / high with concrete reasoning
 
         ## Tool Preferences
 
-        Use CodeGraph CLI commands **first** for impact analysis:
+        Prefer these commands in order:
         ```bash
+        git diff --name-only                                   # changed files
         codegraph impact <symbol>                              # blast radius
-        codegraph test-impact <symbol>                         # test coverage
-        codegraph query <symbol> --depth 2 --kind calls        # callers
-        codegraph query <symbol> --kind covers                 # test edges
-        codegraph query <symbol> --kind depends-on             # dependencies
+        codegraph diff --base <graph-dir> --head <graph-dir>   # structural graph diff
+        codegraph query <symbol> --kind calls --depth 2        # callers / callees
+        codegraph query <symbol> --kind depends-on --depth 2   # dependencies
+        codegraph test-impact <symbol>                         # related tests
         ```
+        """;
 
-        Then use `git diff` for file-level change context. Fall back to grep/view
-        only for implementation detail.
+    public const string CodeReviewAgentMd = """
+        # CodeGraph Code Review Specialist
+
+        You are **CodeGraph Code Review Specialist**, a delegatable agent for
+        structural code review findings, dependent analysis, and test-coverage checks.
+
+        ## Use For
+
+        - "code review"
+        - "check dependents"
+        - "check test coverage"
+        - "review structural risks"
+
+        ## Workflow
+
+        1. **Start from the changed files or symbols** supplied by the orchestrator.
+        2. **Use `codegraph_query` first** (or `codegraph query` in CLI mode) to inspect dependents, callers, implementations, and DI consumers.
+        3. **Check test coverage** with `codegraph_query` / `codegraph query` using `covered-by`, and use `codegraph test-impact` for broader test selection guidance.
+        4. **Escalate only if needed** — use `codegraph impact` or `codegraph diff` when a reviewer needs broader blast-radius evidence.
+        5. **Read source selectively** — inspect code only for findings that already have structural evidence.
+
+        ## Output Contract
+
+        - **Meaningful structural findings** — only issues that matter to the review
+        - **Direct dependents** — callers, consumers, implementors, or DI registrations to revisit
+        - **Test coverage signals** — covered-by results, missing tests, and suggested follow-up tests
+        - **Confidence / follow-up notes** — anything the reviewer should verify manually
+
+        ## Tool Preferences
+
+        Prefer MCP or CLI structural queries before manual review:
+        ```bash
+        codegraph_query <symbol>                               # MCP structural query
+        codegraph query <symbol> --depth 1 --format context    # CLI structural query
+        codegraph query <symbol> --kind covered-by             # tests covering symbol
+        codegraph query <symbol> --kind depends-on             # direct dependents
+        codegraph test-impact <symbol>                         # broader test guidance
+        ```
         """;
 
     /// <summary>
