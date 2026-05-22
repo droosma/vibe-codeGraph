@@ -10,6 +10,8 @@ public class AgentTemplatesTests
         Assert.Contains("codegraph query", AgentTemplates.ClaudeSkillMd);
         Assert.Contains("--depth", AgentTemplates.ClaudeSkillMd);
         Assert.Contains("--kind", AgentTemplates.ClaudeSkillMd);
+        Assert.Contains("--include-source", AgentTemplates.ClaudeSkillMd);
+        Assert.Contains("codegraph_file", AgentTemplates.ClaudeSkillMd);
     }
 
     [Fact]
@@ -56,33 +58,61 @@ public class AgentTemplatesTests
         Assert.NotEmpty(AgentTemplates.CursorRuleMd);
         Assert.NotEmpty(AgentTemplates.GenericInstructionsMd);
         Assert.NotEmpty(AgentTemplates.AppendMarker);
-        Assert.NotEmpty(AgentTemplates.ArchitectAgentMd);
-        Assert.NotEmpty(AgentTemplates.ReviewerAgentMd);
+        Assert.NotEmpty(AgentTemplates.ArchitectureAgentMd);
+        Assert.NotEmpty(AgentTemplates.ImpactAgentMd);
+        Assert.NotEmpty(AgentTemplates.CodeReviewAgentMd);
     }
 
     [Fact]
-    public void ArchitectAgentMd_ContainsTriggerPhrasesAndWorkflow()
+    public void ArchitectureAgentMd_ContainsTriggerPhrasesAndWorkflow()
     {
-        Assert.Contains("explain architecture", AgentTemplates.ArchitectAgentMd);
-        Assert.Contains("trace flow", AgentTemplates.ArchitectAgentMd);
-        Assert.Contains("how are these connected?", AgentTemplates.ArchitectAgentMd);
-        Assert.Contains("what depends on X?", AgentTemplates.ArchitectAgentMd);
-        Assert.Contains("REPORT.md", AgentTemplates.ArchitectAgentMd);
-        Assert.Contains("codegraph list assemblies", AgentTemplates.ArchitectAgentMd);
-        Assert.Contains("codegraph query", AgentTemplates.ArchitectAgentMd);
-        Assert.Contains("codegraph path", AgentTemplates.ArchitectAgentMd);
-        Assert.Contains("codegraph explain", AgentTemplates.ArchitectAgentMd);
+        Assert.Contains("explain this codebase architecture", AgentTemplates.ArchitectureAgentMd);
+        Assert.Contains("trace the flow", AgentTemplates.ArchitectureAgentMd);
+        Assert.Contains("How are these modules connected?", AgentTemplates.ArchitectureAgentMd);
+        Assert.Contains("REPORT.md", AgentTemplates.ArchitectureAgentMd);
+        Assert.Contains("codegraph list assemblies", AgentTemplates.ArchitectureAgentMd);
+        Assert.Contains("codegraph query", AgentTemplates.ArchitectureAgentMd);
+        Assert.Contains("codegraph explain", AgentTemplates.ArchitectureAgentMd);
+        Assert.Contains("codegraph path", AgentTemplates.ArchitectureAgentMd);
     }
 
     [Fact]
-    public void ReviewerAgentMd_ContainsTriggerPhrasesAndWorkflow()
+    public void ImpactAgentMd_ContainsTriggerPhrasesAndWorkflow()
     {
-        Assert.Contains("what tests should I run?", AgentTemplates.ReviewerAgentMd);
-        Assert.Contains("what might break?", AgentTemplates.ReviewerAgentMd);
-        Assert.Contains("review blast radius", AgentTemplates.ReviewerAgentMd);
-        Assert.Contains("codegraph impact", AgentTemplates.ReviewerAgentMd);
-        Assert.Contains("codegraph query", AgentTemplates.ReviewerAgentMd);
-        Assert.Contains("git diff", AgentTemplates.ReviewerAgentMd);
-        Assert.Contains("covers", AgentTemplates.ReviewerAgentMd);
+        Assert.Contains("blast radius", AgentTemplates.ImpactAgentMd);
+        Assert.Contains("what might break if I change X?", AgentTemplates.ImpactAgentMd);
+        Assert.Contains("codegraph impact", AgentTemplates.ImpactAgentMd);
+        Assert.Contains("codegraph diff", AgentTemplates.ImpactAgentMd);
+        Assert.Contains("git diff", AgentTemplates.ImpactAgentMd);
+        Assert.Contains("Risk level", AgentTemplates.ImpactAgentMd);
+    }
+
+    [Fact]
+    public void CodeReviewAgentMd_ContainsTriggerPhrasesAndWorkflow()
+    {
+        Assert.Contains("code review", AgentTemplates.CodeReviewAgentMd);
+        Assert.Contains("check dependents", AgentTemplates.CodeReviewAgentMd);
+        Assert.Contains("test coverage", AgentTemplates.CodeReviewAgentMd);
+        Assert.Contains("codegraph_query", AgentTemplates.CodeReviewAgentMd);
+        Assert.Contains("covered-by", AgentTemplates.CodeReviewAgentMd);
+        Assert.Contains("Meaningful structural findings", AgentTemplates.CodeReviewAgentMd);
+    }
+
+    [Fact]
+    public void CopilotInstructionsSection_ContainsDelegatableAgentDefinitions()
+    {
+        Assert.Contains("Delegatable CodeGraph agents", AgentTemplates.CopilotInstructionsSection);
+        Assert.Contains("codegraph-architecture.md", AgentTemplates.CopilotInstructionsSection);
+        Assert.Contains("codegraph-impact.md", AgentTemplates.CopilotInstructionsSection);
+        Assert.Contains("codegraph-review.md", AgentTemplates.CopilotInstructionsSection);
+    }
+
+    [Fact]
+    public void OpenCodeAgentsSection_ContainsDelegatableAgentDefinitions()
+    {
+        Assert.Contains("Delegatable CodeGraph agents", AgentTemplates.OpenCodeAgentsSection);
+        Assert.Contains("codegraph-architecture.md", AgentTemplates.OpenCodeAgentsSection);
+        Assert.Contains("codegraph-impact.md", AgentTemplates.OpenCodeAgentsSection);
+        Assert.Contains("codegraph-review.md", AgentTemplates.OpenCodeAgentsSection);
     }
 }
