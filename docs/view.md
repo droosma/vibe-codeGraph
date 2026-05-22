@@ -14,7 +14,7 @@ codegraph index --solution MyApp.sln
 codegraph view
 ```
 
-The HTML file is written to a temp directory and opened automatically. No web server is required — it is fully self-contained.
+The HTML file is written to `.codegraph/graph.html` by default and opened automatically. No web server is required — it is fully self-contained.
 
 ---
 
@@ -27,7 +27,7 @@ codegraph view [options]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--graph-dir <path>` | Directory containing the indexed graph | `.codegraph` |
-| `--output <path>` | Save the HTML file to a specific path instead of a temp file | (temp file) |
+| `--output <path>`, `-o` | Save the HTML file to a specific path | `.codegraph/graph.html` |
 | `--max-nodes <n>` | Maximum number of nodes to render (see [Node Sampling](#node-sampling)) | `5000` |
 | `--no-open` | Generate the HTML file but do not open it in the browser | `false` |
 | `--help`, `-h` | Show help | |
@@ -35,11 +35,11 @@ codegraph view [options]
 ### Examples
 
 ```bash
-# Open graph in browser (default)
+# Open graph in browser (default — writes to .codegraph/graph.html)
 codegraph view
 
-# Save to a specific file
-codegraph view --output graph.html
+# Save to a specific file using the short alias
+codegraph view -o graph.html
 
 # Limit nodes for performance on large codebases
 codegraph view --max-nodes 2000
