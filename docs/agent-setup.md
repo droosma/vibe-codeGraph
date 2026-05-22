@@ -370,6 +370,8 @@ CodeGraph ships with APM primitives in the `.apm/` directory:
 | **Instruction** | `.apm/instructions/codegraph.instructions.md` | Teaches agents when and how to use CodeGraph |
 | **Skill** | `.apm/skills/code-explorer/SKILL.md` | Explore C# codebase structure via the semantic graph |
 
+The instruction file uses `applyTo: "**/*.cs"` frontmatter so APM injects it automatically whenever the agent is working in a C# file context — you don't need to invoke it manually.
+
 To install CodeGraph's agent primitives from the repository:
 
 ```bash
