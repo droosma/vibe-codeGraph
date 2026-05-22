@@ -7,7 +7,7 @@ namespace CodeGraph.Query.OutputFormatters;
 
 public static class CompactFormatter
 {
-    public static string Format(QueryResult result, bool includeSource = false, bool includeDocs = true)
+    public static string Format(QueryResult result, bool includeSource = false, bool includeDocs = true, int sourceMaxLines = 20)
     {
         var sb = new StringBuilder();
 
@@ -42,7 +42,8 @@ public static class CompactFormatter
                 result,
                 prefix,
                 includeSource,
-                includeDocs && string.Equals(targetNode.Id, docCommentNodeId, StringComparison.Ordinal));
+                includeDocs && string.Equals(targetNode.Id, docCommentNodeId, StringComparison.Ordinal),
+                sourceMaxLines);
         }
 
         // Format remaining nodes (non-target matched)
@@ -76,7 +77,7 @@ public static class CompactFormatter
         return sb.ToString().TrimEnd();
     }
 
-    private static void AppendNodeBlock(StringBuilder sb, GraphNode node, HashSet<string> targetIds, QueryResult result, string prefix, bool includeSource, bool showDocComment)
+    private static void AppendNodeBlock(StringBuilder sb, GraphNode node, HashSet<string> targetIds, QueryResult result, string prefix, bool includeSource, bool showDocComment, int sourceMaxLines)
     {
         // Node header: Name [kind, file:lines]
         var shortId = StripPrefix(node.Id, prefix);
@@ -88,7 +89,7 @@ public static class CompactFormatter
         sb.AppendLine($"## {shortId} [{node.Kind.ToString().ToLowerInvariant()}{fileInfo}]{inlineComment}");
 
         if (includeSource)
-            AppendSourceSnippet(sb, node);
+            AppendSourceSnippet(sb, node, sourceMaxLines);
 
         // Group outgoing edges by type
         var outgoing = result.Edges
@@ -129,7 +130,7 @@ public static class CompactFormatter
         sb.AppendLine();
     }
 
-    private static void AppendSourceSnippet(StringBuilder sb, GraphNode node)
+    private static void AppendSourceSnippet(StringBuilder sb, GraphNode node, int sourceMaxLines)
     {
         if (string.IsNullOrEmpty(node.FilePath) || node.StartLine <= 0 || node.EndLine <= 0)
         {
@@ -153,9 +154,8 @@ public static class CompactFormatter
             if (lines.Count == 0)
                 return;
 
+            var maxLines = Math.Max(1, sourceMaxLines);
             sb.AppendLine($"  ```csharp  // {node.FilePath}:{node.StartLine}-{node.EndLine}");
-            const int maxLines = 20;
-            const int previewLines = 15;
             if (lines.Count <= maxLines)
             {
                 foreach (var line in lines)
@@ -163,9 +163,9 @@ public static class CompactFormatter
             }
             else
             {
-                foreach (var line in lines.Take(previewLines))
+                foreach (var line in lines.Take(maxLines))
                     sb.AppendLine($"  {line}");
-                sb.AppendLine($"  // ... truncated ({lines.Count - previewLines} more lines) — read {node.FilePath}:{node.StartLine + previewLines}-{node.EndLine} for full source");
+                sb.AppendLine($"  // ... truncated ({lines.Count - maxLines} more lines) — read {node.FilePath}:{node.StartLine + maxLines}-{node.EndLine} for full source");
             }
             sb.AppendLine("  ```");
         }

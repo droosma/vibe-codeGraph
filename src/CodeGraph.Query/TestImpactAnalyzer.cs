@@ -17,11 +17,19 @@ public class TestImpactAnalyzer
         foreach (var edge in edges)
         {
             if (!_incoming.TryGetValue(edge.ToId, out var inList))
-            { inList = new List<GraphEdge>(); _incoming[edge.ToId] = inList; }
+            {
+                inList = new List<GraphEdge>();
+                _incoming[edge.ToId] = inList;
+            }
+
             inList.Add(edge);
 
             if (!_outgoing.TryGetValue(edge.FromId, out var outList))
-            { outList = new List<GraphEdge>(); _outgoing[edge.FromId] = outList; }
+            {
+                outList = new List<GraphEdge>();
+                _outgoing[edge.FromId] = outList;
+            }
+
             outList.Add(edge);
         }
     }
@@ -32,65 +40,77 @@ public class TestImpactAnalyzer
             .Where(n => n.Id.Equals(pattern, StringComparison.OrdinalIgnoreCase)
                 || n.Id.EndsWith("." + pattern, StringComparison.OrdinalIgnoreCase)
                 || n.Name.Equals(pattern, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(n => n.Id, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         if (targetNodes.Count == 0)
-            return new TestImpactResult(pattern, null, new List<TestCoverage>(),
-                new List<TestCoverage>(), new List<UncoveredCaller>(), "");
+            return new TestImpactResult(pattern, null, new List<TestCoverage>(), new List<TestCoverage>(), new List<UncoveredCaller>(), string.Empty);
 
         var target = targetNodes[0];
         var directTests = new List<TestCoverage>();
         var indirectTests = new List<TestCoverage>();
         var uncoveredCallers = new List<UncoveredCaller>();
+        var seenDirectTests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenIndirectTests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // Direct coverage: CoveredBy edges from the target node
         if (_outgoing.TryGetValue(target.Id, out var targetOutEdges))
         {
-            foreach (var edge in targetOutEdges.Where(e => e.Type == EdgeType.CoveredBy))
+            foreach (var edge in targetOutEdges.Where(e => e.Type == EdgeType.CoveredBy).OrderBy(e => e.ToId, StringComparer.OrdinalIgnoreCase))
             {
-                if (_nodes.TryGetValue(edge.ToId, out var testNode))
-                    directTests.Add(new TestCoverage(testNode, new List<GraphNode> { target }));
+                if (!_nodes.TryGetValue(edge.ToId, out var testNode) || !seenDirectTests.Add(testNode.Id))
+                    continue;
+
+                directTests.Add(new TestCoverage(testNode, new List<GraphNode> { target }));
             }
         }
 
-        // BFS backward through Calls edges, checking CoveredBy at each level
-        var visited = new HashSet<string> { target.Id };
-        var currentLevel = new HashSet<string> { target.Id };
-        var parentMap = new Dictionary<string, string>();
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { target.Id };
+        var currentLevel = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { target.Id };
+        var parentMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         for (var depth = 1; depth <= maxDepth; depth++)
         {
-            var nextLevel = new HashSet<string>();
+            var nextLevel = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var nodeId in currentLevel)
             {
-                if (!_incoming.TryGetValue(nodeId, out var inEdges)) continue;
+                if (!_incoming.TryGetValue(nodeId, out var inEdges))
+                    continue;
 
-                foreach (var edge in inEdges.Where(e => e.Type == EdgeType.Calls))
+                foreach (var edge in inEdges.Where(e => e.Type == EdgeType.Calls).OrderBy(e => e.FromId, StringComparer.OrdinalIgnoreCase))
                 {
-                    if (!visited.Add(edge.FromId)) continue;
+                    if (!visited.Add(edge.FromId))
+                        continue;
+
                     nextLevel.Add(edge.FromId);
                     parentMap[edge.FromId] = nodeId;
                 }
             }
 
-            if (nextLevel.Count == 0) break;
+            if (nextLevel.Count == 0)
+                break;
 
-            foreach (var callerId in nextLevel)
+            foreach (var callerId in nextLevel.OrderBy(id => id, StringComparer.OrdinalIgnoreCase))
             {
-                if (!_nodes.TryGetValue(callerId, out var callerNode)) continue;
+                if (!_nodes.TryGetValue(callerId, out var callerNode))
+                    continue;
 
                 var hasCoverage = false;
                 if (_outgoing.TryGetValue(callerId, out var callerOutEdges))
                 {
-                    foreach (var edge in callerOutEdges.Where(e => e.Type == EdgeType.CoveredBy))
+                    foreach (var edge in callerOutEdges.Where(e => e.Type == EdgeType.CoveredBy).OrderBy(e => e.ToId, StringComparer.OrdinalIgnoreCase))
                     {
-                        if (_nodes.TryGetValue(edge.ToId, out var testNode))
+                        if (!_nodes.TryGetValue(edge.ToId, out var testNode))
+                            continue;
+
+                        if (seenDirectTests.Contains(testNode.Id) || !seenIndirectTests.Add(testNode.Id))
                         {
-                            var path = BuildPath(callerId, target.Id, parentMap);
-                            indirectTests.Add(new TestCoverage(testNode, path));
                             hasCoverage = true;
+                            continue;
                         }
+
+                        indirectTests.Add(new TestCoverage(testNode, BuildPath(callerId, target.Id, parentMap)));
+                        hasCoverage = true;
                     }
                 }
 
@@ -114,8 +134,10 @@ public class TestImpactAnalyzer
         {
             if (_nodes.TryGetValue(current, out var node))
                 path.Add(node);
+
             if (!parentMap.TryGetValue(current, out var next))
                 break;
+
             current = next;
         }
 
@@ -128,9 +150,10 @@ public class TestImpactAnalyzer
     private static string BuildTestCommand(List<TestCoverage> directTests, List<TestCoverage> indirectTests)
     {
         var allTests = directTests.Concat(indirectTests).ToList();
-        if (allTests.Count == 0) return "";
+        if (allTests.Count == 0)
+            return string.Empty;
 
-        var classNames = new HashSet<string>();
+        var classNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var test in allTests)
         {
             var className = GetTestClassName(test.TestNode);
@@ -138,9 +161,10 @@ public class TestImpactAnalyzer
                 classNames.Add(className);
         }
 
-        if (classNames.Count == 0) return "";
+        if (classNames.Count == 0)
+            return string.Empty;
 
-        var filter = string.Join("|", classNames.Select(c => $"FullyQualifiedName~{c}"));
+        var filter = string.Join("|", classNames.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).Select(c => $"FullyQualifiedName~{c}"));
         return $"dotnet test --filter \"{filter}\"";
     }
 
@@ -151,6 +175,7 @@ public class TestImpactAnalyzer
             var parts = testNode.ContainingTypeId.Split('.');
             return parts[^1];
         }
+
         return testNode.Name;
     }
 }
@@ -161,7 +186,10 @@ public record TestImpactResult(
     List<TestCoverage> DirectTests,
     List<TestCoverage> IndirectTests,
     List<UncoveredCaller> UncoveredCallers,
-    string SuggestedTestCommand);
+    string SuggestedTestCommand)
+{
+    public bool HasTests => DirectTests.Count > 0 || IndirectTests.Count > 0;
+};
 
 public record TestCoverage(
     GraphNode TestNode,

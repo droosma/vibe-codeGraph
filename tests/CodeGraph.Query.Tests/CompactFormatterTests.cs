@@ -1,3 +1,4 @@
+using System.Text;
 using CodeGraph.Core.Models;
 using CodeGraph.Query.OutputFormatters;
 
@@ -623,6 +624,51 @@ public class CompactFormatterTests
 
         Assert.DoesNotContain("//", output);
         Assert.DoesNotContain("Does important stuff.", output);
+    }
+
+    [Fact]
+    public void Format_IncludeSource_UsesRequestedSourceMaxLines()
+    {
+        var filePath = Path.Combine(AppContext.BaseDirectory, $"CompactFormatterTests_{Guid.NewGuid():N}.cs");
+        File.WriteAllText(filePath, string.Join(Environment.NewLine, Enumerable.Range(1, 6).Select(i => $"line{i}")), Encoding.UTF8);
+
+        try
+        {
+            var target = new GraphNode
+            {
+                Id = "MyApp.Services.OrderService.PlaceOrder",
+                Name = "PlaceOrder",
+                Kind = NodeKind.Method,
+                FilePath = filePath,
+                StartLine = 1,
+                EndLine = 6,
+                Accessibility = Accessibility.Public
+            };
+
+            var result = new QueryResult
+            {
+                TargetNode = target,
+                MatchedNodes = new List<GraphNode> { target },
+                Nodes = new Dictionary<string, GraphNode> { [target.Id] = target },
+                Edges = new List<GraphEdge>(),
+                Metadata = new GraphMetadata { SchemaVersion = 1, GeneratedAt = DateTime.UtcNow, Solution = "T.sln", SolutionName = "T", CommitHash = "abc", Branch = "main", ProjectsIndexed = Array.Empty<string>() },
+                WasTruncated = false,
+                TotalMatchCount = 1
+            };
+
+            var output = CompactFormatter.Format(result, includeSource: true, sourceMaxLines: 3);
+
+            Assert.Contains("line1", output);
+            Assert.Contains("line2", output);
+            Assert.Contains("line3", output);
+            Assert.DoesNotContain("line4", output);
+            Assert.Contains("truncated (3 more lines)", output);
+        }
+        finally
+        {
+            if (File.Exists(filePath))
+                File.Delete(filePath);
+        }
     }
 
     private static QueryResult BuildSimpleResult()

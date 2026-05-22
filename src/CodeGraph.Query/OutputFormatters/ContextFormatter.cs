@@ -16,7 +16,7 @@ public static class ContextFormatter
         [EdgeType.References] = "References (outgoing)",
         [EdgeType.Contains] = "Contains",
         [EdgeType.Overrides] = "Overrides",
-        [EdgeType.HandlesRoute] = "Handles route",
+        [EdgeType.HandlesRoute] = "Handled by",
         [EdgeType.BindsConfiguration] = "Binds configuration",
         [EdgeType.UsesMiddleware] = "Uses middleware",
         [EdgeType.MapsToTable] = "Maps to table",
@@ -35,7 +35,7 @@ public static class ContextFormatter
         [EdgeType.References] = "Referenced by (incoming)",
         [EdgeType.Contains] = "Contained in",
         [EdgeType.Overrides] = "Overridden by",
-        [EdgeType.HandlesRoute] = "Route handled by",
+        [EdgeType.HandlesRoute] = "Handles route",
         [EdgeType.BindsConfiguration] = "Configuration bound by",
         [EdgeType.UsesMiddleware] = "Middleware used by",
         [EdgeType.MapsToTable] = "Table mapped from",
@@ -43,7 +43,7 @@ public static class ContextFormatter
         [EdgeType.ConfiguredBy] = "Configures"
     };
 
-    public static string Format(QueryResult result, string? queryDescription = null, bool includeSource = false)
+    public static string Format(QueryResult result, string? queryDescription = null, bool includeSource = false, int sourceMaxLines = 20)
     {
         var sb = new StringBuilder();
 
@@ -71,7 +71,7 @@ public static class ContextFormatter
         if (result.TargetNode is not null)
         {
             sb.AppendLine("### Target");
-            AppendNodeDetail(sb, result.TargetNode, includeSource: includeSource);
+            AppendNodeDetail(sb, result.TargetNode, includeSource: includeSource, sourceMaxLines: sourceMaxLines);
             sb.AppendLine();
         }
         else if (result.MatchedNodes.Count > 0)
@@ -79,7 +79,7 @@ public static class ContextFormatter
             sb.AppendLine($"### Matched Nodes ({result.MatchedNodes.Count})");
             foreach (var node in result.MatchedNodes)
             {
-                AppendNodeDetail(sb, node, includeSource: includeSource);
+                AppendNodeDetail(sb, node, includeSource: includeSource, sourceMaxLines: sourceMaxLines);
             }
             sb.AppendLine();
         }
@@ -105,7 +105,7 @@ public static class ContextFormatter
             foreach (var edge in group)
             {
                 if (result.Nodes.TryGetValue(edge.ToId, out var node))
-                    AppendNodeDetail(sb, node, edge, includeSource);
+                    AppendNodeDetail(sb, node, edge, includeSource, sourceMaxLines);
                 else
                     sb.AppendLine($"- {edge.ToId}");
             }
@@ -125,7 +125,7 @@ public static class ContextFormatter
             foreach (var edge in group)
             {
                 if (result.Nodes.TryGetValue(edge.FromId, out var node))
-                    AppendNodeDetail(sb, node, edge, includeSource);
+                    AppendNodeDetail(sb, node, edge, includeSource, sourceMaxLines);
                 else
                     sb.AppendLine($"- {edge.FromId}");
             }
@@ -146,7 +146,7 @@ public static class ContextFormatter
         return sb.ToString().TrimEnd();
     }
 
-    private static void AppendNodeDetail(StringBuilder sb, GraphNode node, GraphEdge? edge = null, bool includeSource = false)
+    private static void AppendNodeDetail(StringBuilder sb, GraphNode node, GraphEdge? edge = null, bool includeSource = false, int sourceMaxLines = 20)
     {
         sb.AppendLine($"- {node.Id}");
 
@@ -166,10 +166,10 @@ public static class ContextFormatter
             sb.AppendLine($"  Confidence: {edge.Confidence}");
 
         if (includeSource)
-            AppendSourceSnippet(sb, node);
+            AppendSourceSnippet(sb, node, sourceMaxLines);
     }
 
-    private static void AppendSourceSnippet(StringBuilder sb, GraphNode node)
+    private static void AppendSourceSnippet(StringBuilder sb, GraphNode node, int sourceMaxLines)
     {
         if (string.IsNullOrEmpty(node.FilePath) || node.StartLine <= 0 || node.EndLine <= 0)
             return;
@@ -187,9 +187,8 @@ public static class ContextFormatter
             if (lines.Count == 0)
                 return;
 
+            var maxLines = Math.Max(1, sourceMaxLines);
             sb.AppendLine("  ```csharp");
-            const int maxLines = 20;
-            const int previewLines = 15;
             if (lines.Count <= maxLines)
             {
                 foreach (var line in lines)
@@ -197,9 +196,9 @@ public static class ContextFormatter
             }
             else
             {
-                foreach (var line in lines.Take(previewLines))
+                foreach (var line in lines.Take(maxLines))
                     sb.AppendLine($"  {line}");
-                sb.AppendLine($"  // ... ({lines.Count - previewLines} more lines)");
+                sb.AppendLine($"  // ... ({lines.Count - maxLines} more lines)");
             }
             sb.AppendLine("  ```");
         }

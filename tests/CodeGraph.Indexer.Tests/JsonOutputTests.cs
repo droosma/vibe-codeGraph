@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeGraph.Core.Models;
 using CodeGraph.Query;
+using CodeGraph.Query.OutputFormatters;
 
 namespace CodeGraph.Indexer.Tests;
 
@@ -328,44 +329,49 @@ public class JsonOutputTests
     [Fact]
     public void TestImpactResult_JsonOutput_ContainsExpectedFields()
     {
-        var target = MakeNode("MyApp.Svc.Run", NodeKind.Method);
+        var target = MakeNode("MyApp.Svc.Run", NodeKind.Method, "src/Svc.cs");
+        var directTestNode = new GraphNode
+        {
+            Id = "MyApp.Tests.ServiceTests.ShouldRunDirectly",
+            Name = "ShouldRunDirectly",
+            Kind = NodeKind.Method,
+            FilePath = "Tests/ServiceTests.cs",
+            ContainingTypeId = "MyApp.Tests.ServiceTests",
+            Accessibility = Accessibility.Public
+        };
+        var transitiveTestNode = new GraphNode
+        {
+            Id = "MyApp.Tests.IntegrationTests.ShouldRunTransitively",
+            Name = "ShouldRunTransitively",
+            Kind = NodeKind.Method,
+            FilePath = "Tests/Integration/WorkflowTests.cs",
+            ContainingTypeId = "MyApp.Tests.IntegrationTests",
+            Accessibility = Accessibility.Public
+        };
         var result = new TestImpactResult(
             "MyApp.Svc.Run",
             target,
             new List<TestCoverage>
             {
-                new(MakeNode("Tests.DirectTest"), new List<GraphNode>())
+                new(directTestNode, new List<GraphNode> { target })
             },
             new List<TestCoverage>
             {
-                new(MakeNode("Tests.IndirectTest"), new List<GraphNode> { MakeNode("MyApp.Ctrl") })
+                new(transitiveTestNode, new List<GraphNode> { MakeNode("MyApp.Workflow.Execute", NodeKind.Method), target })
             },
-            new List<UncoveredCaller>
-            {
-                new(MakeNode("MyApp.Orphan"), 2)
-            },
-            "dotnet test --filter Tests.DirectTest");
+            new List<UncoveredCaller>(),
+            string.Empty);
 
-        var jsonObj = new
-        {
-            pattern = result.Pattern,
-            target = result.Target is not null ? new { id = result.Target.Id, kind = result.Target.Kind.ToString().ToLowerInvariant() } : null,
-            directTests = result.DirectTests.Select(t => new { testId = t.TestNode.Id, path = t.PathFromTarget.Select(n => n.Id).ToList() }),
-            indirectTests = result.IndirectTests.Select(t => new { testId = t.TestNode.Id, path = t.PathFromTarget.Select(n => n.Id).ToList() }),
-            uncoveredCallers = result.UncoveredCallers.Select(c => new { callerId = c.Caller.Id, depth = c.Depth }),
-            suggestedTestCommand = result.SuggestedTestCommand
-        };
-
-        var json = JsonSerializer.Serialize(jsonObj, JsonOptions);
+        var json = TestImpactFormatter.FormatJson(result, JsonOptions);
         var doc = JsonDocument.Parse(json);
 
         Assert.Equal("MyApp.Svc.Run", doc.RootElement.GetProperty("pattern").GetString());
         Assert.Equal("method", doc.RootElement.GetProperty("target").GetProperty("kind").GetString());
         Assert.Equal(1, doc.RootElement.GetProperty("directTests").GetArrayLength());
-        Assert.Equal(1, doc.RootElement.GetProperty("indirectTests").GetArrayLength());
-        Assert.Equal(1, doc.RootElement.GetProperty("uncoveredCallers").GetArrayLength());
-        Assert.Equal(2, doc.RootElement.GetProperty("uncoveredCallers")[0].GetProperty("depth").GetInt32());
-        Assert.Equal("dotnet test --filter Tests.DirectTest", doc.RootElement.GetProperty("suggestedTestCommand").GetString());
+        Assert.Equal("Tests/ServiceTests.cs", doc.RootElement.GetProperty("directTests")[0].GetProperty("filePath").GetString());
+        Assert.Equal(1, doc.RootElement.GetProperty("transitiveTests").GetArrayLength());
+        Assert.Equal(2, doc.RootElement.GetProperty("transitiveTests")[0].GetProperty("path").GetArrayLength());
+        Assert.Equal("Workflow.Execute -> Svc.Run", doc.RootElement.GetProperty("transitiveTests")[0].GetProperty("via").GetString());
     }
 
     #endregion

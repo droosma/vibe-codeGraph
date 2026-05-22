@@ -5,94 +5,146 @@ namespace CodeGraph.Query.Tests;
 
 public class TestImpactAnalyzerTests
 {
-    /// <summary>
-    /// Builds a graph with:
-    /// - ProductionMethod1 (target)
-    /// - ProductionMethod2 → calls ProductionMethod1, covered by TestMethod2
-    /// - ProductionMethod3 → calls ProductionMethod1, has NO test coverage (uncovered caller)
-    /// - TestMethod1 → covers ProductionMethod1 (direct CoveredBy)
-    /// - TestMethod2 → covers ProductionMethod2 (indirect)
-    /// </summary>
+    private static GraphNode MethodNode(string id, string name, string filePath, string? containingTypeId = null) => new()
+    {
+        Id = id,
+        Name = name,
+        Kind = NodeKind.Method,
+        FilePath = filePath,
+        ContainingTypeId = containingTypeId,
+        Accessibility = Accessibility.Public
+    };
+
     private static (Dictionary<string, GraphNode> Nodes, List<GraphEdge> Edges) BuildTestGraph()
     {
         var nodes = new Dictionary<string, GraphNode>
         {
-            ["App.ProductionMethod1"] = new GraphNode
-                { Id = "App.ProductionMethod1", Name = "ProductionMethod1", Kind = NodeKind.Method },
-            ["App.ProductionMethod2"] = new GraphNode
-                { Id = "App.ProductionMethod2", Name = "ProductionMethod2", Kind = NodeKind.Method },
-            ["App.ProductionMethod3"] = new GraphNode
-                { Id = "App.ProductionMethod3", Name = "ProductionMethod3", Kind = NodeKind.Method },
-            ["App.Tests.TestMethod1"] = new GraphNode
-            {
-                Id = "App.Tests.TestMethod1", Name = "TestMethod1", Kind = NodeKind.Method,
-                ContainingTypeId = "App.Tests.TestClass1"
-            },
-            ["App.Tests.TestMethod2"] = new GraphNode
-            {
-                Id = "App.Tests.TestMethod2", Name = "TestMethod2", Kind = NodeKind.Method,
-                ContainingTypeId = "App.Tests.TestClass2"
-            },
+            ["MyApp.OrderService.PlaceOrder"] = MethodNode(
+                "MyApp.OrderService.PlaceOrder",
+                "PlaceOrder",
+                "src/OrderService.cs",
+                "MyApp.OrderService"),
+            ["MyApp.OrderWorkflow.Execute"] = MethodNode(
+                "MyApp.OrderWorkflow.Execute",
+                "Execute",
+                "src/OrderWorkflow.cs",
+                "MyApp.OrderWorkflow"),
+            ["MyApp.BackgroundOrderProcessor.ProcessPending"] = MethodNode(
+                "MyApp.BackgroundOrderProcessor.ProcessPending",
+                "ProcessPending",
+                "src/BackgroundOrderProcessor.cs",
+                "MyApp.BackgroundOrderProcessor"),
+            ["MyApp.Tests.OrderServiceTests.PlaceOrder_ValidOrder_ReturnsSuccess"] = MethodNode(
+                "MyApp.Tests.OrderServiceTests.PlaceOrder_ValidOrder_ReturnsSuccess",
+                "PlaceOrder_ValidOrder_ReturnsSuccess",
+                "Tests/OrderServiceTests.cs",
+                "MyApp.Tests.OrderServiceTests"),
+            ["MyApp.Tests.IntegrationTests.FullOrderFlow"] = MethodNode(
+                "MyApp.Tests.IntegrationTests.FullOrderFlow",
+                "FullOrderFlow",
+                "Tests/Integration/OrderFlowTests.cs",
+                "MyApp.Tests.IntegrationTests")
         };
 
         var edges = new List<GraphEdge>
         {
-            new GraphEdge { FromId = "App.ProductionMethod2", ToId = "App.ProductionMethod1", Type = EdgeType.Calls },
-            new GraphEdge { FromId = "App.ProductionMethod3", ToId = "App.ProductionMethod1", Type = EdgeType.Calls },
-            new GraphEdge
-            {
-                FromId = "App.ProductionMethod1", ToId = "App.Tests.TestMethod1", Type = EdgeType.CoveredBy
-            },
-            new GraphEdge
-            {
-                FromId = "App.ProductionMethod2", ToId = "App.Tests.TestMethod2", Type = EdgeType.CoveredBy
-            },
+            new() { FromId = "MyApp.OrderWorkflow.Execute", ToId = "MyApp.OrderService.PlaceOrder", Type = EdgeType.Calls },
+            new() { FromId = "MyApp.BackgroundOrderProcessor.ProcessPending", ToId = "MyApp.OrderService.PlaceOrder", Type = EdgeType.Calls },
+            new() { FromId = "MyApp.OrderService.PlaceOrder", ToId = "MyApp.Tests.OrderServiceTests.PlaceOrder_ValidOrder_ReturnsSuccess", Type = EdgeType.CoveredBy },
+            new() { FromId = "MyApp.OrderWorkflow.Execute", ToId = "MyApp.Tests.IntegrationTests.FullOrderFlow", Type = EdgeType.CoveredBy }
         };
 
         return (nodes, edges);
     }
 
     [Fact]
-    public void Analyze_DirectCoverage_Found()
+    public void Analyze_FindsDirectAndTransitiveCoverage()
     {
         var (nodes, edges) = BuildTestGraph();
         var analyzer = new TestImpactAnalyzer(nodes, edges);
 
-        var result = analyzer.Analyze("App.ProductionMethod1");
+        var result = analyzer.Analyze("MyApp.OrderService.PlaceOrder");
 
         Assert.NotNull(result.Target);
-        Assert.Equal("App.ProductionMethod1", result.Target!.Id);
+        Assert.Equal("MyApp.OrderService.PlaceOrder", result.Target!.Id);
         Assert.Single(result.DirectTests);
-        Assert.Equal("App.Tests.TestMethod1", result.DirectTests[0].TestNode.Id);
-    }
-
-    [Fact]
-    public void Analyze_IndirectCoverage_ViaCallers()
-    {
-        var (nodes, edges) = BuildTestGraph();
-        var analyzer = new TestImpactAnalyzer(nodes, edges);
-
-        var result = analyzer.Analyze("App.ProductionMethod1");
-
+        Assert.Equal("MyApp.Tests.OrderServiceTests.PlaceOrder_ValidOrder_ReturnsSuccess", result.DirectTests[0].TestNode.Id);
         Assert.Single(result.IndirectTests);
-        Assert.Equal("App.Tests.TestMethod2", result.IndirectTests[0].TestNode.Id);
-        // Path should go from caller to target
-        Assert.Equal(2, result.IndirectTests[0].PathFromTarget.Count);
-        Assert.Equal("App.ProductionMethod2", result.IndirectTests[0].PathFromTarget[0].Id);
-        Assert.Equal("App.ProductionMethod1", result.IndirectTests[0].PathFromTarget[1].Id);
+        Assert.Equal("MyApp.Tests.IntegrationTests.FullOrderFlow", result.IndirectTests[0].TestNode.Id);
+        Assert.Collection(result.IndirectTests[0].PathFromTarget,
+            node => Assert.Equal("MyApp.OrderWorkflow.Execute", node.Id),
+            node => Assert.Equal("MyApp.OrderService.PlaceOrder", node.Id));
     }
 
     [Fact]
-    public void Analyze_UncoveredCallers_Identified()
+    public void Analyze_DepthLimit_RestrictsTransitiveCoverage()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Target"] = MethodNode("Target", "Target", "src/Target.cs"),
+            ["Caller"] = MethodNode("Caller", "Caller", "src/Caller.cs"),
+            ["Gateway"] = MethodNode("Gateway", "Gateway", "src/Gateway.cs"),
+            ["GatewayTests.ShouldReachTarget"] = MethodNode(
+                "GatewayTests.ShouldReachTarget",
+                "ShouldReachTarget",
+                "Tests/GatewayTests.cs",
+                "GatewayTests")
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "Caller", ToId = "Target", Type = EdgeType.Calls },
+            new() { FromId = "Gateway", ToId = "Caller", Type = EdgeType.Calls },
+            new() { FromId = "Gateway", ToId = "GatewayTests.ShouldReachTarget", Type = EdgeType.CoveredBy }
+        };
+        var analyzer = new TestImpactAnalyzer(nodes, edges);
+
+        var shallow = analyzer.Analyze("Target", maxDepth: 1);
+        var deep = analyzer.Analyze("Target", maxDepth: 2);
+
+        Assert.Empty(shallow.IndirectTests);
+        Assert.Single(deep.IndirectTests);
+        Assert.Equal("GatewayTests.ShouldReachTarget", deep.IndirectTests[0].TestNode.Id);
+    }
+
+    [Fact]
+    public void Analyze_DoesNotDuplicateDirectTestsInTransitiveResults()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Target"] = MethodNode("Target", "Target", "src/Target.cs"),
+            ["Caller"] = MethodNode("Caller", "Caller", "src/Caller.cs"),
+            ["Tests.TargetTests.ShouldRun"] = MethodNode(
+                "Tests.TargetTests.ShouldRun",
+                "ShouldRun",
+                "Tests/TargetTests.cs",
+                "Tests.TargetTests")
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "Caller", ToId = "Target", Type = EdgeType.Calls },
+            new() { FromId = "Target", ToId = "Tests.TargetTests.ShouldRun", Type = EdgeType.CoveredBy },
+            new() { FromId = "Caller", ToId = "Tests.TargetTests.ShouldRun", Type = EdgeType.CoveredBy }
+        };
+        var analyzer = new TestImpactAnalyzer(nodes, edges);
+
+        var result = analyzer.Analyze("Target");
+
+        Assert.Single(result.DirectTests);
+        Assert.Empty(result.IndirectTests);
+    }
+
+    [Theory]
+    [InlineData("PlaceOrder")]
+    [InlineData("OrderService.PlaceOrder")]
+    public void Analyze_MatchesByNameAndSuffix(string pattern)
     {
         var (nodes, edges) = BuildTestGraph();
         var analyzer = new TestImpactAnalyzer(nodes, edges);
 
-        var result = analyzer.Analyze("App.ProductionMethod1");
+        var result = analyzer.Analyze(pattern);
 
-        Assert.Single(result.UncoveredCallers);
-        Assert.Equal("App.ProductionMethod3", result.UncoveredCallers[0].Caller.Id);
-        Assert.Equal(1, result.UncoveredCallers[0].Depth);
+        Assert.NotNull(result.Target);
+        Assert.Equal("MyApp.OrderService.PlaceOrder", result.Target!.Id);
     }
 
     [Fact]
@@ -101,141 +153,58 @@ public class TestImpactAnalyzerTests
         var (nodes, edges) = BuildTestGraph();
         var analyzer = new TestImpactAnalyzer(nodes, edges);
 
-        var result = analyzer.Analyze("NonExistent");
+        var result = analyzer.Analyze("MissingSymbol");
 
         Assert.Null(result.Target);
         Assert.Empty(result.DirectTests);
         Assert.Empty(result.IndirectTests);
-        Assert.Empty(result.UncoveredCallers);
-        Assert.Equal("", result.SuggestedTestCommand);
     }
 
     [Fact]
-    public void Analyze_NoCoverage_AllCallersUncovered()
-    {
-        var nodes = new Dictionary<string, GraphNode>
-        {
-            ["App.Target"] = new GraphNode { Id = "App.Target", Name = "Target", Kind = NodeKind.Method },
-            ["App.Caller1"] = new GraphNode { Id = "App.Caller1", Name = "Caller1", Kind = NodeKind.Method },
-            ["App.Caller2"] = new GraphNode { Id = "App.Caller2", Name = "Caller2", Kind = NodeKind.Method },
-        };
-        var edges = new List<GraphEdge>
-        {
-            new GraphEdge { FromId = "App.Caller1", ToId = "App.Target", Type = EdgeType.Calls },
-            new GraphEdge { FromId = "App.Caller2", ToId = "App.Target", Type = EdgeType.Calls },
-        };
-        var analyzer = new TestImpactAnalyzer(nodes, edges);
-
-        var result = analyzer.Analyze("App.Target");
-
-        Assert.NotNull(result.Target);
-        Assert.Empty(result.DirectTests);
-        Assert.Empty(result.IndirectTests);
-        Assert.Equal(2, result.UncoveredCallers.Count);
-        Assert.Equal("", result.SuggestedTestCommand);
-    }
-
-    [Fact]
-    public void Analyze_TestCommand_CorrectFilterSyntax()
+    public void Format_ContextOutput_IncludesPathsAndFiles()
     {
         var (nodes, edges) = BuildTestGraph();
         var analyzer = new TestImpactAnalyzer(nodes, edges);
+        var result = analyzer.Analyze("MyApp.OrderService.PlaceOrder");
 
-        var result = analyzer.Analyze("App.ProductionMethod1");
+        var output = TestImpactFormatter.Format(result, TestImpactOutputFormat.Context);
 
-        Assert.StartsWith("dotnet test --filter", result.SuggestedTestCommand);
-        Assert.Contains("FullyQualifiedName~TestClass1", result.SuggestedTestCommand);
-        Assert.Contains("FullyQualifiedName~TestClass2", result.SuggestedTestCommand);
-        Assert.Contains("|", result.SuggestedTestCommand);
+        Assert.Contains("Affected tests for MyApp.OrderService.PlaceOrder:", output);
+        Assert.Contains("Direct coverage (tests that call this method):", output);
+        Assert.Contains("OrderServiceTests.PlaceOrder_ValidOrder_ReturnsSuccess [Tests/OrderServiceTests.cs]", output);
+        Assert.Contains("Transitive (tests reaching through call chain):", output);
+        Assert.Contains("IntegrationTests.FullOrderFlow [Tests/Integration/OrderFlowTests.cs]", output);
+        Assert.Contains("via OrderWorkflow.Execute → OrderService.PlaceOrder", output);
     }
 
     [Fact]
-    public void Analyze_DepthLimiting_WorksCorrectly()
-    {
-        // Chain: A → B → C → Target, test covers A only
-        var nodes = new Dictionary<string, GraphNode>
-        {
-            ["Target"] = new GraphNode { Id = "Target", Name = "Target", Kind = NodeKind.Method },
-            ["C"] = new GraphNode { Id = "C", Name = "C", Kind = NodeKind.Method },
-            ["B"] = new GraphNode { Id = "B", Name = "B", Kind = NodeKind.Method },
-            ["A"] = new GraphNode { Id = "A", Name = "A", Kind = NodeKind.Method },
-            ["TestA"] = new GraphNode
-                { Id = "TestA", Name = "TestA", Kind = NodeKind.Method, ContainingTypeId = "ATests" },
-        };
-        var edges = new List<GraphEdge>
-        {
-            new GraphEdge { FromId = "C", ToId = "Target", Type = EdgeType.Calls },
-            new GraphEdge { FromId = "B", ToId = "C", Type = EdgeType.Calls },
-            new GraphEdge { FromId = "A", ToId = "B", Type = EdgeType.Calls },
-            new GraphEdge { FromId = "A", ToId = "TestA", Type = EdgeType.CoveredBy },
-        };
-
-        var analyzer = new TestImpactAnalyzer(nodes, edges);
-
-        // maxDepth=2 should NOT reach A (at depth 3)
-        var shallow = analyzer.Analyze("Target", maxDepth: 2);
-        Assert.Empty(shallow.IndirectTests);
-        Assert.Equal(2, shallow.UncoveredCallers.Count);
-
-        // maxDepth=3 should reach A
-        var deep = analyzer.Analyze("Target", maxDepth: 3);
-        Assert.Single(deep.IndirectTests);
-        Assert.Equal("TestA", deep.IndirectTests[0].TestNode.Id);
-    }
-
-    [Fact]
-    public void Analyze_MatchesByName()
+    public void Format_CompactOutput_IsConcise()
     {
         var (nodes, edges) = BuildTestGraph();
         var analyzer = new TestImpactAnalyzer(nodes, edges);
+        var result = analyzer.Analyze("MyApp.OrderService.PlaceOrder");
 
-        var result = analyzer.Analyze("ProductionMethod1");
+        var output = TestImpactFormatter.Format(result, TestImpactOutputFormat.Compact);
 
-        Assert.NotNull(result.Target);
-        Assert.Equal("App.ProductionMethod1", result.Target!.Id);
+        Assert.Contains("MyApp.OrderService.PlaceOrder", output);
+        Assert.Contains("direct: OrderServiceTests.PlaceOrder_ValidOrder_ReturnsSuccess", output);
+        Assert.Contains("transitive: IntegrationTests.FullOrderFlow via OrderWorkflow.Execute → OrderService.PlaceOrder", output);
+        Assert.DoesNotContain("Direct coverage (tests that call this method):", output);
     }
 
     [Fact]
-    public void Analyze_MatchesBySuffix()
+    public void Format_NoTestsFound_ShowsHelpfulMessage()
     {
-        var (nodes, edges) = BuildTestGraph();
-        var analyzer = new TestImpactAnalyzer(nodes, edges);
+        var result = new TestImpactResult(
+            "MyApp.OrderService.PlaceOrder",
+            MethodNode("MyApp.OrderService.PlaceOrder", "PlaceOrder", "src/OrderService.cs", "MyApp.OrderService"),
+            new List<TestCoverage>(),
+            new List<TestCoverage>(),
+            new List<UncoveredCaller>(),
+            string.Empty);
 
-        var result = analyzer.Analyze("ProductionMethod1");
+        var output = TestImpactFormatter.Format(result, TestImpactOutputFormat.Context);
 
-        Assert.NotNull(result.Target);
-        Assert.Single(result.DirectTests);
-    }
-
-    [Fact]
-    public void Formatter_SymbolNotFound_ShowsMessage()
-    {
-        var result = new TestImpactResult("Missing", null, new List<TestCoverage>(),
-            new List<TestCoverage>(), new List<UncoveredCaller>(), "");
-
-        var output = TestImpactFormatter.Format(result);
-
-        Assert.Contains("No nodes found matching 'Missing'", output);
-    }
-
-    [Fact]
-    public void Formatter_FullResult_ContainsAllSections()
-    {
-        var (nodes, edges) = BuildTestGraph();
-        var analyzer = new TestImpactAnalyzer(nodes, edges);
-        var result = analyzer.Analyze("App.ProductionMethod1");
-
-        var output = TestImpactFormatter.Format(result);
-
-        Assert.Contains("# Test impact for App.ProductionMethod1", output);
-        Assert.Contains("## Direct coverage (1 test)", output);
-        Assert.Contains("\u2713 App.Tests.TestMethod1", output);
-        Assert.Contains("## Indirect coverage (1 test)", output);
-        Assert.Contains("\u26a0 App.Tests.TestMethod2", output);
-        Assert.Contains("via:", output);
-        Assert.Contains("## Uncovered callers (1 path)", output);
-        Assert.Contains("\u2717 App.ProductionMethod3 [depth: 1]", output);
-        Assert.Contains("## Suggested test command", output);
-        Assert.Contains("dotnet test --filter", output);
+        Assert.Contains("No affected tests found for MyApp.OrderService.PlaceOrder.", output);
     }
 }
