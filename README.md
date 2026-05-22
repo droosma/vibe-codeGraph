@@ -665,7 +665,7 @@ codegraph view [options]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--graph-dir <path>` | Graph directory | `.codegraph` |
-| `--output <path>` | Write HTML to a specific file instead of a temp file | (temp file) |
+| `--output <path>`, `-o` | Write HTML to a specific file | `.codegraph/graph.html` |
 | `--max-nodes <n>` | Maximum nodes to render (smart-sampled when exceeded) | `5000` |
 | `--no-open` | Generate HTML but do not open in browser | `false` |
 
