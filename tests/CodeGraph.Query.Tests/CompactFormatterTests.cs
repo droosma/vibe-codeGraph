@@ -215,6 +215,57 @@ public class CompactFormatterTests
     }
 
     [Fact]
+    public void Format_XmlDocComment_ShowsSummaryOnlyInlineOnHeader()
+    {
+        var target = new GraphNode
+        {
+            Id = "A.Run", Name = "Run", Kind = NodeKind.Method,
+            DocComment = "<summary>Does important stuff.</summary><remarks>Extra detail.</remarks>",
+            Accessibility = Accessibility.Public
+        };
+        var result = new QueryResult
+        {
+            TargetNode = target,
+            MatchedNodes = new List<GraphNode> { target },
+            Nodes = new Dictionary<string, GraphNode> { [target.Id] = target },
+            Edges = new List<GraphEdge>(),
+            Metadata = new GraphMetadata { SchemaVersion = 1, GeneratedAt = DateTime.UtcNow, Solution = "T.sln", SolutionName = "T", CommitHash = "abc", Branch = "main", ProjectsIndexed = Array.Empty<string>() },
+            WasTruncated = false, TotalMatchCount = 1
+        };
+
+        var output = CompactFormatter.Format(result);
+
+        Assert.Contains("// Does important stuff.", output);
+        Assert.DoesNotContain("<summary>", output);
+        Assert.DoesNotContain("Extra detail.", output);
+    }
+
+    [Fact]
+    public void Format_LongDocComment_TruncatesInlineSummary()
+    {
+        var summary = new string('a', 140);
+        var target = new GraphNode
+        {
+            Id = "A.Run", Name = "Run", Kind = NodeKind.Method,
+            DocComment = $"<summary>{summary}</summary>", Accessibility = Accessibility.Public
+        };
+        var result = new QueryResult
+        {
+            TargetNode = target,
+            MatchedNodes = new List<GraphNode> { target },
+            Nodes = new Dictionary<string, GraphNode> { [target.Id] = target },
+            Edges = new List<GraphEdge>(),
+            Metadata = new GraphMetadata { SchemaVersion = 1, GeneratedAt = DateTime.UtcNow, Solution = "T.sln", SolutionName = "T", CommitHash = "abc", Branch = "main", ProjectsIndexed = Array.Empty<string>() },
+            WasTruncated = false, TotalMatchCount = 1
+        };
+
+        var output = CompactFormatter.Format(result);
+        var headerLine = output.Split('\n').First(l => l.StartsWith("## A.Run")).TrimEnd('\r');
+
+        Assert.EndsWith($"// {new string('a', 120)}…", headerLine);
+    }
+
+    [Fact]
     public void Format_IncomingEdgeFromTarget_NotDuplicated()
     {
         // When an edge is between two targets, incoming section should skip it
@@ -547,6 +598,31 @@ public class CompactFormatterTests
         var relatedLine = lines.FirstOrDefault(l => l.StartsWith("- ") && l.Contains("Reserve"));
         Assert.NotNull(relatedLine);
         Assert.DoesNotContain("Related comment.", relatedLine);
+    }
+
+    [Fact]
+    public void Format_NoDocs_OmitsDocCommentFromRootHeader()
+    {
+        var target = new GraphNode
+        {
+            Id = "A.Run", Name = "Run", Kind = NodeKind.Method,
+            DocComment = "<summary>Does important stuff.</summary>",
+            Accessibility = Accessibility.Public
+        };
+        var result = new QueryResult
+        {
+            TargetNode = target,
+            MatchedNodes = new List<GraphNode> { target },
+            Nodes = new Dictionary<string, GraphNode> { [target.Id] = target },
+            Edges = new List<GraphEdge>(),
+            Metadata = new GraphMetadata { SchemaVersion = 1, GeneratedAt = DateTime.UtcNow, Solution = "T.sln", SolutionName = "T", CommitHash = "abc", Branch = "main", ProjectsIndexed = Array.Empty<string>() },
+            WasTruncated = false, TotalMatchCount = 1
+        };
+
+        var output = CompactFormatter.Format(result, includeSource: false, includeDocs: false);
+
+        Assert.DoesNotContain("//", output);
+        Assert.DoesNotContain("Does important stuff.", output);
     }
 
     private static QueryResult BuildSimpleResult()
