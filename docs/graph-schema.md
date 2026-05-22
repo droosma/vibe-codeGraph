@@ -220,10 +220,10 @@ These edge types carry domain framework semantics via edge metadata.
 
 | Value | Description | Metadata keys | Example |
 |-------|-------------|---------------|---------|
-| `handlesRoute` | ASP.NET route handler mapping. | `httpMethod`, `route`, `fullRoute` | `OrderController.GetById` → `GET /api/orders/{id}` |
-| `bindsConfiguration` | Options/configuration section binding. | `section`, `registrationMethod` | `PaymentOptions` → `[Config:Payment:Gateway]` |
-| `usesMiddleware` | Middleware pipeline registration. | `pipelineOrder` | `Pipeline[1]` → `UseAuthentication` |
-| `mapsToTable` | EF Core entity-to-table mapping. | `tableName`, `schema` | `Order` → `[Table:Orders]` |
+| `handlesRoute` | ASP.NET route handler mapping. | `httpMethod`, `route`, `registrationFile` | `GET /api/orders/{id}` → `OrderController.GetById` |
+| `bindsConfiguration` | Options/configuration section binding. | `section`, `registrationMethod`, `registrationFile` | `PaymentOptions` → `[Config:Payment:Gateway]` |
+| `usesMiddleware` | Middleware pipeline registration. | `pipelineOrder`, `middlewareName` | `Pipeline[1]` → `UseAuthentication` |
+| `mapsToTable` | EF Core entity-to-table mapping. | `tableName` | `Order` → `[Table:Orders]` |
 | `navigatesTo` | EF Core entity navigation property. | `relationship`, `property` | `Order` → `OrderLine` (one-to-many) |
 | `configuredBy` | EF Core entity type configuration. | `configurationClass` | `Order` → `OrderConfiguration` |
 

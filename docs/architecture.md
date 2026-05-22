@@ -12,11 +12,15 @@ flowchart LR
     D --> E["SemanticPass"]
     E --> F["DiPass"]
     F --> G["TestCoveragePass"]
-    G --> H["GraphWriter"]
-    H --> I[".codegraph/\nJSON files"]
-    I --> J["GraphReader"]
-    J --> K["QueryEngine"]
-    K --> L["Formatted output\n(context / json / text)"]
+    G --> H["RoutesPass"]
+    H --> I["ConfigurationPass"]
+    I --> J["MiddlewarePass"]
+    J --> K["DbContextPass"]
+    K --> L["GraphWriter"]
+    L --> M[".codegraph/\nJSON + SQLite"]
+    M --> N["GraphReader"]
+    N --> O["QueryEngine"]
+    O --> P["Formatted output\n(context / json / text)"]
 ```
 
 ## Hybrid Workspace Loader
@@ -73,7 +77,7 @@ Each `ProjectCompilation` is a self-contained Roslyn compilation ready for analy
 
 ## Pass Architecture
 
-Indexing runs four passes over each compilation. Projects are processed in parallel (`Parallel.ForEach` over all compiled projects); each project's four passes run sequentially within its own thread. Results are aggregated after the parallel loop.
+Indexing runs eight passes over each compilation. The first four passes are always enabled. The last four are domain-specific and can be toggled via `PassPipelineOptions`. Projects are processed in parallel (`Parallel.ForEach` over all compiled projects); each project's passes run sequentially within its own thread. Results are aggregated after the parallel loop.
 
 Each pass receives:
 - The `CSharpCompilation` for one project
@@ -160,6 +164,82 @@ Links test methods to the production methods they call, emitting bidirectional `
 For each test method, the pass walks invocations within the method body and resolves them to target symbols. For each resolved target:
 - `Covers` edge: test method → target method
 - `CoveredBy` edge: target method → test method
+
+### RoutesPass
+
+**Location:** `src/CodeGraph.Indexer/Passes/RoutesPass.cs`
+
+Maps ASP.NET HTTP routes to their handler methods, emitting `HandlesRoute` edges from a synthetic route node to the method symbol.
+
+**Supported patterns:**
+
+| Pattern | Example | Edge Created |
+|---------|---------|-------------|
+| MVC/API controller actions | `[HttpGet("/api/orders/{id}")]` on controller method | `GET /api/orders/{id}` → `OrderController.GetById` |
+| Minimal API `Map*` calls | `app.MapGet("/api/orders", GetOrders)` | `GET /api/orders` → `Program.GetOrders` |
+| Class-level `[Route]` + method-level HTTP verb | `[Route("api/[controller]")]` + `[HttpPost]` | Combined route → handler |
+
+Route template placeholders `[controller]` and `[action]` are resolved at index time.
+
+**Edge metadata:**
+
+| Key | Description |
+|-----|-------------|
+| `httpMethod` | HTTP verb (`GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `ANY`) |
+| `route` | Normalized route pattern (always starts with `/`) |
+| `registrationFile` | Source file where the route is declared (relative to solution root) |
+
+**Route nodes** are created with `NodeKind.Property` and metadata `nodeType = "Route"`. Their ID is `"{httpMethod} {route}"` (e.g., `GET /api/orders/{id}`).
+
+This pass is enabled by default (`EnableRoutesPass = true` in `PassPipelineOptions`).
+
+### ConfigurationPass
+
+**Location:** `src/CodeGraph.Indexer/Passes/ConfigurationPass.cs`
+
+Detects `IOptions<T>` / `IOptionsSnapshot<T>` / `IOptionsMonitor<T>` bindings and emits `BindsConfiguration` edges from the options type to a synthetic configuration section node.
+
+**Edge metadata:**
+
+| Key | Description |
+|-----|-------------|
+| `section` | Configuration section path (e.g., `Payment:Gateway`) |
+| `registrationMethod` | The binding method used (e.g., `Configure`, `Bind`) |
+| `registrationFile` | Source file where the binding is registered |
+| `validation` | `"DataAnnotations"` if `[Required]`/`[Range]` annotations are present (optional) |
+
+Configuration section nodes have `NodeKind.Property` and metadata `nodeType = "ConfigurationSection"`.
+
+This pass is enabled by default (`EnableConfigurationPass = true` in `PassPipelineOptions`).
+
+### MiddlewarePass
+
+**Location:** `src/CodeGraph.Indexer/Passes/MiddlewarePass.cs`
+
+Detects middleware registrations (`app.Use*`) in the ASP.NET request pipeline and emits `UsesMiddleware` edges from a synthetic pipeline-position node to the middleware method symbol.
+
+**Edge metadata:**
+
+| Key | Description |
+|-----|-------------|
+| `pipelineOrder` | Zero-based integer position in the middleware pipeline |
+| `middlewareName` | Name of the middleware (e.g., `UseAuthentication`) |
+
+This pass is enabled by default (`EnableMiddlewarePass = true` in `PassPipelineOptions`).
+
+### DbContextPass
+
+**Location:** `src/CodeGraph.Indexer/Passes/DbContextPass.cs`
+
+Analyzes EF Core `DbContext` subclasses and `IEntityTypeConfiguration<T>` implementations to emit three types of edges describing the data model:
+
+| EdgeType | Description | Metadata |
+|----------|-------------|---------|
+| `MapsToTable` | Entity class → database table | `tableName` |
+| `NavigatesTo` | Entity → related entity (navigation property) | `relationship` (one-to-one/one-to-many/many-to-many), `property` (optional) |
+| `ConfiguredBy` | Entity → its `IEntityTypeConfiguration<T>` class | `configurationClass` |
+
+This pass is enabled by default (`EnableDbContextPass = true` in `PassPipelineOptions`).
 
 ---
 

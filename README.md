@@ -817,7 +817,7 @@ See [codegraph.json.example](codegraph.json.example) for a single-solution examp
 ```
 ┌─────────────┐     ┌──────────────┐     ┌──────────────┐     ┌───────────┐
 │ dotnet       │────▸│ Syntax Pass  │────▸│ Semantic Pass │────▸│ JSON Graph│
-│ restore +    │     │ (structure)  │     │ (relations)  │     │ (per-asm) │
+│ restore +    │     │ (structure)  │     │ (relations)  │     │ + SQLite  │
 │ Hybrid       │     └──────────────┘     └──────────────┘     └───────────┘
 └─────────────┘           │                     │                    │
                           │              ┌──────────────┐            ▼
@@ -827,10 +827,23 @@ See [codegraph.json.example](codegraph.json.example) for a single-solution examp
                           │              ┌──────────────┐     └─────────────┘
                           │              │ Test Pass    │            │
                           │              │  (Covers)    │            ▼
-                          │              └──────────────┘     ┌─────────────┐
-                          └──────────────────────────────────▸│ Query Engine│
-                                                              │ (BFS + rank)│
-                                                              └─────────────┘
+                          │              └──────────────┐     ┌─────────────┐
+                          │              ┌──────────────┐     │ Query Engine│
+                          │              │ Routes Pass  │────▸│ (BFS + rank)│
+                          │              │(HandlesRoute)│     └─────────────┘
+                          │              └──────────────┘
+                          │              ┌──────────────┐
+                          │              │Config. Pass  │
+                          │              │(BindsConfig) │
+                          │              └──────────────┘
+                          │              ┌──────────────┐
+                          │              │Middleware Pass│
+                          │              │(UsesMiddleware│
+                          │              └──────────────┘
+                          │              ┌──────────────┐
+                          └─────────────▸│DbContext Pass│
+                                         │(MapsToTable) │
+                                         └──────────────┘
 ```
 
 1. **Hybrid Workspace Loader** — Runs `dotnet restore`, then parses `.sln` / `.slnx` / `.csproj` / `project.assets.json` to assemble Roslyn `CSharpCompilation` objects directly (no MSBuildWorkspace). If the restore fails, a warning is emitted to stderr and indexing continues with best-effort compilation.
@@ -838,8 +851,12 @@ See [codegraph.json.example](codegraph.json.example) for a single-solution examp
 3. **Semantic Pass** — Uses the Roslyn semantic model to resolve calls, inheritance, interface implementations, type dependencies, references, and overrides. Creates external nodes for cross-assembly references.
 4. **DI Pass** — Detects `AddScoped/AddTransient/AddSingleton` patterns to emit `ResolvesTo` edges with lifetime metadata.
 5. **Test Coverage Pass** — Detects test methods (xUnit, NUnit, MSTest) and emits `Covers`/`CoveredBy` edges linking tests to production code.
-6. **Graph Writer** — Outputs JSON files split by assembly (one per project), external nodes to `_external.json` (SBOM), plus `meta.json` with git metadata and statistics.
-7. **Query Engine** — Pattern-matches symbols, performs BFS traversal, filters by edge type/namespace/project, ranks by relevance, and formats output.
+6. **Routes Pass** — Detects ASP.NET controller actions and Minimal API `Map*` calls to emit `HandlesRoute` edges from route nodes (`GET /api/orders/{id}`) to handler methods.
+7. **Configuration Pass** — Detects `IOptions<T>` bindings to emit `BindsConfiguration` edges from options types to configuration section nodes.
+8. **Middleware Pass** — Detects `app.Use*` registrations to emit `UsesMiddleware` edges capturing pipeline order.
+9. **DbContext Pass** — Analyzes EF Core `DbContext` and `IEntityTypeConfiguration<T>` to emit `MapsToTable`, `NavigatesTo`, and `ConfiguredBy` edges.
+10. **Graph Writer** — Outputs a SQLite `graph.db` (primary) and per-assembly JSON files (compatibility), plus `meta.json` with git metadata and statistics.
+11. **Query Engine** — Pattern-matches symbols, performs BFS traversal, filters by edge type/namespace/project, ranks by relevance, and formats output.
 
 For a deep dive, see [docs/architecture.md](docs/architecture.md).
 

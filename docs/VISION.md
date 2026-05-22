@@ -364,7 +364,7 @@ The typical pattern for adding a new capability:
 
 The current passes extract universal code structure. The next wave extracts .NET-framework-specific intelligence that no language-agnostic tool can provide:
 
-- **ASP.NET route mapping** — `[HttpGet("/api/orders/{id}")]` → handler method → service → repository. Answer "what handles this endpoint?" in one query. ([#89](https://github.com/droosma/vibe-codeGraph/issues/89))
+- **ASP.NET route mapping** ✅ — `[HttpGet("/api/orders/{id}")]` → handler method → service → repository. Answer "what handles this endpoint?" in one query. ([#89](https://github.com/droosma/vibe-codeGraph/issues/89))
 - **EF Core entity modeling** — DbContext → entities → table names → relationships. Answer "what's the data model?" without reading configuration files. ([#92](https://github.com/droosma/vibe-codeGraph/issues/92))
 - **Configuration binding** — `IOptions<T>` → configuration section mapping. Answer "what settings does this service need?" ([#90](https://github.com/droosma/vibe-codeGraph/issues/90))
 - **Middleware pipeline** — ordered extraction of the request pipeline. ([#91](https://github.com/droosma/vibe-codeGraph/issues/91))
@@ -440,4 +440,4 @@ The tool succeeds when:
 1. **An agent using CodeGraph solves a structural question in fewer tokens than one using grep/view** — validated through A/B benchmarks (currently: 2.1× fewer tokens ✅)
 2. **The agent never needs to fall back to file reading for structural understanding** — CodeGraph output is self-sufficient (currently: still needs ~12 file reads ⚠️)
 3. **Wall time is competitive with or better than grep-based discovery** — the daemon and caching make structural queries faster than text search (currently: 1.8× slower ❌ — [#98](https://github.com/droosma/vibe-codeGraph/issues/98))
-4. **Every .NET-specific question has a CodeGraph answer** — routes, entities, DI, configuration, test coverage, middleware — the full application model is in the graph (currently: DI and test coverage only ⚠️ — [#89](https://github.com/droosma/vibe-codeGraph/issues/89), [#92](https://github.com/droosma/vibe-codeGraph/issues/92), [#90](https://github.com/droosma/vibe-codeGraph/issues/90), [#91](https://github.com/droosma/vibe-codeGraph/issues/91))
+4. **Every .NET-specific question has a CodeGraph answer** — routes, entities, DI, configuration, test coverage, middleware — the full application model is in the graph (currently: DI ✅, test coverage ✅, routes ✅, configuration ✅, middleware ✅, EF Core entities ✅ — [#92](https://github.com/droosma/vibe-codeGraph/issues/92) remaining for advanced EF Core scenarios)
