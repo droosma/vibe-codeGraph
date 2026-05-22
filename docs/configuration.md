@@ -183,6 +183,7 @@ Default values for the `codegraph query` command. CLI flags override these.
   "query": {
     "defaultDepth": 1,
     "defaultFormat": "context",
+    "defaultMode": "all",
     "maxNodes": 50
   }
 }
@@ -191,7 +192,8 @@ Default values for the `codegraph query` command. CLI flags override these.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `defaultDepth` | `int` | `1` | Default BFS traversal depth. |
-| `defaultFormat` | `string` | `"context"` | Default output format: `"json"`, `"text"`, or `"context"`. |
+| `defaultFormat` | `string` | `"context"` | Default output format: `"json"`, `"text"`, `"context"`, or `"compact"`. |
+| `defaultMode` | `string` | `"all"` | Default traversal mode: `"all"` (all edges), `"focused"` (high-signal edges only), or `"structural"` (includes containment edges). Overridden by `--mode`. |
 | `maxNodes` | `int` | `50` | Maximum nodes returned in a query result. |
 
 ---
@@ -251,7 +253,7 @@ Everything else uses defaults: output to `.codegraph`, split by project, index a
     }
   ],
   "output": ".codegraph",
-  "query": { "defaultDepth": 1, "defaultFormat": "context", "maxNodes": 50 }
+  "query": { "defaultDepth": 1, "defaultFormat": "context", "defaultMode": "all", "maxNodes": 50 }
 }
 ```
 

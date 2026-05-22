@@ -175,8 +175,7 @@ codegraph query <symbol-pattern> [options]
 | `--format <fmt>` | Output format: `json`, `text`, `context`, `compact` | `context` |
 | `--max-nodes <n>` | Maximum nodes in result | `50` |
 | `--include-external` | Include external assembly dependencies | `false` |
-| `--include-source` | Embed source code snippets alongside node references in output | `false` |
-| `--source-max-lines <n>` | Maximum lines per embedded source snippet | `20` |
+| `--include-source` | Embed source code snippets alongside node references in output (capped at 20 lines) | `false` |
 | `--no-rank` | Disable relevance ranking | (ranking enabled by default) |
 | `--budget <tokens>` | Maximum token budget; output is truncated with a hint when exceeded | (none) |
 | `--no-metrics` | Suppress the compression metrics footer | `false` |
@@ -200,7 +199,7 @@ After each query, the CLI prints `💡 Suggested next queries:` to stderr with u
 
 **Source retrieval:**
 
-Use `--include-source` after you've narrowed to a specific method or type and want a small inline implementation snippet. Keep `--source-max-lines` low (default: `20`) to stay token-safe. Use the MCP `codegraph_file` tool instead when you only know the file path, need to discover which symbols live in that file, or want to pivot from a changed file to a symbol-level query.
+Use `--include-source` after you've narrowed to a specific method or type and want a small inline implementation snippet. Snippets are capped at 20 lines for token safety. Use the MCP `codegraph_file` tool instead when you only know the file path, need to discover which symbols live in that file, or want to pivot from a changed file to a symbol-level query.
 
 **Edge kind aliases:**
 
