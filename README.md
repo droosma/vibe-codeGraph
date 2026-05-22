@@ -188,7 +188,7 @@ codegraph query <symbol-pattern> [options]
 | Format | Description |
 |--------|-------------|
 | `context` | Markdown-like, optimized for LLM prompts (default when output is a terminal) |
-| `compact` | Compressed prefix-stripped format, 3–5× smaller than `context` (default when piped) |
+| `compact` | Compressed prefix-stripped format, 3–5× smaller than `context` (default when piped). Inlines the `<summary>` from XML doc comments on the primary symbol's header. Use `--no-docs` to suppress. |
 | `text` | Human-readable tabular summary |
 | `json` | Machine-readable full `QueryResult` |
 

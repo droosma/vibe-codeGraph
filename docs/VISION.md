@@ -183,7 +183,7 @@ The graph consists of **nodes** and **edges** stored in SQLite:
 - `FilePath` — relative path to source file
 - `StartLine` / `EndLine` — source location
 - `Signature` — full C# signature
-- `DocComment` — XML doc comment (nullable, currently not surfaced in compact format — see [#93](https://github.com/droosma/vibe-codeGraph/issues/93))
+- `DocComment` — XML doc comment (nullable; the `<summary>` is inlined into compact output headers — use `--no-docs` to suppress)
 - `Accessibility` — `Public | Internal | Protected | Private | ProtectedInternal | PrivateProtected`
 - `AssemblyName` — project/assembly this node belongs to
 
@@ -381,7 +381,7 @@ Features that make CodeGraph the only tool of its kind for .NET:
 
 - **Persistent daemon** — eliminate process spawning overhead, make wall time competitive with grep. ([#98](https://github.com/droosma/vibe-codeGraph/issues/98))
 - **Incremental indexing** — re-index only changed files, bring re-index time from 600s to <30s. ([#96](https://github.com/droosma/vibe-codeGraph/issues/96))
-- **Doc comments in compact output** — surface XML doc comments without needing file reads. ([#93](https://github.com/droosma/vibe-codeGraph/issues/93))
+- **Doc comments in compact output** — surfaces `<summary>` from XML doc comments inline on the primary symbol header; truncated at 120 chars. Use `--no-docs` to suppress. ([#93](https://github.com/droosma/vibe-codeGraph/issues/93) — **done**)
 
 ---
 
@@ -418,6 +418,9 @@ Understanding why decisions were made helps avoid re-litigating them:
 - Domain cluster analysis — groups assemblies by namespace prefix
 - Smart routing hints in MCP tool descriptions — "BEST FOR: ..." / "NOT FOR: ..."
 - Benchmark: zero timeouts, `search` became the most-used tool (20 of 45 calls), token ratio stable at ~2×
+
+### v0.4.0 → current
+- **Doc comments in compact output** ([#93](https://github.com/droosma/vibe-codeGraph/issues/93)) — `<summary>` from XML doc comments is now inlined on the primary symbol's header in `compact` format, truncated at 120 characters. Use `--no-docs` to suppress. Agents no longer need a separate file read to get a symbol's one-liner description.
 
 ### Lessons Learned
 
