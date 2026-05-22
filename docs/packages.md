@@ -1,29 +1,25 @@
 # How to Use `codegraph packages`
 
-`codegraph packages` analyzes NuGet package usage across your solution. It reads the external dependency edges written by the `PackageAnalyzer` during indexing and reports:
-
-- Which NuGet packages each project uses
-- How many internal types reference each package
-- Version conflicts (same package, different versions across projects)
+`codegraph packages` analyses **NuGet package usage** across your solution — which packages each project depends on, at what versions, and where version conflicts exist between projects.
 
 ---
 
 ## Quick Start
 
 ```bash
-# Index the codebase first
+# Index your solution first (if you haven't already)
 codegraph index --solution MyApp.sln
 
-# Show all package usage across all projects
+# List all NuGet packages across all projects
 codegraph packages
 
-# Filter to a specific project
+# Show packages for a specific project
 codegraph packages --project MyApp.Api
 
-# Investigate a specific package
+# Show which projects use a specific package
 codegraph packages --package Newtonsoft.Json
 
-# Output as JSON for scripting
+# JSON output for scripting
 codegraph packages --format json
 ```
 
@@ -32,106 +28,106 @@ codegraph packages --format json
 ## CLI Reference
 
 ```
-codegraph packages [--project <name>] [--package <name>] [--format json] [--graph-dir <dir>]
+codegraph packages [options]
 ```
+
+### Flags
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--project <name>` | Filter results to a specific project (partial match) | All projects |
-| `--package <name>` | Filter results to a specific package (partial match) | All packages |
-| `--format json` | Output as JSON instead of text | Text |
+| `--project <name>` | Filter to a specific project | All projects |
+| `--package <name>` | Show which projects use this package | All packages |
+| `--format json` | Output as JSON | Plain text |
 | `--graph-dir <path>` | Graph directory | `.codegraph` |
 | `--help`, `-h` | Show help | |
 
-When `--package` is set, the output shows which internal types reference that package. When neither filter is set, project-level summaries are shown with conflict detection.
-
 ---
 
-## Example Output
+## Output
 
-### Default (project-by-project summary)
-
-```
-Package Usage Report
-============================================================
-
-MyApp.Api (6 packages)
-  Newtonsoft.Json         13.0.3   4 references
-  Microsoft.AspNetCore    8.0.0    12 references
-  Serilog                 3.1.1    2 references
-
-MyApp.Core (2 packages)
-  Newtonsoft.Json         12.0.1   7 references   ← VERSION CONFLICT
-  System.Text.Json        8.0.0    3 references
-
-Version Conflicts Detected
-  Newtonsoft.Json: MyApp.Api@13.0.3, MyApp.Core@12.0.1
-```
-
-### `--package Newtonsoft.Json`
+### Plain Text (all projects)
 
 ```
-Package: Newtonsoft.Json
-============================================================
+NuGet Package Usage
 
-MyApp.Api (13.0.3)
-  MyApp.Api.Controllers.OrderController          2 usages
-  MyApp.Api.Services.SerializationService        5 usages
+MyApp.Api
+  Microsoft.AspNetCore.OpenApi    8.0.0
+  Swashbuckle.AspNetCore          6.5.0
+  Newtonsoft.Json                 13.0.3
 
-MyApp.Core (12.0.1)
-  MyApp.Core.Models.JsonConverter                4 usages
-  MyApp.Core.IO.FileReader                       3 usages
+MyApp.Data
+  Microsoft.EntityFrameworkCore   8.0.0
+  Newtonsoft.Json                 13.0.1   ⚠ version conflict
+
+Version Conflicts:
+  Newtonsoft.Json
+    MyApp.Api      13.0.3
+    MyApp.Data     13.0.1
+```
+
+### Plain Text (by package)
+
+```
+Newtonsoft.Json usage:
+
+  MyApp.Api      13.0.3
+  MyApp.Data     13.0.1   ⚠ conflict
+```
+
+### JSON
+
+```json
+[
+  {
+    "project": "MyApp.Api",
+    "packages": [
+      { "name": "Newtonsoft.Json", "version": "13.0.3" }
+    ]
+  }
+]
 ```
 
 ---
 
 ## Common Workflows
 
-### Audit third-party dependencies
+### Audit all NuGet dependencies
 
 ```bash
-# See all external packages and their usage depth
 codegraph packages
 ```
 
-### Detect version conflicts before publishing
+### Find which projects use a deprecated package
 
 ```bash
-# Exit non-zero when conflicts are found
-result=$(codegraph packages --format json)
-conflicts=$(echo "$result" | jq '.conflicts | length')
-if [ "$conflicts" -gt 0 ]; then
-  echo "Version conflicts detected:" >&2
-  echo "$result" | jq '.conflicts' >&2
+codegraph packages --package Newtonsoft.Json
+```
+
+### Detect version conflicts across projects
+
+```bash
+# Conflicts are highlighted automatically in plain text output
+codegraph packages
+
+# In CI, fail if any conflicts are found
+CONFLICTS=$(codegraph packages --format json | jq '[.[] | select(.conflicts != null)] | length')
+if [ "$CONFLICTS" -gt 0 ]; then
+  echo "Package version conflicts detected — resolve before merging."
   exit 1
 fi
 ```
 
-### Find all usages of a deprecated package
+### Audit a single project
 
 ```bash
-codegraph packages --package Newtonsoft.Json --format json | jq '.usages[].internalTypes'
-```
-
-### CI integration
-
-```bash
-codegraph packages --format json > artifacts/packages.json
+codegraph packages --project MyApp.Infrastructure
 ```
 
 ---
 
-## How It Works
+## Exit Codes
 
-During `codegraph index`, the `PackageAnalyzer` reads `project.assets.json` files (generated by `dotnet restore`) and creates external package nodes linked to internal types via `DependsOn` edges with `isExternal = true` and `packageSource` set to the NuGet package name. `codegraph packages` aggregates these edges into the reports above.
-
-**Note:** Package data requires `dotnet restore` to have run before indexing. Use `--skip-restore` only when packages are already restored.
-
----
-
-## See Also
-
-- [`codegraph query`](../README.md#codegraph-query) — query external dependency edges with `--include-external`
-- [`codegraph index`](../README.md#codegraph-index) — required before using this command
-- [Configuration Reference](configuration.md) — `includeExternalPackages` to control which packages are indexed
-- [Graph Schema Reference](graph-schema.md) — external node and edge schema
+| Code | Meaning |
+|------|---------|
+| `0` | Analysis complete |
+| `1` | Error (graph not built — run `codegraph index` first) |

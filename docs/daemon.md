@@ -1,24 +1,22 @@
 # How to Use `codegraph daemon`
 
-`codegraph daemon` starts a persistent background process that loads the graph once and answers queries over a named pipe. This eliminates the ~700 ms cold-start penalty (process spawn + graph load) that affects every CLI invocation.
-
-Use the daemon when query wall time matters — e.g., in tight agent loops, IDE integrations, or benchmarking scenarios where many queries run in quick succession.
+`codegraph daemon` runs a **persistent background server** that keeps the graph loaded in memory, enabling near-instant responses to repeated queries. Without the daemon, each `codegraph query` invocation loads the graph from disk — the daemon eliminates that cold-start overhead.
 
 ---
 
 ## Quick Start
 
 ```bash
-# Index the codebase first
+# Index your solution first (if you haven't already)
 codegraph index --solution MyApp.sln
 
-# Start the daemon (blocks; run in background or a separate terminal)
-codegraph daemon start &
+# Start the daemon
+codegraph daemon start
 
-# Check that it's running
+# Check whether it's running
 codegraph daemon status
 
-# Stop it
+# Stop the daemon
 codegraph daemon stop
 ```
 
@@ -27,105 +25,107 @@ codegraph daemon stop
 ## CLI Reference
 
 ```
-codegraph daemon <start|stop|status> [--graph-dir <dir>]
+codegraph daemon <subcommand> [options]
 ```
 
-| Sub-command | Description |
-|-------------|-------------|
-| `start` | Start the daemon for the given graph directory |
-| `stop` | Stop the running daemon (sends SIGTERM) |
-| `status` | Print whether the daemon is running and its PID |
+### Subcommands
+
+| Subcommand | Description |
+|-----------|-------------|
+| `start` | Start the daemon and keep it running in the foreground |
+| `stop` | Stop a running daemon by sending a kill signal |
+| `status` | Report whether the daemon is running and its PID |
+
+### Flags
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--graph-dir <path>` | Graph directory the daemon loads | `.codegraph` |
+| `--graph-dir <path>` | Graph directory to serve | `.codegraph` |
+| `--help`, `-h` | Show help | |
 
 ---
 
-## How the Daemon Works
+## How It Works
 
-- On `start`, the daemon loads the graph from `--graph-dir` into memory and listens on a **named pipe** (`codegraph-<hash>.pipe` derived from the graph directory path).
-- It writes a PID file (`.codegraph/daemon.pid` or equivalent) so `stop` and `status` can locate it.
-- On `stop`, the PID file is read, the process is killed, and the PID file is removed.
-- On `status`, the PID file is checked and the process is verified to still be alive.
+The daemon:
 
-The daemon does **not** auto-reload when the graph changes. After `codegraph index`, restart the daemon to pick up the new graph.
+1. Loads the graph from `graph.db` into memory on startup
+2. Listens on a named pipe (platform-specific, derived from the graph directory path)
+3. Handles query requests from other `codegraph` invocations via the pipe
+4. Writes a PID file to the graph directory so `daemon stop` and `daemon status` can find it
 
----
-
-## Named Pipe
-
-On `start`, the pipe name is printed:
+The pipe name is printed to stdout on startup:
 
 ```
 Starting daemon for /home/user/myapp/.codegraph...
-Pipe: codegraph-a3f7b291
+Pipe: codegraph-abc123
 ```
-
-Agent integrations and scripts can connect to this pipe directly for low-latency queries. The MCP server (`codegraph mcp`) will automatically use the daemon pipe when the daemon is running for the same graph directory.
 
 ---
 
-## Typical Workflow
+## Running the Daemon in the Background
+
+`codegraph daemon start` runs in the **foreground** by design so it can be managed by your process supervisor. To run it in the background:
 
 ```bash
-# Start once at the beginning of a coding session
-codegraph daemon start --graph-dir .codegraph &
+# Unix/macOS — detach with nohup
+nohup codegraph daemon start > /tmp/codegraph-daemon.log 2>&1 &
 
-# Run many queries — no cold start
+# Or use your process manager (systemd, launchd, etc.)
+```
+
+### systemd example
+
+```ini
+[Unit]
+Description=CodeGraph Daemon
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/codegraph daemon start --graph-dir /srv/myapp/.codegraph
+Restart=on-failure
+WorkingDirectory=/srv/myapp
+
+[Install]
+WantedBy=multi-user.target
+```
+
+---
+
+## Common Workflows
+
+### Keep the daemon alive during a dev session
+
+```bash
+# In one terminal
+codegraph daemon start
+
+# In another terminal — queries are served from in-memory graph
 codegraph query OrderService --depth 2
-codegraph query IOrderService --kind implements
-codegraph test-impact PaymentService
-
-# After re-indexing, restart the daemon
-codegraph index --solution MyApp.sln
-codegraph daemon stop
-codegraph daemon start &
+codegraph search Repository
+codegraph impact PaymentGateway
 ```
 
----
-
-## Checking Status
+### Check status and restart if down
 
 ```bash
-codegraph daemon status
-# Daemon is running (PID 12345).
-# Pipe: codegraph-a3f7b291
+codegraph daemon status || codegraph daemon start &
 ```
+
+### Multi-solution setup
+
+Each graph directory runs its own independent daemon instance.
 
 ```bash
-codegraph daemon status
-# No daemon is running.
+codegraph daemon start --graph-dir .codegraph/MyApp.Services
+codegraph daemon start --graph-dir .codegraph/MyApp.Api
 ```
 
 ---
 
-## Process Management
+## Exit Codes
 
-The daemon runs as a normal foreground process in the terminal where `daemon start` was invoked. To run it persistently:
-
-```bash
-# Background with nohup
-nohup codegraph daemon start > .codegraph/daemon.log 2>&1 &
-```
-
-The daemon exits cleanly when `codegraph daemon stop` is called, or when the process is sent SIGTERM/SIGINT.
-
----
-
-## When to Use vs. MCP Mode
-
-| Scenario | Recommendation |
-|----------|----------------|
-| Agent connected via MCP | Use MCP mode (`codegraph mcp`) — it's already persistent |
-| Many CLI queries in a script | Use `daemon start` |
-| Benchmarking query performance | Use `daemon start` to isolate graph-load overhead |
-| One-off queries | No daemon needed — cold-start cost is acceptable |
-
----
-
-## See Also
-
-- [`codegraph mcp`](mcp.md) — MCP server mode (already persistent, preferred for agents)
-- [`codegraph benchmark`](benchmark.md) — measure query performance with or without the daemon
-- [`codegraph index`](../README.md#codegraph-index) — (re)generate the graph; restart daemon afterward
+| Code | Meaning |
+|------|---------|
+| `0` | Subcommand completed successfully |
+| `1` | Error (e.g., no daemon running when `stop`/`status` called) |

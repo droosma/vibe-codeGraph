@@ -1,27 +1,22 @@
 # How to Use `codegraph snapshot`
 
-`codegraph snapshot` saves, lists, and deletes named copies of the graph directory. Snapshots are stored under `.codegraph-snapshots/<name>/` and can be used as the `--base` or `--head` argument to `codegraph diff`.
-
-Snapshots are the recommended way to preserve a graph state for later comparison (e.g., before a refactor, before cutting a release branch, or in CI between runs).
+`codegraph snapshot` lets you **save, list, and delete named copies** of the current graph. Snapshots are the foundation for diff workflows — save a snapshot before a PR, then run `codegraph diff` after merging to see exactly what changed structurally.
 
 ---
 
 ## Quick Start
 
 ```bash
+# Index your solution first (if you haven't already)
+codegraph index --solution MyApp.sln
+
 # Save the current graph as "before-refactor"
 codegraph snapshot save before-refactor
 
-# Make changes, re-index
-codegraph index --solution MyApp.sln
-
-# Diff before vs. current
-codegraph diff --base .codegraph-snapshots/before-refactor
-
-# List all snapshots
+# List all saved snapshots
 codegraph snapshot list
 
-# Clean up
+# Delete a snapshot
 codegraph snapshot delete before-refactor
 ```
 
@@ -30,102 +25,108 @@ codegraph snapshot delete before-refactor
 ## CLI Reference
 
 ```
-codegraph snapshot <save|list|delete> [name] [--graph-dir <dir>]
+codegraph snapshot <subcommand> [name] [options]
 ```
 
-| Sub-command | Description |
-|-------------|-------------|
-| `save <name>` | Copy the current graph to `.codegraph-snapshots/<name>/` |
-| `list` | Print all stored snapshots with creation date and path |
+### Subcommands
+
+| Subcommand | Description |
+|-----------|-------------|
+| `save <name>` | Copy the current graph into a named snapshot |
+| `list` | Show all saved snapshots with creation timestamps and paths |
 | `delete <name>` | Remove a named snapshot |
+
+### Flags
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--graph-dir <path>` | Source graph directory (for `save`) | `.codegraph` |
+| `--graph-dir <path>` | Graph directory to snapshot | `.codegraph` |
+| `--help`, `-h` | Show help | |
 
 ---
 
-## What Gets Saved
+## Where Snapshots Are Stored
 
-`codegraph snapshot save` copies the following files from the source graph directory:
+Snapshots are stored as subdirectories inside the graph directory:
 
-| File | Description |
-|------|-------------|
-| `graph.db` | SQLite graph database (primary) |
-| `meta.json` | Index metadata (commit hash, branch, stats) |
-| `*.json` | Per-assembly JSON files (backwards-compat) |
-
-The snapshot is stored at `.codegraph-snapshots/<name>/`. If a snapshot with the same name already exists, it is overwritten.
+```
+.codegraph/
+  graph.db          ← current live graph
+  BRIEF.md
+  snapshots/
+    before-refactor/  ← snapshot created with `snapshot save before-refactor`
+      graph.db
+    v1.5.0/
+      graph.db
+```
 
 ---
 
-## Example: Release Workflow
+## Common Workflows
+
+### Snapshot before a refactor
 
 ```bash
-# Before cutting a release branch, save the graph
-codegraph snapshot save release-1.2
+# Save the baseline
+codegraph snapshot save before-refactor
 
-# Later, on main after more development
-codegraph diff --base .codegraph-snapshots/release-1.2 --format context
+# Make code changes...
+
+# Re-index
+codegraph index --solution MyApp.sln
+
+# Compare
+codegraph diff --base .codegraph/snapshots/before-refactor --head .codegraph
 ```
 
----
+### Snapshot at release time
 
-## Example: CI Pre/Post Check
+```bash
+# Tag the graph at each release
+codegraph snapshot save v$(cat VERSION)
 
-```yaml
-# .github/workflows/structural-diff.yml
-- name: Save pre-change snapshot
-  run: |
-    codegraph index --solution MyApp.sln
-    codegraph snapshot save pre-change
-
-- name: Apply changes
-  run: git apply patch.diff
-
-- name: Re-index and diff
-  run: |
-    codegraph index --solution MyApp.sln
-    codegraph diff --base .codegraph-snapshots/pre-change --format text
+# Later, compare releases
+codegraph diff \
+  --base .codegraph/snapshots/v1.4.0 \
+  --head .codegraph/snapshots/v1.5.0
 ```
 
----
-
-## Listing Snapshots
+### List and clean up old snapshots
 
 ```bash
 codegraph snapshot list
+
+# Remove snapshots you no longer need
+codegraph snapshot delete old-experiment
 ```
 
-Output example:
+### CI: automatic nightly snapshot
 
-```
-  before-refactor      2026-05-01 14:23:11  .codegraph-snapshots/before-refactor
-  release-1.2          2026-04-15 09:00:44  .codegraph-snapshots/release-1.2
-  pre-change           2026-05-08 21:05:30  .codegraph-snapshots/pre-change
-```
-
----
-
-## `.gitignore` Recommendation
-
-Snapshots can be large. Add the snapshots directory to `.gitignore` unless you intentionally version them:
-
-```gitignore
-.codegraph-snapshots/
-```
-
-To version specific named snapshots for auditing, add them explicitly:
-
-```gitignore
-.codegraph-snapshots/
-!.codegraph-snapshots/release-*/
+```yaml
+- name: Save graph snapshot
+  run: |
+    codegraph index --solution MyApp.sln
+    codegraph snapshot save nightly-$(date +%Y%m%d)
 ```
 
 ---
 
-## See Also
+## Relationship to `codegraph diff`
 
-- [`codegraph diff`](diff.md) — compare any two snapshots
-- [`codegraph index`](../README.md#codegraph-index) — generate or update the graph
-- [Graph Schema Reference](graph-schema.md) — what's in `meta.json` and `graph.db`
+`snapshot` and `diff` are complementary:
+
+| Tool | Purpose |
+|------|---------|
+| `codegraph snapshot save` | Capture the current graph state under a name |
+| `codegraph diff` | Compare any two graph directories (including snapshots) |
+
+See [docs/diff.md](diff.md) for the full diff guide.
+
+---
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Subcommand completed successfully |
+| `1` | Error (missing name, snapshot not found, or graph not built) |

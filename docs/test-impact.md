@@ -1,27 +1,26 @@
 # How to Use `codegraph test-impact`
 
-`codegraph test-impact` analyzes test coverage for a symbol and reports:
-
-- **Direct tests** — test methods with a `CoveredBy` edge to the target
-- **Indirect tests** — tests that reach the target through call chains (BFS traversal)
-- **Uncovered callers** — callers with no test coverage at any depth
-- **`dotnet test` filter** — a ready-to-run filter expression for the covering tests
-
-Use it before changing a method to know exactly which tests to run, or after a change to assess coverage gaps.
+`codegraph test-impact` analyses **test coverage** for a symbol — it shows which test methods cover it directly (by calling it or its members) and which cover it indirectly (through a chain of calls), plus which callers of the symbol have no test coverage at all.
 
 ---
 
 ## Quick Start
 
 ```bash
-# Index the codebase first
+# Index your solution first (if you haven't already)
 codegraph index --solution MyApp.sln
 
-# Show test coverage for a symbol
-codegraph test-impact OrderService.PlaceOrder
+# Find tests for OrderService
+codegraph test-impact OrderService
 
-# Increase traversal depth for broader indirect coverage
+# Use a fully-qualified name
+codegraph test-impact MyApp.Services.OrderService
+
+# Increase depth to find more indirect tests
 codegraph test-impact OrderService --depth 5
+
+# Get JSON for scripting or CI
+codegraph test-impact OrderService --json
 ```
 
 ---
@@ -29,91 +28,120 @@ codegraph test-impact OrderService --depth 5
 ## CLI Reference
 
 ```
-codegraph test-impact <symbol> [--depth N] [--graph-dir <dir>]
+codegraph test-impact <symbol> [options]
 ```
+
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `<symbol>` | Symbol name or pattern (substring match) |
+
+### Flags
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `<symbol>` | Symbol name or pattern (exact or suffix match) | *(required)* |
-| `--depth <n>` | Backward traversal depth for indirect coverage | `3` |
+| `--depth <n>` | Traversal depth for indirect coverage | `3` |
 | `--graph-dir <path>` | Graph directory | `.codegraph` |
+| `--json` | Output as JSON | Plain text |
 | `--help`, `-h` | Show help | |
-
-**Symbol matching** uses exact name match, or suffix match (e.g., `PlaceOrder` matches `MyApp.Services.OrderService.PlaceOrder`).
 
 ---
 
-## Example Output
+## Output
+
+### Plain Text
 
 ```
-Test Impact: OrderService.PlaceOrder
-============================================================
-Target: MyApp.Services.OrderService.PlaceOrder
-File:   src/Orders/OrderService.cs [28-52]
+Test Impact: OrderService
+Target: MyApp.Services.OrderService (Type)
 
-Direct Tests (CoveredBy edges)
-  ✓ OrderServiceTests.PlaceOrder_ValidRequest_ReturnsOrder
-  ✓ OrderServiceTests.PlaceOrder_OutOfStock_ThrowsException
+Direct Tests (2):
+  ✓ OrderServiceTests.PlaceOrder_ValidInput_ReturnsOrderId
+      Path: OrderService → PlaceOrder → [test]
+  ✓ OrderServiceTests.CancelOrder_AlreadyCancelled_Throws
 
-Indirect Tests (via call chains, depth ≤ 3)
-  ~ IntegrationTests.Api_PostOrder_Returns201
-      via: OrderController.Post → OrderService.PlaceOrder
+Indirect Tests (1):
+  ~ CheckoutIntegrationTests.FullCheckoutFlow_Succeeds
+      Path: OrderService → OrderRepository → [test covers OrderRepository]
 
-Uncovered Callers
-  ✗ AdminOrderService.ResubmitOrder (no test found within depth 3)
+Uncovered Callers (1):
+  ✗ MyApp.Jobs.OrderCleanupJob  (depth 2)
+      — no test reaches this caller
 
-dotnet test --filter
-  "FullyQualifiedName~OrderServiceTests.PlaceOrder_ValidRequest_ReturnsOrder|FullyQualifiedName~OrderServiceTests.PlaceOrder_OutOfStock_ThrowsException|FullyQualifiedName~IntegrationTests.Api_PostOrder_Returns201"
+Suggested test command:
+  dotnet test --filter "FullyQualifiedName~OrderServiceTests"
+```
+
+### JSON
+
+```json
+{
+  "pattern": "OrderService",
+  "target": { "id": "MyApp.Services.OrderService", "kind": "type" },
+  "directTests": [
+    {
+      "testId": "MyApp.Tests.OrderServiceTests.PlaceOrder_ValidInput_ReturnsOrderId",
+      "path": ["MyApp.Services.OrderService", "MyApp.Services.OrderService.PlaceOrder"]
+    }
+  ],
+  "indirectTests": [
+    {
+      "testId": "MyApp.Tests.CheckoutIntegrationTests.FullCheckoutFlow_Succeeds",
+      "path": ["MyApp.Services.OrderService", "MyApp.Data.OrderRepository"]
+    }
+  ],
+  "uncoveredCallers": [
+    { "callerId": "MyApp.Jobs.OrderCleanupJob", "depth": 2 }
+  ],
+  "suggestedTestCommand": "dotnet test --filter \"FullyQualifiedName~OrderServiceTests\""
+}
 ```
 
 ---
 
 ## Common Workflows
 
-### Before changing a method
+### Find gaps before a refactor
 
 ```bash
-# Find tests to run after your change
-codegraph test-impact MyService.MyMethod
-
-# Copy the dotnet test filter line and run it
-dotnet test --filter "FullyQualifiedName~..."
+# Are there uncovered callers that will be silently broken?
+codegraph test-impact PaymentGateway --json | jq '.uncoveredCallers'
 ```
 
-### Checking coverage gaps
+### Run only the tests that cover changed code
 
 ```bash
-# Find uncovered callers — these are risk areas
-codegraph test-impact PaymentService --depth 4
+# In a pre-commit hook or CI step
+codegraph test-impact "$CHANGED_SYMBOL" --json | \
+  jq -r '[.directTests[].testId, .indirectTests[].testId] | unique[]' | \
+  xargs -I{} dotnet test --filter "FullyQualifiedName~{}"
 ```
 
-### In CI
+### Check coverage threshold in CI
 
 ```bash
-# Fail if the target symbol has zero test coverage
-result=$(codegraph test-impact OrderService.PlaceOrder)
-if echo "$result" | grep -q "Direct Tests (0)"; then
-  echo "No direct test coverage for OrderService.PlaceOrder" >&2
-  exit 1
+UNCOVERED=$(codegraph test-impact OrderService --json | jq '.uncoveredCallers | length')
+if [ "$UNCOVERED" -gt 0 ]; then
+  echo "Warning: $UNCOVERED uncovered callers found."
 fi
 ```
 
 ---
 
-## How It Works
+## Choosing Between `test-impact` and `impact`
 
-1. **Resolves the target symbol** — matches by exact ID or name suffix.
-2. **Finds direct tests** — follows `CoveredBy` edges from the target outward.
-3. **BFS backward through `Calls` edges** — at each depth level, checks for `CoveredBy` edges on every caller. Tests found this way are *indirect*.
-4. **Reports uncovered callers** — callers at any depth that have no covering test.
-5. **Generates a `dotnet test --filter`** — combines all direct and indirect test method names.
-
-Coverage links (`Covers`/`CoveredBy` edges) are written by the `TestCoveragePass` during `codegraph index`. Symbols in projects not matching the test project heuristics will not have coverage edges.
+| Use case | Command |
+|----------|---------|
+| Which tests exercise this symbol? | `codegraph test-impact <symbol>` |
+| Which production code depends on this symbol? | `codegraph impact <symbol>` |
 
 ---
 
-## See Also
+## Exit Codes
 
-- [`codegraph query`](../README.md#codegraph-query) — general graph queries including coverage edges (`covered-by`, `covers`)
-- [`codegraph diff`](diff.md) — detect structural changes that may affect test coverage
-- [Graph Schema Reference](graph-schema.md) — `CoveredBy` and `Covers` edge types
+| Code | Meaning |
+|------|---------|
+| `0` | Tests found |
+| `1` | Error (graph not built) |
+| `2` | Symbol not found, or no tests found |
