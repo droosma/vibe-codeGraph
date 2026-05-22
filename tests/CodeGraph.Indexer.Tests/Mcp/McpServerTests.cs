@@ -462,6 +462,24 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task ToolsList_PackagesTool_HasWhoUsesAndConflictsProperties()
+    {
+        var server = CreateServer();
+        var request = MakeRequest("tools/list", id: JsonValue.Create(2));
+
+        var response = await server.HandleMessageAsync(request);
+
+        var tools = response!["result"]!["tools"]!.AsArray();
+        var packagesTool = tools.First(t => t!["name"]!.GetValue<string>() == "codegraph_packages");
+        var props = packagesTool!["inputSchema"]!["properties"]!.AsObject();
+
+        Assert.True(props.ContainsKey("project"));
+        Assert.True(props.ContainsKey("who_uses"));
+        Assert.True(props.ContainsKey("conflicts"));
+        Assert.True(props.ContainsKey("format"));
+    }
+
+    [Fact]
     public async Task ToolsList_ListTool_HasScopeEnum()
     {
         var server = CreateServer();
@@ -776,6 +794,98 @@ public class McpServerTests : IDisposable
         var response = await server.HandleMessageAsync(request);
 
         Assert.NotNull(response);
+    }
+
+    [Fact]
+    public async Task ToolsCall_Packages_WithWhoUses_ReturnsDependentSymbols()
+    {
+        await WriteGraphDataAsync(edges: new List<GraphEdge>
+        {
+            new()
+            {
+                FromId = "MyApp.OrderService.PlaceOrder()",
+                ToId = "Newtonsoft.Json.JsonConvert",
+                Type = EdgeType.Calls,
+                IsExternal = true,
+                PackageSource = "Newtonsoft.Json/13.0.1",
+                Confidence = EdgeConfidence.Verified
+            },
+            new()
+            {
+                FromId = "MyApp.OrderService",
+                ToId = "Newtonsoft.Json.JsonSerializer",
+                Type = EdgeType.DependsOn,
+                IsExternal = true,
+                PackageSource = "Newtonsoft.Json/13.0.1",
+                Confidence = EdgeConfidence.Verified
+            }
+        }, nodes: new List<GraphNode>
+        {
+            new()
+            {
+                Id = "MyApp.OrderService",
+                Name = "OrderService",
+                Kind = NodeKind.Type,
+                FilePath = "src/OrderService.cs",
+                StartLine = 1,
+                EndLine = 10,
+                Signature = "MyApp.OrderService",
+                Accessibility = Accessibility.Public,
+                AssemblyName = "MyApp",
+                ContainingNamespaceId = "MyApp"
+            },
+            new()
+            {
+                Id = "MyApp.OrderService.PlaceOrder()",
+                Name = "PlaceOrder",
+                Kind = NodeKind.Method,
+                FilePath = "src/OrderService.cs",
+                StartLine = 3,
+                EndLine = 8,
+                Signature = "MyApp.OrderService.PlaceOrder()",
+                Accessibility = Accessibility.Public,
+                AssemblyName = "MyApp",
+                ContainingTypeId = "MyApp.OrderService",
+                ContainingNamespaceId = "MyApp"
+            },
+            new()
+            {
+                Id = "Newtonsoft.Json.JsonConvert",
+                Name = "JsonConvert",
+                Kind = NodeKind.Method,
+                FilePath = string.Empty,
+                Signature = "Newtonsoft.Json.JsonConvert",
+                Accessibility = Accessibility.Public,
+                AssemblyName = "Newtonsoft.Json"
+            },
+            new()
+            {
+                Id = "Newtonsoft.Json.JsonSerializer",
+                Name = "JsonSerializer",
+                Kind = NodeKind.Type,
+                FilePath = string.Empty,
+                Signature = "Newtonsoft.Json.JsonSerializer",
+                Accessibility = Accessibility.Public,
+                AssemblyName = "Newtonsoft.Json"
+            }
+        });
+        var server = CreateServer();
+        var request = MakeRequest("tools/call", id: JsonValue.Create(17),
+            @params: new JsonObject
+            {
+                ["name"] = "codegraph_packages",
+                ["arguments"] = new JsonObject
+                {
+                    ["who_uses"] = "Newtonsoft.Json"
+                }
+            });
+
+        var response = await server.HandleMessageAsync(request);
+
+        var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("PlaceOrder", text);
+        Assert.Contains("OrderService", text);
+        Assert.Contains("Newtonsoft.Json", text);
     }
 
     [Fact]

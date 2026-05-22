@@ -19,14 +19,14 @@ public static class PackageFormatter
         sb.AppendLine($"# Package usage ({usages.Count} entries)");
         sb.AppendLine();
 
-        var byProject = usages.GroupBy(u => u.ProjectName).OrderBy(g => g.Key);
+        var byProject = usages.GroupBy(u => u.ProjectName).OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase);
 
         foreach (var projectGroup in byProject)
         {
             sb.AppendLine($"## {projectGroup.Key}");
-            foreach (var usage in projectGroup.OrderBy(u => u.PackageId))
+            foreach (var usage in projectGroup.OrderBy(u => u.PackageId, StringComparer.OrdinalIgnoreCase))
             {
-                var version = usage.Version != null ? $" v{usage.Version}" : "";
+                var version = usage.Version != null ? $" v{usage.Version}" : string.Empty;
                 sb.AppendLine($"- {usage.PackageId}{version}");
                 sb.AppendLine($"  Types: {usage.ExternalTypeCount}, Usages: {usage.InternalUsageCount}");
 
@@ -35,6 +35,35 @@ public static class PackageFormatter
 
                 if (usage.ExampleInternalUsers.Count > 0)
                     sb.AppendLine($"  Internal users: {string.Join(", ", usage.ExampleInternalUsers)}");
+            }
+            sb.AppendLine();
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    public static string FormatDependents(IReadOnlyList<PackageDependent> dependents)
+    {
+        var sb = new StringBuilder();
+
+        if (dependents.Count == 0)
+        {
+            sb.AppendLine("No package dependents found.");
+            return sb.ToString().TrimEnd();
+        }
+
+        var packageId = dependents[0].PackageId;
+        sb.AppendLine($"# Package dependents for {packageId} ({dependents.Count} entries)");
+        sb.AppendLine();
+
+        foreach (var projectGroup in dependents.GroupBy(d => d.ProjectName).OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            sb.AppendLine($"## {projectGroup.Key}");
+            foreach (var dependent in projectGroup.OrderBy(d => d.ConsumerKind).ThenBy(d => d.ConsumerId, StringComparer.OrdinalIgnoreCase))
+            {
+                sb.AppendLine($"- {dependent.ConsumerKind}: {dependent.ConsumerId}");
+                if (dependent.ExternalSymbols.Count > 0)
+                    sb.AppendLine($"  External symbols: {string.Join(", ", dependent.ExternalSymbols)}");
             }
             sb.AppendLine();
         }
@@ -55,10 +84,10 @@ public static class PackageFormatter
         sb.AppendLine($"# Version conflicts ({conflicts.Count} packages)");
         sb.AppendLine();
 
-        foreach (var conflict in conflicts.OrderBy(c => c.PackageId))
+        foreach (var conflict in conflicts.OrderBy(c => c.PackageId, StringComparer.OrdinalIgnoreCase))
         {
             sb.AppendLine($"## {conflict.PackageId}");
-            foreach (var (project, version) in conflict.VersionsByProject.OrderBy(kv => kv.Key))
+            foreach (var (project, version) in conflict.VersionsByProject.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase))
             {
                 sb.AppendLine($"- {project}: {version ?? "(unknown)"}");
             }
@@ -68,15 +97,11 @@ public static class PackageFormatter
         return sb.ToString().TrimEnd();
     }
 
-    public static string FormatUsageAsJson(IReadOnlyList<PackageUsage> usages)
-    {
-        return JsonSerializer.Serialize(usages, JsonOptions);
-    }
+    public static string FormatUsageAsJson(IReadOnlyList<PackageUsage> usages) => JsonSerializer.Serialize(usages, JsonOptions);
 
-    public static string FormatConflictsAsJson(IReadOnlyList<PackageConflict> conflicts)
-    {
-        return JsonSerializer.Serialize(conflicts, JsonOptions);
-    }
+    public static string FormatDependentsAsJson(IReadOnlyList<PackageDependent> dependents) => JsonSerializer.Serialize(dependents, JsonOptions);
+
+    public static string FormatConflictsAsJson(IReadOnlyList<PackageConflict> conflicts) => JsonSerializer.Serialize(conflicts, JsonOptions);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
