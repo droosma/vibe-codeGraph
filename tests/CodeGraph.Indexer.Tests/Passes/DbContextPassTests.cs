@@ -446,4 +446,344 @@ namespace MyApp
         var conventionEdge = Assert.Single(edges, e => e.Type == EdgeType.MapsToTable && e.FromId == "MyApp.OrderLine");
         Assert.Equal(EdgeConfidence.Inferred, conventionEdge.Confidence);
     }
+
+    [Fact]
+    public void DerivedDbContextSubclass_EmitsConventionMapping()
+    {
+        var source = MakeFullSource(@"
+namespace MyApp
+{
+    public class Product
+    {
+        public int Id { get; set; }
+    }
+
+    public abstract class BaseContext : Microsoft.EntityFrameworkCore.DbContext
+    {
+    }
+
+    public class AppDbContext : BaseContext
+    {
+        public Microsoft.EntityFrameworkCore.DbSet<Product> Products { get; set; }
+    }
+}");
+
+        var compilation = CreateCompilation(source);
+        var pass = new DbContextPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var edge = Assert.Single(edges);
+        Assert.Equal(EdgeType.MapsToTable, edge.Type);
+        Assert.Equal("MyApp.Product", edge.FromId);
+        Assert.Equal("[Table:Product]", edge.ToId);
+        Assert.Equal("Product", edge.Metadata["tableName"]);
+        Assert.Equal(EdgeConfidence.Inferred, edge.Confidence);
+    }
+
+    [Fact]
+    public void DuplicateDbSetProperties_ForSameEntity_EmitSingleConventionMapping()
+    {
+        var source = MakeFullSource(@"
+namespace MyApp
+{
+    public class Order
+    {
+        public int Id { get; set; }
+    }
+
+    public class AppDbContext : Microsoft.EntityFrameworkCore.DbContext
+    {
+        public Microsoft.EntityFrameworkCore.DbSet<Order> Orders { get; set; }
+        public Microsoft.EntityFrameworkCore.DbSet<Order> ArchivedOrders { get; set; }
+    }
+}");
+
+        var compilation = CreateCompilation(source);
+        var pass = new DbContextPass();
+        var (edges, externalNodes) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var mapEdge = Assert.Single(edges, e => e.Type == EdgeType.MapsToTable);
+        Assert.Equal("MyApp.Order", mapEdge.FromId);
+        Assert.Equal("[Table:Order]", mapEdge.ToId);
+
+        var orderNode = Assert.Single(externalNodes, n => n.Id == "MyApp.Order");
+        Assert.Equal("Order", orderNode.Name);
+        Assert.Equal(NodeKind.Type, orderNode.Kind);
+        Assert.Equal(string.Empty, orderNode.FilePath);
+        Assert.Equal("MyApp.Order", orderNode.Signature);
+        Assert.Equal(CodeGraph.Core.Models.Accessibility.Public, orderNode.Accessibility);
+        Assert.Equal("MyApp", orderNode.ContainingNamespaceId);
+    }
+
+    [Fact]
+    public void ToTable_WithVariableName_FallsBackToConventionMappingOnly()
+    {
+        var source = MakeFullSource(@"
+namespace MyApp
+{
+    public class Order
+    {
+        public int Id { get; set; }
+    }
+
+    public class AppDbContext : Microsoft.EntityFrameworkCore.DbContext
+    {
+        public Microsoft.EntityFrameworkCore.DbSet<Order> Orders { get; set; }
+
+        protected override void OnModelCreating(Microsoft.EntityFrameworkCore.ModelBuilder modelBuilder)
+        {
+            var tableName = ""Orders"";
+            modelBuilder.Entity<Order>().ToTable(tableName);
+        }
+    }
+}");
+
+        var compilation = CreateCompilation(source);
+        var pass = new DbContextPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var edge = Assert.Single(edges, e => e.Type == EdgeType.MapsToTable);
+        Assert.Equal("MyApp.Order", edge.FromId);
+        Assert.Equal("[Table:Order]", edge.ToId);
+        Assert.Equal("Order", edge.Metadata["tableName"]);
+        Assert.Equal(EdgeConfidence.Inferred, edge.Confidence);
+        Assert.DoesNotContain(edges, e => e.ToId == "[Table:Orders]");
+    }
+
+    [Fact]
+    public void ToTable_OutsideOnModelCreating_UsesConventionMapping()
+    {
+        var source = MakeFullSource(@"
+namespace MyApp
+{
+    public class Order
+    {
+        public int Id { get; set; }
+    }
+
+    public class AppDbContext : Microsoft.EntityFrameworkCore.DbContext
+    {
+        public Microsoft.EntityFrameworkCore.DbSet<Order> Orders { get; set; }
+
+        public void ConfigureTables(Microsoft.EntityFrameworkCore.ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<Order>().ToTable(""Orders"");
+        }
+    }
+}");
+
+        var compilation = CreateCompilation(source);
+        var pass = new DbContextPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var edge = Assert.Single(edges, e => e.Type == EdgeType.MapsToTable);
+        Assert.Equal("[Table:Order]", edge.ToId);
+        Assert.Equal(EdgeConfidence.Inferred, edge.Confidence);
+        Assert.DoesNotContain(edges, e => e.ToId == "[Table:Orders]");
+    }
+
+    [Fact]
+    public void HasOne_WithParenthesizedLambda_StoresPropertyMetadata()
+    {
+        var source = MakeFullSource(@"
+namespace MyApp
+{
+    public class OrderLine
+    {
+        public int Id { get; set; }
+        public Order Order { get; set; }
+    }
+
+    public class Order
+    {
+        public int Id { get; set; }
+    }
+
+    public class AppDbContext : Microsoft.EntityFrameworkCore.DbContext
+    {
+        public Microsoft.EntityFrameworkCore.DbSet<Order> Orders { get; set; }
+        public Microsoft.EntityFrameworkCore.DbSet<OrderLine> OrderLines { get; set; }
+
+        protected override void OnModelCreating(Microsoft.EntityFrameworkCore.ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<OrderLine>().HasOne<Order>((line) => line.Order);
+        }
+    }
+}");
+
+        var compilation = CreateCompilation(source);
+        var pass = new DbContextPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var navEdge = Assert.Single(edges, e => e.Type == EdgeType.NavigatesTo);
+        Assert.Equal("MyApp.OrderLine", navEdge.FromId);
+        Assert.Equal("MyApp.Order", navEdge.ToId);
+        Assert.Equal("many-to-one", navEdge.Metadata["relationship"]);
+        Assert.Equal("Order", navEdge.Metadata["property"]);
+    }
+
+    [Fact]
+    public void HasMany_WithNonMemberLambda_OmitsPropertyMetadata()
+    {
+        var source = MakeFullSource(@"
+using System.Collections.Generic;
+
+namespace MyApp
+{
+    public class Order
+    {
+        public int Id { get; set; }
+    }
+
+    public class OrderLine
+    {
+        public int Id { get; set; }
+        public Order Order { get; set; }
+    }
+
+    public class AppDbContext : Microsoft.EntityFrameworkCore.DbContext
+    {
+        public Microsoft.EntityFrameworkCore.DbSet<Order> Orders { get; set; }
+        public Microsoft.EntityFrameworkCore.DbSet<OrderLine> OrderLines { get; set; }
+
+        protected override void OnModelCreating(Microsoft.EntityFrameworkCore.ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<Order>().HasMany(o => new List<OrderLine>()).WithOne(l => l.Order);
+        }
+    }
+}");
+
+        var compilation = CreateCompilation(source);
+        var pass = new DbContextPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var navEdge = Assert.Single(edges, e => e.Type == EdgeType.NavigatesTo);
+        Assert.Equal("MyApp.Order", navEdge.FromId);
+        Assert.Equal("MyApp.OrderLine", navEdge.ToId);
+        Assert.Equal("one-to-many", navEdge.Metadata["relationship"]);
+        Assert.False(navEdge.Metadata.ContainsKey("property"));
+    }
+
+    [Fact]
+    public void EntityTypeConfigurationAndDbSet_DeduplicateEntityExternalNode()
+    {
+        var source = MakeFullSource(@"
+namespace MyApp
+{
+    public class Invoice
+    {
+        public int Id { get; set; }
+    }
+
+    public class AppDbContext : Microsoft.EntityFrameworkCore.DbContext
+    {
+        public Microsoft.EntityFrameworkCore.DbSet<Invoice> Invoices { get; set; }
+    }
+
+    public class InvoiceConfiguration : Microsoft.EntityFrameworkCore.IEntityTypeConfiguration<Invoice>
+    {
+        public void Configure(Microsoft.EntityFrameworkCore.EntityTypeBuilder<Invoice> builder)
+        {
+            builder.ToTable(""Invoices"");
+        }
+    }
+}");
+
+        var compilation = CreateCompilation(source);
+        var pass = new DbContextPass();
+        var (edges, externalNodes) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        Assert.Single(edges, e => e.Type == EdgeType.MapsToTable);
+        Assert.Single(edges, e => e.Type == EdgeType.ConfiguredBy);
+        Assert.Single(externalNodes.Where(n => n.Id == "MyApp.Invoice"));
+        Assert.Single(externalNodes.Where(n => n.Id == "MyApp.InvoiceConfiguration"));
+        Assert.Equal(2, externalNodes.Count);
+    }
+
+    [Fact]
+    public void ConfigureLikeClass_WithoutInterface_DoesNotEmitConfiguredByEdge()
+    {
+        var source = MakeFullSource(@"
+namespace MyApp
+{
+    public class Invoice
+    {
+        public int Id { get; set; }
+    }
+
+    public class InvoiceConfiguration
+    {
+        public void Configure(Microsoft.EntityFrameworkCore.EntityTypeBuilder<Invoice> builder)
+        {
+            builder.ToTable(""Invoices"");
+        }
+    }
+}");
+
+        var compilation = CreateCompilation(source);
+        var pass = new DbContextPass();
+        var (edges, externalNodes) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        Assert.DoesNotContain(edges, e => e.Type == EdgeType.ConfiguredBy);
+        Assert.Empty(externalNodes);
+    }
+
+    [Fact]
+    public void EntityTypeConfiguration_KnownNodeIdsSuppressBothExternalNodes()
+    {
+        var source = MakeFullSource(@"
+namespace MyApp
+{
+    public class Invoice
+    {
+        public int Id { get; set; }
+    }
+
+    public class InvoiceConfiguration : Microsoft.EntityFrameworkCore.IEntityTypeConfiguration<Invoice>
+    {
+        public void Configure(Microsoft.EntityFrameworkCore.EntityTypeBuilder<Invoice> builder)
+        {
+            builder.ToTable(""Invoices"");
+        }
+    }
+}");
+
+        var compilation = CreateCompilation(source);
+        var pass = new DbContextPass();
+        var knownIds = new HashSet<string> { "MyApp.Invoice", "MyApp.InvoiceConfiguration" };
+        var (edges, externalNodes) = pass.Execute(compilation, "/root", knownIds);
+
+        var edge = Assert.Single(edges);
+        Assert.Equal(EdgeType.ConfiguredBy, edge.Type);
+        Assert.Equal("MyApp.Invoice", edge.FromId);
+        Assert.Equal("MyApp.InvoiceConfiguration", edge.ToId);
+        Assert.Empty(externalNodes);
+    }
+
+    [Fact]
+    public void NonDbSetProperty_DoesNotProduceMappingEdge()
+    {
+        var source = MakeFullSource(@"
+using System.Collections.Generic;
+
+namespace MyApp
+{
+    public class Order
+    {
+        public int Id { get; set; }
+    }
+
+    public class AppDbContext : Microsoft.EntityFrameworkCore.DbContext
+    {
+        public List<Order> Orders { get; set; }
+    }
+}");
+
+        var compilation = CreateCompilation(source);
+        var pass = new DbContextPass();
+        var (edges, externalNodes) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        Assert.Empty(edges);
+        Assert.Empty(externalNodes);
+    }
 }

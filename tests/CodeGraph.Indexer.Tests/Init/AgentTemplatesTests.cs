@@ -115,4 +115,36 @@ public class AgentTemplatesTests
         Assert.Contains("codegraph-impact.md", AgentTemplates.OpenCodeAgentsSection);
         Assert.Contains("codegraph-review.md", AgentTemplates.OpenCodeAgentsSection);
     }
+
+    [Fact]
+    public void AppendMarker_IsExactSharedHeading()
+    {
+        Assert.Equal("## CodeGraph — Structural Code Intelligence", AgentTemplates.AppendMarker);
+        Assert.Contains(AgentTemplates.AppendMarker, AgentTemplates.CopilotInstructionsSection);
+        Assert.Contains(AgentTemplates.AppendMarker, AgentTemplates.OpenCodeAgentsSection);
+    }
+
+    [Fact]
+    public void ClaudeQueryWrapperSh_MatchesExactWrapperScript()
+    {
+        Assert.Equal(
+            "#!/usr/bin/env bash\n# CodeGraph query wrapper for Claude Code skill scripts\n# Usage: ./query-wrapper.sh <symbol-pattern> [options]\nset -euo pipefail\ncodegraph query \"$@\"",
+            AgentTemplates.ClaudeQueryWrapperSh.Replace("\r\n", "\n"));
+    }
+
+    [Fact]
+    public void CopilotAndOpenCodeSections_StartWithMarkerWithoutLeadingWhitespaceAfterTrim()
+    {
+        Assert.StartsWith("## CodeGraph — Structural Code Intelligence", AgentTemplates.CopilotInstructionsSection.TrimStart());
+        Assert.StartsWith("## CodeGraph — Structural Code Intelligence", AgentTemplates.OpenCodeAgentsSection.TrimStart());
+    }
+
+    [Fact]
+    public void GenericInstructionsMd_ListsAllDelegatableAgentFilesExactlyOnce()
+    {
+        Assert.Equal(1, AgentTemplates.GenericInstructionsMd.Split("codegraph-architecture.md").Length - 1);
+        Assert.Equal(1, AgentTemplates.GenericInstructionsMd.Split("codegraph-impact.md").Length - 1);
+        Assert.Equal(1, AgentTemplates.GenericInstructionsMd.Split("codegraph-review.md").Length - 1);
+        Assert.Contains("Platform-specific integrations can load or mirror those definitions.", AgentTemplates.GenericInstructionsMd);
+    }
 }

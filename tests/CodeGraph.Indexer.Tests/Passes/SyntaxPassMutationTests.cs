@@ -17,6 +17,11 @@ public class SyntaxPassMutationTests
     private static CSharpCompilation CreateCompilation(string source, string assemblyName = "TestAssembly")
     {
         var syntaxTree = CSharpSyntaxTree.ParseText(source);
+        return CreateCompilation(syntaxTree, assemblyName);
+    }
+
+    private static CSharpCompilation CreateCompilation(SyntaxTree syntaxTree, string assemblyName = "TestAssembly")
+    {
         var references = new List<MetadataReference>
         {
             MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
@@ -424,5 +429,38 @@ namespace A
         var (nodes, _) = Execute("namespace A { public struct Point { public int X; } }");
         var node = nodes.Single(n => n.Kind == NodeKind.Type && n.Name == "Point");
         Assert.Equal("Struct", node.Metadata["typeKind"]);
+    }
+
+    [Fact]
+    public void RelativePath_WithKnownTreePath_ReturnsExactRelativePath()
+    {
+        var tree = CSharpSyntaxTree.ParseText("namespace A { public class C { } }", path: @"D:\repo\src\MyFile.cs");
+        var compilation = CreateCompilation(tree);
+        var (nodes, _) = new SyntaxPass().Execute(compilation, @"D:\repo");
+
+        var expectedPath = Path.Combine("src", "MyFile.cs");
+        var typeNode = nodes.Single(n => n.Id == "A.C");
+        var namespaceNode = nodes.Single(n => n.Id == "A");
+
+        Assert.Equal(expectedPath, typeNode.FilePath);
+        Assert.Equal(expectedPath, namespaceNode.FilePath);
+    }
+
+    [Fact]
+    public void EmptySolutionRoot_PreservesAbsoluteFilePath()
+    {
+        var tree = CSharpSyntaxTree.ParseText("namespace A { public class C { } }", path: @"D:\repo\src\MyFile.cs");
+        var compilation = CreateCompilation(tree);
+        var (nodes, _) = new SyntaxPass().Execute(compilation, string.Empty);
+
+        var typeNode = nodes.Single(n => n.Id == "A.C");
+        Assert.Equal(@"D:\repo\src\MyFile.cs", typeNode.FilePath);
+    }
+
+    [Fact]
+    public void MapAccessibility_NotApplicable_DefaultsToPrivate()
+    {
+        var mapped = SyntaxPass.MapAccessibility(Microsoft.CodeAnalysis.Accessibility.NotApplicable);
+        Assert.Equal(Accessibility.Private, mapped);
     }
 }

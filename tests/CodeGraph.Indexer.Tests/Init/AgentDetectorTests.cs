@@ -125,4 +125,46 @@ public class AgentDetectorTests : IDisposable
         Assert.Contains(result, d => d.Agent == AgentKind.OpenCode);
         Assert.Contains(result, d => d.Agent == AgentKind.Cursor);
     }
+
+    [Fact]
+    public void Detect_Copilot_IncludesExactMatchedPath()
+    {
+        var dir = Path.Combine(_testDir, ".github");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "copilot-instructions.md"), "# Instructions");
+
+        var detection = Assert.Single(AgentDetector.Detect(_testDir));
+        Assert.Equal(".github/copilot-instructions.md", detection.MatchedPath);
+    }
+
+    [Fact]
+    public void Detect_Cursorrules_PreferredOverCursorDirectory()
+    {
+        File.WriteAllText(Path.Combine(_testDir, ".cursorrules"), "{}");
+        Directory.CreateDirectory(Path.Combine(_testDir, ".cursor", "rules"));
+
+        var detection = Assert.Single(AgentDetector.Detect(_testDir));
+        Assert.Equal(AgentKind.Cursor, detection.Agent);
+        Assert.Equal(".cursorrules", detection.MatchedPath);
+    }
+
+    [Fact]
+    public void Detect_MultipleAgents_ReturnsStableOrderAndPaths()
+    {
+        Directory.CreateDirectory(Path.Combine(_testDir, ".claude"));
+        var githubDir = Path.Combine(_testDir, ".github");
+        Directory.CreateDirectory(githubDir);
+        File.WriteAllText(Path.Combine(githubDir, "copilot-instructions.md"), "# Instructions");
+        File.WriteAllText(Path.Combine(_testDir, "AGENTS.md"), "# Agents");
+        File.WriteAllText(Path.Combine(_testDir, ".cursorrules"), "{}");
+
+        var result = AgentDetector.Detect(_testDir);
+
+        Assert.Equal(
+            [AgentKind.Claude, AgentKind.Copilot, AgentKind.OpenCode, AgentKind.Cursor],
+            result.Select(d => d.Agent).ToArray());
+        Assert.Equal(
+            [".claude/ directory", ".github/copilot-instructions.md", "AGENTS.md", ".cursorrules"],
+            result.Select(d => d.MatchedPath).ToArray());
+    }
 }

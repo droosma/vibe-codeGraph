@@ -283,4 +283,56 @@ public class AgentSkillWriterMutationTests : IDisposable
         Assert.NotEqual(WriteAction.Appended, skillResult.Action);
         Assert.NotEqual(WriteAction.AlreadyPresent, skillResult.Action);
     }
+
+    [Fact]
+    public async Task WriteAsync_Copilot_ForceWithMarker_StillReportsAlreadyPresent()
+    {
+        var dir = Path.Combine(_testDir, ".github");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "copilot-instructions.md"), AgentTemplates.AppendMarker + "\nExisting");
+
+        var results = await AgentSkillWriter.WriteAsync(
+            _testDir, new[] { AgentKind.Copilot }, force: true);
+
+        var result = results.Single(r => r.RelativePath == ".github/copilot-instructions.md");
+        Assert.Equal(WriteAction.AlreadyPresent, result.Action);
+        Assert.Equal(AgentTemplates.AppendMarker + "\nExisting", File.ReadAllText(Path.Combine(dir, "copilot-instructions.md")));
+    }
+
+    [Fact]
+    public async Task WriteAsync_NewFiles_AreTrimmedWithoutLeadingBlankLine()
+    {
+        await AgentSkillWriter.WriteAsync(
+            _testDir, new[] { AgentKind.Copilot, AgentKind.OpenCode }, force: false);
+
+        var copilot = File.ReadAllText(Path.Combine(_testDir, ".github", "copilot-instructions.md"));
+        var openCode = File.ReadAllText(Path.Combine(_testDir, "AGENTS.md"));
+
+        Assert.StartsWith("## CodeGraph — Structural Code Intelligence", copilot);
+        Assert.StartsWith("## CodeGraph — Structural Code Intelligence", openCode);
+    }
+
+    [Fact]
+    public async Task WriteAsync_EmptyAgentSelection_ReturnsGenericFilesInStableOrder()
+    {
+        var results = await AgentSkillWriter.WriteAsync(_testDir, Array.Empty<AgentKind>(), force: false);
+
+        Assert.Equal(
+            [
+                ".codegraph/INSTRUCTIONS.md",
+                ".codegraph/agents/codegraph-architecture.md",
+                ".codegraph/agents/codegraph-impact.md",
+                ".codegraph/agents/codegraph-review.md"
+            ],
+            results.Select(r => r.RelativePath).ToArray());
+        Assert.All(results, r => Assert.Equal(WriteAction.Created, r.Action));
+    }
+
+    [Fact]
+    public async Task EnsureGitignoreEntryAsync_CreateWritesExactFileContent()
+    {
+        await AgentSkillWriter.EnsureGitignoreEntryAsync(_testDir);
+
+        Assert.Equal(".codegraph/\n", File.ReadAllText(Path.Combine(_testDir, ".gitignore")).Replace("\r\n", "\n"));
+    }
 }

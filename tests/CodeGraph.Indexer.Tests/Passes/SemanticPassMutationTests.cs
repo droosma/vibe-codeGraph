@@ -561,4 +561,134 @@ namespace MyApp
             e.Type == EdgeType.Calls &&
             e.ToId.Contains("B"));
     }
+
+    [Fact]
+    public void PropertyGetter_DoesNotCreateReferencesEdge_WhenPropertyBodiesAreNotVisited()
+    {
+        var source = @"
+namespace MyApp
+{
+    public class Config
+    {
+        public static int MaxRetries = 3;
+    }
+
+    public class Reader
+    {
+        public int Current => Config.MaxRetries;
+    }
+}";
+        var (_, _, _, semanticEdges) = RunBothPasses(source);
+
+        Assert.DoesNotContain(semanticEdges, e =>
+            e.FromId == "MyApp.Reader.Current" &&
+            e.ToId == "MyApp.Config.MaxRetries" &&
+            e.Type == EdgeType.References);
+    }
+
+    [Fact]
+    public void EventAccessor_UsesEventIdAsContainingMemberForCallsEdge()
+    {
+        var source = @"
+using System;
+namespace MyApp
+{
+    public class Notifier
+    {
+        public static void Touch() { }
+    }
+
+    public class Publisher
+    {
+        public event Action Changed
+        {
+            add { Notifier.Touch(); }
+            remove { Notifier.Touch(); }
+        }
+    }
+}";
+        var (_, _, _, semanticEdges) = RunBothPasses(source);
+
+        var edges = semanticEdges.Where(e =>
+            e.FromId == "MyApp.Publisher.Changed" &&
+            e.ToId == "MyApp.Notifier.Touch()" &&
+            e.Type == EdgeType.Calls).ToList();
+        Assert.Single(edges);
+    }
+
+    [Fact]
+    public void MethodGroupAssignment_DoesNotCreateReferencesOrCallsEdge()
+    {
+        var source = @"
+using System;
+namespace MyApp
+{
+    public class Worker
+    {
+        public static void Run() { }
+    }
+
+    public class Consumer
+    {
+        public void Use()
+        {
+            Action action = Worker.Run;
+        }
+    }
+}";
+        var (_, _, _, semanticEdges) = RunBothPasses(source);
+
+        Assert.DoesNotContain(semanticEdges, e =>
+            e.ToId == "MyApp.Worker.Run()" &&
+            (e.Type == EdgeType.References || e.Type == EdgeType.Calls));
+    }
+
+    [Fact]
+    public void DuplicateFieldReference_ProducesSingleReferencesEdge()
+    {
+        var source = @"
+namespace MyApp
+{
+    public class Config
+    {
+        public static int Value = 1;
+    }
+
+    public class Reader
+    {
+        public int Read()
+        {
+            return Config.Value + Config.Value;
+        }
+    }
+}";
+        var (_, _, _, semanticEdges) = RunBothPasses(source);
+
+        var edges = semanticEdges.Where(e =>
+            e.FromId == "MyApp.Reader.Read()" &&
+            e.ToId == "MyApp.Config.Value" &&
+            e.Type == EdgeType.References).ToList();
+        Assert.Single(edges);
+    }
+
+    [Fact]
+    public void NullableArrayField_UnwrapsRecursivelyToElementType()
+    {
+        var source = @"
+namespace MyApp
+{
+    public struct Item { }
+
+    public class Holder
+    {
+        public Item?[] Items;
+    }
+}";
+        var (_, _, _, semanticEdges) = RunBothPasses(source);
+
+        var edge = Assert.Single(semanticEdges, e =>
+            e.FromId == "MyApp.Holder.Items" &&
+            e.Type == EdgeType.DependsOn);
+        Assert.Equal("MyApp.Item", edge.ToId);
+    }
 }

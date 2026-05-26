@@ -7,9 +7,11 @@ namespace CodeGraph.Indexer.Tests.Passes;
 
 public class ConfigurationPassTests
 {
-    private static CSharpCompilation CreateCompilation(string source)
+    private static CSharpCompilation CreateCompilation(string source, string? filePath = null)
     {
-        var syntaxTree = CSharpSyntaxTree.ParseText(source);
+        var syntaxTree = filePath is null
+            ? CSharpSyntaxTree.ParseText(source)
+            : CSharpSyntaxTree.ParseText(source, path: filePath);
         var references = new List<MetadataReference>
         {
             MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
@@ -315,5 +317,217 @@ namespace MyApp
         Assert.True(edge.Metadata.ContainsKey("registrationFile"), "Missing 'registrationFile' metadata key");
         Assert.NotEmpty(edge.Metadata["section"]);
         Assert.NotEmpty(edge.Metadata["registrationMethod"]);
+    }
+
+    [Fact]
+    public void AddOptions_WithoutValidation_DoesNotStoreValidationMetadata()
+    {
+        var code = StubTypes + @"
+namespace MyApp
+{
+    public class PaymentOptions { }
+
+    public class Startup
+    {
+        public void ConfigureServices(object services, Microsoft.Extensions.Configuration.IConfiguration config)
+        {
+            services.AddOptions<PaymentOptions>().Bind(config.GetSection(""Payment""));
+        }
+    }
+}";
+        var compilation = CreateCompilation(code);
+        var pass = new ConfigurationPass();
+        var (edges, externalNodes) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var edge = Assert.Single(edges);
+        Assert.Equal(2, externalNodes.Count);
+        Assert.False(edge.Metadata.ContainsKey("validation"));
+        Assert.Equal("AddOptions", edge.Metadata["registrationMethod"]);
+        Assert.Equal("Payment", edge.Metadata["section"]);
+    }
+
+    [Fact]
+    public void Configure_WithSectionVariable_DoesNotEmitEdge()
+    {
+        var code = StubTypes + @"
+namespace MyApp
+{
+    public class PaymentOptions { }
+
+    public class Startup
+    {
+        public void ConfigureServices(object services, Microsoft.Extensions.Configuration.IConfiguration config)
+        {
+            var section = config.GetSection(""Payment"");
+            services.Configure<PaymentOptions>(section);
+        }
+    }
+}";
+        var compilation = CreateCompilation(code);
+        var pass = new ConfigurationPass();
+        var (edges, externalNodes) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        Assert.Empty(edges);
+        Assert.Empty(externalNodes);
+    }
+
+    [Fact]
+    public void Bind_WithoutAddOptionsChain_DoesNotEmitEdge()
+    {
+        var code = StubTypes + @"
+namespace MyApp
+{
+    public class PaymentOptions { }
+
+    public class Startup
+    {
+        public void ConfigureServices(Microsoft.Extensions.Configuration.IConfiguration config)
+        {
+            var builder = new Microsoft.Extensions.DependencyInjection.OptionsBuilder<PaymentOptions>();
+            builder.Bind(config.GetSection(""Payment""));
+        }
+    }
+}";
+        var compilation = CreateCompilation(code);
+        var pass = new ConfigurationPass();
+        var (edges, externalNodes) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        Assert.Empty(edges);
+        Assert.Empty(externalNodes);
+    }
+
+    [Fact]
+    public void ValidateDataAnnotations_WithoutBind_DoesNotEmitEdge()
+    {
+        var code = StubTypes + @"
+namespace MyApp
+{
+    public class PaymentOptions { }
+
+    public class Startup
+    {
+        public void ConfigureServices(object services)
+        {
+            services.AddOptions<PaymentOptions>().ValidateDataAnnotations();
+        }
+    }
+}";
+        var compilation = CreateCompilation(code);
+        var pass = new ConfigurationPass();
+        var (edges, externalNodes) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        Assert.Empty(edges);
+        Assert.Empty(externalNodes);
+    }
+
+    [Fact]
+    public void DuplicateBindings_CreateOneExternalNodePerId()
+    {
+        var code = StubTypes + @"
+namespace MyApp
+{
+    public class PaymentOptions { }
+
+    public class Startup
+    {
+        public void ConfigureServices(object services, Microsoft.Extensions.Configuration.IConfiguration config)
+        {
+            services.Configure<PaymentOptions>(config.GetSection(""Payment""));
+            services.AddOptions<PaymentOptions>().Bind(config.GetSection(""Payment""));
+        }
+    }
+}";
+        var compilation = CreateCompilation(code);
+        var pass = new ConfigurationPass();
+        var (edges, externalNodes) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        Assert.Equal(2, edges.Count);
+        Assert.Equal(2, externalNodes.Count);
+        Assert.Single(externalNodes.Where(n => n.Id == "MyApp.PaymentOptions"));
+        Assert.Single(externalNodes.Where(n => n.Id == "[Config:Payment]"));
+        Assert.Contains(edges, e => e.Metadata["registrationMethod"] == "Configure");
+        Assert.Contains(edges, e => e.Metadata["registrationMethod"] == "AddOptions");
+    }
+
+    [Fact]
+    public void ExternalConfigNode_HasExactSignatureMetadataAndAccessibility()
+    {
+        var code = StubTypes + @"
+namespace MyApp
+{
+    public class PaymentOptions { }
+
+    public class Startup
+    {
+        public void ConfigureServices(object services, Microsoft.Extensions.Configuration.IConfiguration config)
+        {
+            services.Configure<PaymentOptions>(config.GetSection(""Payment""));
+        }
+    }
+}";
+        var compilation = CreateCompilation(code);
+        var pass = new ConfigurationPass();
+        var (_, externalNodes) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var configNode = Assert.Single(externalNodes, n => n.Id == "[Config:Payment]");
+        Assert.Equal("Payment", configNode.Name);
+        Assert.Equal(NodeKind.Property, configNode.Kind);
+        Assert.Equal(string.Empty, configNode.FilePath);
+        Assert.Equal("Configuration Section: Payment", configNode.Signature);
+        Assert.Equal(CodeGraph.Core.Models.Accessibility.Public, configNode.Accessibility);
+        Assert.NotNull(configNode.Metadata);
+        Assert.True(configNode.Metadata.ContainsKey("nodeType"));
+        Assert.False(configNode.Metadata.ContainsKey("NodeType"));
+        Assert.Equal("ConfigurationSection", configNode.Metadata["nodeType"]);
+    }
+
+    [Fact]
+    public void Execute_WithFilePath_UsesRelativeRegistrationFile()
+    {
+        var code = StubTypes + @"
+namespace MyApp
+{
+    public class PaymentOptions { }
+
+    public class Startup
+    {
+        public void ConfigureServices(object services, Microsoft.Extensions.Configuration.IConfiguration config)
+        {
+            services.Configure<PaymentOptions>(config.GetSection(""Payment""));
+        }
+    }
+}";
+        var filePath = @"D:\repo\src\Startup.cs";
+        var compilation = CreateCompilation(code, filePath);
+        var pass = new ConfigurationPass();
+        var (edges, _) = pass.Execute(compilation, @"D:\repo", new HashSet<string>());
+
+        var edge = Assert.Single(edges);
+        Assert.Equal(Path.Combine("src", "Startup.cs"), edge.Metadata["registrationFile"]);
+    }
+
+    [Fact]
+    public void KnownNodeIds_SuppressOnlyMatchingExternalNode()
+    {
+        var code = StubTypes + @"
+namespace MyApp
+{
+    public class PaymentOptions { }
+
+    public class Startup
+    {
+        public void ConfigureServices(object services, Microsoft.Extensions.Configuration.IConfiguration config)
+        {
+            services.Configure<PaymentOptions>(config.GetSection(""Payment""));
+        }
+    }
+}";
+        var compilation = CreateCompilation(code);
+        var pass = new ConfigurationPass();
+        var (_, externalNodes) = pass.Execute(compilation, "/root", new HashSet<string> { "MyApp.PaymentOptions" });
+
+        var configNode = Assert.Single(externalNodes);
+        Assert.Equal("[Config:Payment]", configNode.Id);
+        Assert.Equal("Payment", configNode.Name);
     }
 }

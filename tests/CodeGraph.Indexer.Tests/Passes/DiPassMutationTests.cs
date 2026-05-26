@@ -15,6 +15,11 @@ public class DiPassMutationTests
     private static CSharpCompilation CreateCompilation(string source)
     {
         var syntaxTree = CSharpSyntaxTree.ParseText(source);
+        return CreateCompilation(syntaxTree);
+    }
+
+    private static CSharpCompilation CreateCompilation(SyntaxTree syntaxTree)
+    {
         var references = new List<MetadataReference>
         {
             MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
@@ -30,6 +35,27 @@ public class DiPassMutationTests
             new[] { syntaxTree },
             references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+    }
+
+    private static string MakeGenericSource(string methodName)
+    {
+        return $@"
+namespace MyApp
+{{
+    public interface IService {{ }}
+    public class ServiceImpl : IService {{ }}
+    public static class Ext
+    {{
+        public static void {methodName}<T1, T2>(this object services) where T2 : T1 {{ }}
+    }}
+    public class Startup
+    {{
+        public void Configure(object services)
+        {{
+            services.{methodName}<IService, ServiceImpl>();
+        }}
+    }}
+}}";
     }
 
     // ── Edge has exactly EdgeType.ResolvesTo (not any other) ──
@@ -396,27 +422,119 @@ namespace MyApp
         public void Configure(object services) { services.AddScoped<IFoo, FooImpl>(); }
     }
 }";
-        var syntaxTree = CSharpSyntaxTree.ParseText(source, path: "/root/src/Startup.cs");
-        var references = new List<MetadataReference>
-        {
-            MetadataReference.CreateFromFile(typeof(object).Assembly.Location)
-        };
-        var runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location)!;
-        var runtimeDll = Path.Combine(runtimeDir, "System.Runtime.dll");
-        if (File.Exists(runtimeDll))
-            references.Add(MetadataReference.CreateFromFile(runtimeDll));
-
-        var compilation = CSharpCompilation.Create("TestAssembly",
-            new[] { syntaxTree },
-            references,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var syntaxTree = CSharpSyntaxTree.ParseText(source, path: @"D:\repo\src\Startup.cs");
+        var compilation = CreateCompilation(syntaxTree);
 
         var pass = new DiPass();
-        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+        var (edges, _) = pass.Execute(compilation, @"D:\repo", new HashSet<string>());
 
         var edge = Assert.Single(edges);
-        // registrationFile should be relative to /root
-        var regFile = edge.Metadata["registrationFile"];
-        Assert.DoesNotContain("/root/", regFile);
+        Assert.Equal(Path.Combine("src", "Startup.cs"), edge.Metadata["registrationFile"]);
+    }
+
+    [Fact]
+    public void StandaloneGenericInvocation_DoesNotProduceRegistrationEdge()
+    {
+        var source = @"
+namespace MyApp
+{
+    public interface IFoo { }
+    public class FooImpl : IFoo { }
+    public class Startup
+    {
+        public static void AddScoped<T1, T2>(object services) where T2 : T1 { }
+
+        public void Configure(object services)
+        {
+            AddScoped<IFoo, FooImpl>(services);
+        }
+    }
+}";
+        var compilation = CreateCompilation(source);
+        var pass = new DiPass();
+        var (edges, externalNodes) = pass.Execute(compilation, @"D:\repo", new HashSet<string>());
+
+        Assert.Empty(edges);
+        Assert.Empty(externalNodes);
+    }
+
+    [Fact]
+    public void TypeofOverload_WithAdditionalArguments_StillUsesFirstTwoTypes()
+    {
+        var source = @"
+namespace MyApp
+{
+    public interface IService { }
+    public class ServiceImpl : IService { }
+    public static class Ext
+    {
+        public static void AddScoped(this object services, System.Type serviceType, System.Type implementationType, int version) { }
+    }
+    public class Startup
+    {
+        public void Configure(object services)
+        {
+            services.AddScoped(typeof(IService), typeof(ServiceImpl), 7);
+        }
+    }
+}";
+        var compilation = CreateCompilation(source);
+        var pass = new DiPass();
+        var (edges, _) = pass.Execute(compilation, @"D:\repo", new HashSet<string>());
+
+        var edge = Assert.Single(edges);
+        Assert.Equal("MyApp.IService", edge.FromId);
+        Assert.Equal("MyApp.ServiceImpl", edge.ToId);
+        Assert.Equal("Scoped", edge.Metadata["lifetime"]);
+    }
+
+    [Fact]
+    public void KnownNodeIds_SuppressOnlyMatchingExternalNode()
+    {
+        var compilation = CreateCompilation(MakeGenericSource("AddScoped"));
+        var pass = new DiPass();
+        var knownIds = new HashSet<string> { "MyApp.IService" };
+        var (edges, externalNodes) = pass.Execute(compilation, @"D:\repo", knownIds);
+
+        Assert.Single(edges);
+        var externalNode = Assert.Single(externalNodes);
+        Assert.Equal("MyApp.ServiceImpl", externalNode.Id);
+    }
+
+    [Fact]
+    public void GlobalNamespaceTypes_HaveNullContainingNamespaceId()
+    {
+        var source = @"
+public interface IService { }
+public class ServiceImpl : IService { }
+public static class Ext
+{
+    public static void AddScoped<T1, T2>(this object services) where T2 : T1 { }
+}
+public class Startup
+{
+    public void Configure(object services)
+    {
+        services.AddScoped<IService, ServiceImpl>();
+    }
+}";
+        var compilation = CreateCompilation(source);
+        var pass = new DiPass();
+        var (edges, externalNodes) = pass.Execute(compilation, @"D:\repo", new HashSet<string>());
+
+        var edge = Assert.Single(edges);
+        Assert.Equal("IService", edge.FromId);
+        Assert.Equal("ServiceImpl", edge.ToId);
+        Assert.Collection(externalNodes.OrderBy(n => n.Id),
+            service =>
+            {
+                Assert.Equal("IService", service.Id);
+                Assert.Null(service.ContainingNamespaceId);
+            },
+            implementation =>
+            {
+                Assert.Equal("ServiceImpl", implementation.Id);
+                Assert.Null(implementation.ContainingNamespaceId);
+            });
     }
 }
