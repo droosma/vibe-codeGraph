@@ -923,6 +923,7 @@ Stryker generates HTML reports in `StrykerOutput/` with mutation scores per proj
 
 ### CLI Command Guides
 
+- [Symbol Query Guide](docs/query.md)
 - [Graph List How-to Guide](docs/list.md)
 - [Symbol Search Guide](docs/search.md)
 - [Symbol Explain Reference](docs/explain.md)
