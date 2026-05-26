@@ -422,11 +422,12 @@ namespace MyApp
         public void Configure(object services) { services.AddScoped<IFoo, FooImpl>(); }
     }
 }";
-        var syntaxTree = CSharpSyntaxTree.ParseText(source, path: @"D:\repo\src\Startup.cs");
+        var root = Path.Combine(Path.GetTempPath(), "repo");
+        var syntaxTree = CSharpSyntaxTree.ParseText(source, path: Path.Combine(root, "src", "Startup.cs"));
         var compilation = CreateCompilation(syntaxTree);
 
         var pass = new DiPass();
-        var (edges, _) = pass.Execute(compilation, @"D:\repo", new HashSet<string>());
+        var (edges, _) = pass.Execute(compilation, root, new HashSet<string>());
 
         var edge = Assert.Single(edges);
         Assert.Equal(Path.Combine("src", "Startup.cs"), edge.Metadata["registrationFile"]);

@@ -125,7 +125,7 @@ public sealed class ProjectParserAdditionalMutationTests : IDisposable
                 <TargetFramework>net8.0</TargetFramework>
               </PropertyGroup>
               <ItemGroup>
-                <ProjectReference Include="..\\Shared\\Shared.csproj" />
+                <ProjectReference Include="../Shared/Shared.csproj" />
               </ItemGroup>
             </Project>
             """,

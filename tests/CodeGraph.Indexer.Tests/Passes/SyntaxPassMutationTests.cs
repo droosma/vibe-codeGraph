@@ -434,9 +434,10 @@ namespace A
     [Fact]
     public void RelativePath_WithKnownTreePath_ReturnsExactRelativePath()
     {
-        var tree = CSharpSyntaxTree.ParseText("namespace A { public class C { } }", path: @"D:\repo\src\MyFile.cs");
+        var root = Path.Combine(Path.GetTempPath(), "repo");
+        var tree = CSharpSyntaxTree.ParseText("namespace A { public class C { } }", path: Path.Combine(root, "src", "MyFile.cs"));
         var compilation = CreateCompilation(tree);
-        var (nodes, _) = new SyntaxPass().Execute(compilation, @"D:\repo");
+        var (nodes, _) = new SyntaxPass().Execute(compilation, root);
 
         var expectedPath = Path.Combine("src", "MyFile.cs");
         var typeNode = nodes.Single(n => n.Id == "A.C");
@@ -449,12 +450,13 @@ namespace A
     [Fact]
     public void EmptySolutionRoot_PreservesAbsoluteFilePath()
     {
-        var tree = CSharpSyntaxTree.ParseText("namespace A { public class C { } }", path: @"D:\repo\src\MyFile.cs");
+        var absolutePath = Path.Combine(Path.GetTempPath(), "repo", "src", "MyFile.cs");
+        var tree = CSharpSyntaxTree.ParseText("namespace A { public class C { } }", path: absolutePath);
         var compilation = CreateCompilation(tree);
         var (nodes, _) = new SyntaxPass().Execute(compilation, string.Empty);
 
         var typeNode = nodes.Single(n => n.Id == "A.C");
-        Assert.Equal(@"D:\repo\src\MyFile.cs", typeNode.FilePath);
+        Assert.Equal(absolutePath, typeNode.FilePath);
     }
 
     [Fact]

@@ -497,10 +497,11 @@ namespace MyApp
         }
     }
 }";
-        var filePath = @"D:\repo\src\Startup.cs";
+        var root = Path.Combine(Path.GetTempPath(), "repo");
+        var filePath = Path.Combine(root, "src", "Startup.cs");
         var compilation = CreateCompilation(code, filePath);
         var pass = new ConfigurationPass();
-        var (edges, _) = pass.Execute(compilation, @"D:\repo", new HashSet<string>());
+        var (edges, _) = pass.Execute(compilation, root, new HashSet<string>());
 
         var edge = Assert.Single(edges);
         Assert.Equal(Path.Combine("src", "Startup.cs"), edge.Metadata["registrationFile"]);
