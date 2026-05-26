@@ -15,21 +15,20 @@ public class SyntaxPass
     {
         var nodes = new List<GraphNode>();
         var edges = new List<GraphEdge>();
-        var seenNamespaces = new HashSet<string>();
+        var seenNamespaces = new HashSet<string>(StringComparer.Ordinal);
         var assemblyName = compilation.AssemblyName ?? "Unknown";
 
         foreach (var tree in compilation.SyntaxTrees)
         {
             var semanticModel = compilation.GetSemanticModel(tree);
-            var root = tree.GetRoot();
-            var walker = new SyntaxNodeWalker(semanticModel, solutionRoot, assemblyName, nodes, edges, seenNamespaces);
-            walker.Visit(root);
+            var walker = new SyntaxWalker(semanticModel, solutionRoot, assemblyName, nodes, edges, seenNamespaces);
+            walker.Visit(tree.GetRoot());
         }
 
         return (nodes, edges);
     }
 
-    private sealed class SyntaxNodeWalker : CSharpSyntaxWalker
+    private sealed class SyntaxWalker : CSharpSyntaxWalker
     {
         private readonly SemanticModel _model;
         private readonly string _solutionRoot;
@@ -38,7 +37,7 @@ public class SyntaxPass
         private readonly List<GraphEdge> _edges;
         private readonly HashSet<string> _seenNamespaces;
 
-        public SyntaxNodeWalker(
+        public SyntaxWalker(
             SemanticModel model,
             string solutionRoot,
             string assemblyName,
@@ -56,76 +55,94 @@ public class SyntaxPass
 
         public override void VisitNamespaceDeclaration(NamespaceDeclarationSyntax node)
         {
-            EmitNamespaceNode(node);
+            AddNamespaceNode(node);
             base.VisitNamespaceDeclaration(node);
         }
 
         public override void VisitFileScopedNamespaceDeclaration(FileScopedNamespaceDeclarationSyntax node)
         {
-            EmitNamespaceNode(node);
+            AddNamespaceNode(node);
             base.VisitFileScopedNamespaceDeclaration(node);
         }
 
-        public override void VisitClassDeclaration(ClassDeclarationSyntax node) { EmitTypeNode(node); base.VisitClassDeclaration(node); }
-        public override void VisitInterfaceDeclaration(InterfaceDeclarationSyntax node) { EmitTypeNode(node); base.VisitInterfaceDeclaration(node); }
-        public override void VisitRecordDeclaration(RecordDeclarationSyntax node) { EmitTypeNode(node); base.VisitRecordDeclaration(node); }
-        public override void VisitStructDeclaration(StructDeclarationSyntax node) { EmitTypeNode(node); base.VisitStructDeclaration(node); }
-        public override void VisitEnumDeclaration(EnumDeclarationSyntax node) { EmitTypeNode(node); base.VisitEnumDeclaration(node); }
+        public override void VisitClassDeclaration(ClassDeclarationSyntax node)
+        {
+            AddTypeNode(node);
+            base.VisitClassDeclaration(node);
+        }
+
+        public override void VisitInterfaceDeclaration(InterfaceDeclarationSyntax node)
+        {
+            AddTypeNode(node);
+            base.VisitInterfaceDeclaration(node);
+        }
+
+        public override void VisitRecordDeclaration(RecordDeclarationSyntax node)
+        {
+            AddTypeNode(node);
+            base.VisitRecordDeclaration(node);
+        }
+
+        public override void VisitStructDeclaration(StructDeclarationSyntax node)
+        {
+            AddTypeNode(node);
+            base.VisitStructDeclaration(node);
+        }
+
+        public override void VisitEnumDeclaration(EnumDeclarationSyntax node)
+        {
+            AddTypeNode(node);
+            base.VisitEnumDeclaration(node);
+        }
 
         public override void VisitMethodDeclaration(MethodDeclarationSyntax node)
         {
-            EmitMemberNode(node, NodeKind.Method);
+            AddMemberNode(node, NodeKind.Method);
             base.VisitMethodDeclaration(node);
         }
 
         public override void VisitConstructorDeclaration(ConstructorDeclarationSyntax node)
         {
-            EmitMemberNode(node, NodeKind.Constructor);
+            AddMemberNode(node, NodeKind.Constructor);
             base.VisitConstructorDeclaration(node);
         }
 
         public override void VisitPropertyDeclaration(PropertyDeclarationSyntax node)
         {
-            EmitMemberNode(node, NodeKind.Property);
+            AddMemberNode(node, NodeKind.Property);
             base.VisitPropertyDeclaration(node);
         }
 
         public override void VisitFieldDeclaration(FieldDeclarationSyntax node)
         {
-            // FieldDeclaration can declare multiple variables
-            foreach (var variable in node.Declaration.Variables)
-            {
-                var symbol = _model.GetDeclaredSymbol(variable);
-                if (symbol is null) continue;
-
-                var graphNode = CreateNode(symbol, variable, NodeKind.Field);
-                _nodes.Add(graphNode);
-
-                EmitContainsEdgeForMember(symbol, graphNode.Id);
-            }
+            AddFieldNodes(node);
             base.VisitFieldDeclaration(node);
         }
 
         public override void VisitEventDeclaration(EventDeclarationSyntax node)
         {
-            EmitMemberNode(node, NodeKind.Event);
+            AddMemberNode(node, NodeKind.Event);
             base.VisitEventDeclaration(node);
         }
 
-        private void EmitNamespaceNode(BaseNamespaceDeclarationSyntax node)
+        private void AddNamespaceNode(BaseNamespaceDeclarationSyntax node)
         {
-            var symbol = _model.GetDeclaredSymbol(node);
-            if (symbol is null) return;
+            if (_model.GetDeclaredSymbol(node) is not INamespaceSymbol symbol)
+            {
+                return;
+            }
 
-            var id = GetSymbolId(symbol);
-            if (!_seenNamespaces.Add(id)) return;
+            var namespaceId = GetSymbolId(symbol);
+            if (!_seenNamespaces.Add(namespaceId))
+            {
+                return;
+            }
 
             var lineSpan = node.GetLocation().GetLineSpan();
-            var filePath = GetRelativePath(lineSpan.Path);
-
+            var filePath = PassUtilities.GetRelativePath(lineSpan.Path, _solutionRoot);
             _nodes.Add(new GraphNode
             {
-                Id = id,
+                Id = namespaceId,
                 Name = symbol.Name,
                 Kind = NodeKind.Namespace,
                 FilePath = filePath,
@@ -141,91 +158,108 @@ public class SyntaxPass
             });
         }
 
-        private void EmitTypeNode(BaseTypeDeclarationSyntax node)
+        private void AddTypeNode(BaseTypeDeclarationSyntax node)
         {
-            var symbol = _model.GetDeclaredSymbol(node);
-            if (symbol is null) return;
+            if (_model.GetDeclaredSymbol(node) is not INamedTypeSymbol symbol)
+            {
+                return;
+            }
 
-            var graphNode = CreateNode(symbol, node, NodeKind.Type);
+            var graphNode = CreateGraphNode(symbol, node, NodeKind.Type);
             _nodes.Add(graphNode);
 
-            // Contains edge: namespace → type or type → nested type
             if (symbol.ContainingType is not null)
             {
-                _edges.Add(new GraphEdge
-                {
-                    FromId = GetSymbolId(symbol.ContainingType),
-                    ToId = graphNode.Id,
-                    Type = EdgeType.Contains,
-                    Confidence = EdgeConfidence.Verified
-                });
+                AddContainsEdge(GetSymbolId(symbol.ContainingType), graphNode.Id);
+                return;
             }
-            else if (symbol.ContainingNamespace is { IsGlobalNamespace: false })
+
+            if (symbol.ContainingNamespace is { IsGlobalNamespace: false } containingNamespace)
             {
-                var nsId = GetSymbolId(symbol.ContainingNamespace);
-                // Ensure namespace node exists
-                if (_seenNamespaces.Add(nsId))
+                EnsureNamespaceNode(containingNamespace, node.GetLocation().GetLineSpan().Path);
+                AddContainsEdge(GetSymbolId(containingNamespace), graphNode.Id);
+            }
+        }
+
+        private void AddMemberNode(SyntaxNode node, NodeKind kind)
+        {
+            var symbol = _model.GetDeclaredSymbol(node);
+            if (symbol is null)
+            {
+                return;
+            }
+
+            var graphNode = CreateGraphNode(symbol, node, kind);
+            _nodes.Add(graphNode);
+            AddContainingTypeEdge(symbol, graphNode.Id);
+        }
+
+        private void AddFieldNodes(FieldDeclarationSyntax node)
+        {
+            foreach (var variable in node.Declaration.Variables)
+            {
+                var symbol = _model.GetDeclaredSymbol(variable);
+                if (symbol is null)
                 {
-                    _nodes.Add(new GraphNode
-                    {
-                        Id = nsId,
-                        Name = symbol.ContainingNamespace.Name,
-                        Kind = NodeKind.Namespace,
-                        FilePath = GetRelativePath(node.GetLocation().GetLineSpan().Path),
-                        StartLine = 0,
-                        EndLine = 0,
-                        Signature = symbol.ContainingNamespace.ToDisplayString(),
-                        Accessibility = Core.Models.Accessibility.Public,
-                        AssemblyName = _assemblyName
-                    });
+                    continue;
                 }
-                _edges.Add(new GraphEdge
-                {
-                    FromId = nsId,
-                    ToId = graphNode.Id,
-                    Type = EdgeType.Contains,
-                    Confidence = EdgeConfidence.Verified
-                });
+
+                var graphNode = CreateGraphNode(symbol, variable, NodeKind.Field);
+                _nodes.Add(graphNode);
+                AddContainingTypeEdge(symbol, graphNode.Id);
             }
         }
 
-        private void EmitMemberNode(SyntaxNode node, NodeKind kind)
+        private void EnsureNamespaceNode(INamespaceSymbol containingNamespace, string sourcePath)
         {
-            var symbol = _model.GetDeclaredSymbol(node);
-            if (symbol is null) return;
+            var namespaceId = GetSymbolId(containingNamespace);
+            if (!_seenNamespaces.Add(namespaceId))
+            {
+                return;
+            }
 
-            var graphNode = CreateNode(symbol, node, kind);
-            _nodes.Add(graphNode);
-
-            EmitContainsEdgeForMember(symbol, graphNode.Id);
+            _nodes.Add(new GraphNode
+            {
+                Id = namespaceId,
+                Name = containingNamespace.Name,
+                Kind = NodeKind.Namespace,
+                FilePath = PassUtilities.GetRelativePath(sourcePath, _solutionRoot),
+                StartLine = 0,
+                EndLine = 0,
+                Signature = containingNamespace.ToDisplayString(),
+                Accessibility = Core.Models.Accessibility.Public,
+                AssemblyName = _assemblyName
+            });
         }
 
-        private void EmitContainsEdgeForMember(ISymbol symbol, string memberId)
+        private void AddContainingTypeEdge(ISymbol symbol, string memberId)
         {
             if (symbol.ContainingType is not null)
             {
-                _edges.Add(new GraphEdge
-                {
-                    FromId = GetSymbolId(symbol.ContainingType),
-                    ToId = memberId,
-                    Type = EdgeType.Contains,
-                    Confidence = EdgeConfidence.Verified
-                });
+                AddContainsEdge(GetSymbolId(symbol.ContainingType), memberId);
             }
         }
 
-        private GraphNode CreateNode(ISymbol symbol, SyntaxNode node, NodeKind kind)
+        private void AddContainsEdge(string fromId, string toId)
+        {
+            _edges.Add(new GraphEdge
+            {
+                FromId = fromId,
+                ToId = toId,
+                Type = EdgeType.Contains,
+                Confidence = EdgeConfidence.Verified
+            });
+        }
+
+        private GraphNode CreateGraphNode(ISymbol symbol, SyntaxNode node, NodeKind kind)
         {
             var lineSpan = node.GetLocation().GetLineSpan();
-            var filePath = GetRelativePath(lineSpan.Path);
-            var metadata = BuildMetadata(symbol, kind);
-
             return new GraphNode
             {
                 Id = GetSymbolId(symbol),
                 Name = symbol.Name,
                 Kind = kind,
-                FilePath = filePath,
+                FilePath = PassUtilities.GetRelativePath(lineSpan.Path, _solutionRoot),
                 StartLine = lineSpan.StartLinePosition.Line + 1,
                 EndLine = lineSpan.EndLinePosition.Line + 1,
                 Signature = symbol.ToDisplayString(),
@@ -238,66 +272,100 @@ public class SyntaxPass
                     : null,
                 Accessibility = MapAccessibility(symbol.DeclaredAccessibility),
                 AssemblyName = _assemblyName,
-                Metadata = metadata
+                Metadata = BuildMetadata(symbol)
             };
         }
 
-        private static Dictionary<string, string> BuildMetadata(ISymbol symbol, NodeKind kind)
+        private static Dictionary<string, string> BuildMetadata(ISymbol symbol)
         {
-            var meta = new Dictionary<string, string>();
+            var metadata = new Dictionary<string, string>();
 
-            if (symbol.IsAbstract) meta["isAbstract"] = "true";
-            if (symbol.IsStatic) meta["isStatic"] = "true";
-            if (symbol.IsSealed) meta["isSealed"] = "true";
-            if (symbol.IsVirtual) meta["isVirtual"] = "true";
-            if (symbol.IsOverride) meta["isOverride"] = "true";
+            if (symbol.IsAbstract)
+            {
+                metadata["isAbstract"] = "true";
+            }
+
+            if (symbol.IsStatic)
+            {
+                metadata["isStatic"] = "true";
+            }
+
+            if (symbol.IsSealed)
+            {
+                metadata["isSealed"] = "true";
+            }
+
+            if (symbol.IsVirtual)
+            {
+                metadata["isVirtual"] = "true";
+            }
+
+            if (symbol.IsOverride)
+            {
+                metadata["isOverride"] = "true";
+            }
 
             switch (symbol)
             {
                 case INamedTypeSymbol typeSymbol:
-                    meta["typeKind"] = typeSymbol.TypeKind.ToString();
+                    metadata["typeKind"] = typeSymbol.TypeKind.ToString();
                     if (typeSymbol.IsGenericType)
-                        meta["genericArity"] = typeSymbol.TypeParameters.Length.ToString();
+                    {
+                        metadata["genericArity"] = typeSymbol.TypeParameters.Length.ToString();
+                    }
+
                     if (typeSymbol.IsRecord)
-                        meta["isRecord"] = "true";
+                    {
+                        metadata["isRecord"] = "true";
+                    }
+
                     break;
 
                 case IMethodSymbol methodSymbol:
-                    if (methodSymbol.IsAsync) meta["isAsync"] = "true";
-                    if (methodSymbol.IsExtensionMethod) meta["isExtension"] = "true";
-                    meta["returnType"] = methodSymbol.ReturnType.ToDisplayString();
-                    meta["parameterCount"] = methodSymbol.Parameters.Length.ToString();
+                    if (methodSymbol.IsAsync)
+                    {
+                        metadata["isAsync"] = "true";
+                    }
+
+                    if (methodSymbol.IsExtensionMethod)
+                    {
+                        metadata["isExtension"] = "true";
+                    }
+
+                    metadata["returnType"] = methodSymbol.ReturnType.ToDisplayString();
+                    metadata["parameterCount"] = methodSymbol.Parameters.Length.ToString();
                     if (methodSymbol.IsGenericMethod)
-                        meta["genericArity"] = methodSymbol.TypeParameters.Length.ToString();
+                    {
+                        metadata["genericArity"] = methodSymbol.TypeParameters.Length.ToString();
+                    }
+
                     break;
 
-                case IPropertySymbol propSymbol:
-                    meta["propertyType"] = propSymbol.Type.ToDisplayString();
-                    if (propSymbol.IsIndexer) meta["isIndexer"] = "true";
+                case IPropertySymbol propertySymbol:
+                    metadata["propertyType"] = propertySymbol.Type.ToDisplayString();
+                    if (propertySymbol.IsIndexer)
+                    {
+                        metadata["isIndexer"] = "true";
+                    }
+
                     break;
 
                 case IFieldSymbol fieldSymbol:
-                    meta["fieldType"] = fieldSymbol.Type.ToDisplayString();
-                    if (fieldSymbol.IsConst) meta["isConst"] = "true";
-                    if (fieldSymbol.IsReadOnly) meta["isReadOnly"] = "true";
+                    metadata["fieldType"] = fieldSymbol.Type.ToDisplayString();
+                    if (fieldSymbol.IsConst)
+                    {
+                        metadata["isConst"] = "true";
+                    }
+
+                    if (fieldSymbol.IsReadOnly)
+                    {
+                        metadata["isReadOnly"] = "true";
+                    }
+
                     break;
             }
 
-            return meta;
-        }
-
-        private string GetRelativePath(string absolutePath)
-        {
-            if (string.IsNullOrEmpty(absolutePath) || string.IsNullOrEmpty(_solutionRoot))
-                return absolutePath ?? string.Empty;
-            try
-            {
-                return Path.GetRelativePath(_solutionRoot, absolutePath);
-            }
-            catch
-            {
-                return absolutePath;
-            }
+            return metadata;
         }
     }
 
@@ -321,13 +389,19 @@ public class SyntaxPass
     internal static string? ExtractDocComment(ISymbol symbol)
     {
         var xml = symbol.GetDocumentationCommentXml();
-        if (string.IsNullOrWhiteSpace(xml)) return null;
+        if (string.IsNullOrWhiteSpace(xml))
+        {
+            return null;
+        }
 
         try
         {
             var doc = XDocument.Parse(xml);
             var summary = doc.Descendants("summary").FirstOrDefault();
-            if (summary is null) return null;
+            if (summary is null)
+            {
+                return null;
+            }
 
             var text = summary.Value.Trim();
             return string.IsNullOrEmpty(text) ? null : text;

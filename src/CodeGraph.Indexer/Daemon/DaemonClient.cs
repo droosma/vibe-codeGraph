@@ -10,6 +10,8 @@ namespace CodeGraph.Indexer.Daemon;
 /// </summary>
 internal sealed class DaemonClient : IDisposable
 {
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
+
     private readonly NamedPipeClientStream _pipe;
     private readonly StreamReader _reader;
     private readonly StreamWriter _writer;
@@ -33,9 +35,7 @@ internal sealed class DaemonClient : IDisposable
         if (!PidFile.IsProcessRunning(graphDir))
             return false;
 
-        var pipeName = DaemonServer.GetPipeName(graphDir);
-        var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut);
-
+        var pipe = new NamedPipeClientStream(".", DaemonServer.GetPipeName(graphDir), PipeDirection.InOut);
         try
         {
             pipe.Connect(timeout: 2000);
@@ -54,18 +54,8 @@ internal sealed class DaemonClient : IDisposable
     /// </summary>
     public async Task<string> QueryAsync(string command, string[] args)
     {
-        var id = Interlocked.Increment(ref _nextId);
-
-        var request = new JsonObject
-        {
-            ["jsonrpc"] = "2.0",
-            ["id"] = id,
-            ["command"] = command,
-            ["args"] = new JsonArray(args.Select(a => (JsonNode)JsonValue.Create(a)!).ToArray())
-        };
-
-        var json = request.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
-        await _writer.WriteLineAsync(json).ConfigureAwait(false);
+        var request = CreateRequest(command, args);
+        await _writer.WriteLineAsync(request.ToJsonString(JsonOptions)).ConfigureAwait(false);
 
         var responseLine = await _reader.ReadLineAsync().ConfigureAwait(false);
         if (responseLine is null)
@@ -75,7 +65,19 @@ internal sealed class DaemonClient : IDisposable
         if (response?["error"] is JsonNode error)
             throw new InvalidOperationException(error["message"]?.GetValue<string>() ?? "Daemon error");
 
-        return response?["result"]?.GetValue<string>() ?? "";
+        return response?["result"]?.GetValue<string>() ?? string.Empty;
+    }
+
+    private JsonObject CreateRequest(string command, string[] args)
+    {
+        var id = Interlocked.Increment(ref _nextId);
+        return new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
+            ["command"] = command,
+            ["args"] = new JsonArray(args.Select(arg => (JsonNode)JsonValue.Create(arg)!).ToArray())
+        };
     }
 
     public void Dispose()

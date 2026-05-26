@@ -9,6 +9,46 @@ namespace CodeGraph.Core.IO.Sqlite;
 /// </summary>
 public class SqliteGraphWriter
 {
+    private const string SelectSolutionNodeIdsSql =
+        "SELECT node_id FROM node_metadata WHERE key = 'source_solution' AND value = $sln";
+    private const string DeleteSolutionEdgeMetadataSql = """
+        DELETE FROM edge_metadata WHERE edge_rowid IN (
+            SELECT rowid FROM edges WHERE from_id IN (
+                SELECT node_id FROM node_metadata WHERE key = 'source_solution' AND value = $sln
+            )
+        )
+        """;
+    private const string DeleteSolutionEdgesSql = """
+        DELETE FROM edges WHERE from_id IN (
+            SELECT node_id FROM node_metadata WHERE key = 'source_solution' AND value = $sln
+        )
+        """;
+    private const string DeleteSolutionNodeMetadataSql = """
+        DELETE FROM node_metadata WHERE node_id IN (
+            SELECT node_id FROM node_metadata WHERE key = 'source_solution' AND value = $sln
+        )
+        """;
+    private const string SelectSolutionsMetadataSql = "SELECT value FROM metadata WHERE key = 'solutions'";
+    private const string UpsertSolutionsMetadataSql = """
+        INSERT INTO metadata (key, value) VALUES ('solutions', $value)
+        ON CONFLICT(key) DO UPDATE SET value = $value
+        """;
+    private const string InsertMetadataSql = "INSERT INTO metadata (key, value) VALUES ($key, $value)";
+    private const string InsertNodeSql = """
+        INSERT OR REPLACE INTO nodes (id, name, kind, file_path, start_line, end_line, signature, doc_comment,
+                           containing_type_id, containing_namespace_id, accessibility, assembly_name)
+        VALUES ($id, $name, $kind, $filePath, $startLine, $endLine, $signature, $docComment,
+                $containingTypeId, $containingNamespaceId, $accessibility, $assemblyName)
+        """;
+    private const string InsertNodeMetadataSql =
+        "INSERT OR REPLACE INTO node_metadata (node_id, key, value) VALUES ($nodeId, $key, $value)";
+    private const string InsertEdgeSql = """
+        INSERT OR IGNORE INTO edges (from_id, to_id, type, is_external, package_source, source_link, resolution, confidence)
+        VALUES ($fromId, $toId, $type, $isExternal, $packageSource, $sourceLink, $resolution, $confidence)
+        """;
+    private const string InsertEdgeMetadataSql =
+        "INSERT INTO edge_metadata (edge_rowid, key, value) VALUES ($edgeRowid, $key, $value)";
+
     public async Task WriteAsync(
         string dbPath,
         IEnumerable<GraphNode> nodes,
@@ -18,28 +58,13 @@ public class SqliteGraphWriter
         if (File.Exists(dbPath))
             File.Delete(dbPath);
 
-        var connectionString = new SqliteConnectionStringBuilder
-        {
-            DataSource = dbPath,
-            Mode = SqliteOpenMode.ReadWriteCreate,
-            Pooling = false
-        }.ToString();
-
-        using var connection = new SqliteConnection(connectionString);
-        await connection.OpenAsync().ConfigureAwait(false);
-
-        using (var schemaCmd = connection.CreateCommand())
-        {
-            schemaCmd.CommandText = SqliteSchema.CreateTables;
-            await schemaCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-        }
+        using var connection = await OpenReadWriteConnectionAsync(dbPath).ConfigureAwait(false);
+        await EnsureSchemaAsync(connection).ConfigureAwait(false);
 
         using var transaction = connection.BeginTransaction();
-
         await WriteMetadataAsync(connection, metadata).ConfigureAwait(false);
         await WriteNodesAsync(connection, nodes).ConfigureAwait(false);
         await WriteEdgesAsync(connection, edges).ConfigureAwait(false);
-
         transaction.Commit();
     }
 
@@ -54,10 +79,28 @@ public class SqliteGraphWriter
         IEnumerable<GraphEdge> edges,
         string solutionName)
     {
-        var dir = Path.GetDirectoryName(dbPath);
-        if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
+        EnsureDatabaseDirectoryExists(dbPath);
 
+        using var connection = await OpenReadWriteConnectionAsync(dbPath).ConfigureAwait(false);
+        await EnsureSchemaAsync(connection).ConfigureAwait(false);
+
+        using var transaction = connection.BeginTransaction();
+        await PurgeSolutionAsync(connection, solutionName).ConfigureAwait(false);
+        await WriteNodesAsync(connection, AddSourceSolutionMetadata(nodes, solutionName)).ConfigureAwait(false);
+        await WriteEdgesAsync(connection, edges).ConfigureAwait(false);
+        await UpdateSolutionsMetadataAsync(connection, solutionName).ConfigureAwait(false);
+        transaction.Commit();
+    }
+
+    private static void EnsureDatabaseDirectoryExists(string dbPath)
+    {
+        var directoryPath = Path.GetDirectoryName(dbPath);
+        if (!string.IsNullOrEmpty(directoryPath))
+            Directory.CreateDirectory(directoryPath);
+    }
+
+    private static async Task<SqliteConnection> OpenReadWriteConnectionAsync(string dbPath)
+    {
         var connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = dbPath,
@@ -65,137 +108,107 @@ public class SqliteGraphWriter
             Pooling = false
         }.ToString();
 
-        using var connection = new SqliteConnection(connectionString);
+        var connection = new SqliteConnection(connectionString);
         await connection.OpenAsync().ConfigureAwait(false);
+        return connection;
+    }
 
-        using (var schemaCmd = connection.CreateCommand())
+    private static async Task EnsureSchemaAsync(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = SqliteSchema.CreateTables;
+        await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+    }
+
+    private static IEnumerable<GraphNode> AddSourceSolutionMetadata(IEnumerable<GraphNode> nodes, string solutionName)
+    {
+        return nodes.Select(node =>
         {
-            schemaCmd.CommandText = SqliteSchema.CreateTables;
-            await schemaCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-        }
-
-        using var transaction = connection.BeginTransaction();
-
-        // Remove existing data for this solution
-        await PurgeSolutionAsync(connection, solutionName).ConfigureAwait(false);
-
-        // Tag each node with source_solution metadata and insert
-        var taggedNodes = nodes.Select(n =>
-        {
-            var meta = new Dictionary<string, string>(n.Metadata)
+            var metadata = new Dictionary<string, string>(node.Metadata)
             {
                 ["source_solution"] = solutionName
             };
-            return n with { Metadata = meta };
+
+            return node with { Metadata = metadata };
         });
-        await WriteNodesAsync(connection, taggedNodes).ConfigureAwait(false);
-        await WriteEdgesAsync(connection, edges).ConfigureAwait(false);
-
-        // Update solutions list in metadata
-        await UpdateSolutionsMetadataAsync(connection, solutionName).ConfigureAwait(false);
-
-        transaction.Commit();
     }
 
     private static async Task PurgeSolutionAsync(SqliteConnection connection, string solutionName)
     {
-        // Collect node IDs belonging to this solution
-        using var collectCmd = connection.CreateCommand();
-        collectCmd.CommandText =
-            "SELECT node_id FROM node_metadata WHERE key = 'source_solution' AND value = $sln";
-        collectCmd.Parameters.AddWithValue("$sln", solutionName);
-
-        var nodeIds = new HashSet<string>();
-        using (var reader = await collectCmd.ExecuteReaderAsync().ConfigureAwait(false))
-        {
-            while (await reader.ReadAsync().ConfigureAwait(false))
-                nodeIds.Add(reader.GetString(0));
-        }
-
-        if (nodeIds.Count == 0)
+        var solutionNodeIds = await LoadSolutionNodeIdsAsync(connection, solutionName).ConfigureAwait(false);
+        if (solutionNodeIds.Count == 0)
             return;
 
-        // Delete edge_metadata for edges originating from these nodes
-        using var delEdgeMeta = connection.CreateCommand();
-        delEdgeMeta.CommandText = """
-            DELETE FROM edge_metadata WHERE edge_rowid IN (
-                SELECT rowid FROM edges WHERE from_id IN (
-                    SELECT node_id FROM node_metadata WHERE key = 'source_solution' AND value = $sln
-                )
-            )
-            """;
-        delEdgeMeta.Parameters.AddWithValue("$sln", solutionName);
-        await delEdgeMeta.ExecuteNonQueryAsync().ConfigureAwait(false);
+        await ExecuteSolutionCommandAsync(connection, DeleteSolutionEdgeMetadataSql, solutionName).ConfigureAwait(false);
+        await ExecuteSolutionCommandAsync(connection, DeleteSolutionEdgesSql, solutionName).ConfigureAwait(false);
+        await ExecuteSolutionCommandAsync(connection, DeleteSolutionNodeMetadataSql, solutionName).ConfigureAwait(false);
+        await DeleteNodesAsync(connection, solutionNodeIds).ConfigureAwait(false);
+    }
 
-        // Delete edges originating from these nodes
-        using var delEdges = connection.CreateCommand();
-        delEdges.CommandText = """
-            DELETE FROM edges WHERE from_id IN (
-                SELECT node_id FROM node_metadata WHERE key = 'source_solution' AND value = $sln
-            )
-            """;
-        delEdges.Parameters.AddWithValue("$sln", solutionName);
-        await delEdges.ExecuteNonQueryAsync().ConfigureAwait(false);
+    private static async Task<HashSet<string>> LoadSolutionNodeIdsAsync(SqliteConnection connection, string solutionName)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = SelectSolutionNodeIdsSql;
+        command.Parameters.AddWithValue("$sln", solutionName);
 
-        // Delete all node_metadata for these nodes
-        using var delNodeMeta = connection.CreateCommand();
-        delNodeMeta.CommandText = """
-            DELETE FROM node_metadata WHERE node_id IN (
-                SELECT node_id FROM node_metadata WHERE key = 'source_solution' AND value = $sln
-            )
-            """;
-        delNodeMeta.Parameters.AddWithValue("$sln", solutionName);
-        await delNodeMeta.ExecuteNonQueryAsync().ConfigureAwait(false);
+        var nodeIds = new HashSet<string>();
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+        while (await reader.ReadAsync().ConfigureAwait(false))
+            nodeIds.Add(reader.GetString(0));
 
-        // Delete nodes
-        using var delNodes = connection.CreateCommand();
-        delNodes.CommandText = """
-            DELETE FROM nodes WHERE id IN ($ids)
-            """;
-        // Use a parameterized batch approach for node deletion
-        delNodes.CommandText = "DELETE FROM nodes WHERE id IN (" +
-            string.Join(",", nodeIds.Select((_, i) => $"$id{i}")) + ")";
-        int idx = 0;
-        foreach (var id in nodeIds)
-        {
-            delNodes.Parameters.AddWithValue($"$id{idx}", id);
-            idx++;
-        }
-        await delNodes.ExecuteNonQueryAsync().ConfigureAwait(false);
+        return nodeIds;
+    }
+
+    private static async Task ExecuteSolutionCommandAsync(
+        SqliteConnection connection,
+        string commandText,
+        string solutionName)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = commandText;
+        command.Parameters.AddWithValue("$sln", solutionName);
+        await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+    }
+
+    private static async Task DeleteNodesAsync(SqliteConnection connection, IReadOnlyCollection<string> nodeIds)
+    {
+        using var command = connection.CreateCommand();
+        var inClause = AddInClauseParameters(command, "$id", nodeIds);
+        command.CommandText = $"DELETE FROM nodes WHERE id IN ({inClause})";
+        await command.ExecuteNonQueryAsync().ConfigureAwait(false);
     }
 
     private static async Task UpdateSolutionsMetadataAsync(SqliteConnection connection, string solutionName)
     {
-        // Read existing solutions list
-        var existing = new List<string>();
-        using (var readCmd = connection.CreateCommand())
-        {
-            readCmd.CommandText = "SELECT value FROM metadata WHERE key = 'solutions'";
-            var result = await readCmd.ExecuteScalarAsync().ConfigureAwait(false);
-            if (result is string json)
-                existing = JsonSerializer.Deserialize<List<string>>(json) ?? new List<string>();
-        }
+        var solutions = await ReadSolutionsMetadataAsync(connection).ConfigureAwait(false);
+        if (!solutions.Contains(solutionName))
+            solutions.Add(solutionName);
 
-        if (!existing.Contains(solutionName))
-            existing.Add(solutionName);
+        using var command = connection.CreateCommand();
+        command.CommandText = UpsertSolutionsMetadataSql;
+        command.Parameters.AddWithValue("$value", JsonSerializer.Serialize(solutions));
+        await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+    }
 
-        using var upsertCmd = connection.CreateCommand();
-        upsertCmd.CommandText = """
-            INSERT INTO metadata (key, value) VALUES ('solutions', $value)
-            ON CONFLICT(key) DO UPDATE SET value = $value
-            """;
-        upsertCmd.Parameters.AddWithValue("$value", JsonSerializer.Serialize(existing));
-        await upsertCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+    private static async Task<List<string>> ReadSolutionsMetadataAsync(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = SelectSolutionsMetadataSql;
+
+        var result = await command.ExecuteScalarAsync().ConfigureAwait(false);
+        if (result is string json)
+            return JsonSerializer.Deserialize<List<string>>(json) ?? new List<string>();
+
+        return new List<string>();
     }
 
     private static async Task WriteMetadataAsync(SqliteConnection connection, GraphMetadata metadata)
     {
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "INSERT INTO metadata (key, value) VALUES ($key, $value)";
+        await WriteKeyValuePairsAsync(connection, InsertMetadataSql, BuildMetadataPairs(metadata)).ConfigureAwait(false);
+    }
 
-        var keyParam = cmd.Parameters.Add("$key", SqliteType.Text);
-        var valueParam = cmd.Parameters.Add("$value", SqliteType.Text);
-
+    private static Dictionary<string, string> BuildMetadataPairs(GraphMetadata metadata)
+    {
         var pairs = new Dictionary<string, string>
         {
             ["schema_version"] = metadata.SchemaVersion.ToString(),
@@ -209,125 +222,194 @@ public class SqliteGraphWriter
         };
 
         foreach (var stat in metadata.Stats)
-        {
             pairs[$"stat_{stat.Key}"] = stat.Value.ToString();
-        }
+
+        return pairs;
+    }
+
+    private static async Task WriteKeyValuePairsAsync(
+        SqliteConnection connection,
+        string commandText,
+        IEnumerable<KeyValuePair<string, string>> pairs)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = commandText;
+        command.Parameters.Add("$key", SqliteType.Text);
+        command.Parameters.Add("$value", SqliteType.Text);
 
         foreach (var pair in pairs)
         {
-            keyParam.Value = pair.Key;
-            valueParam.Value = pair.Value;
-            await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            SetParameterValue(command, "$key", pair.Key);
+            SetParameterValue(command, "$value", pair.Value);
+            await command.ExecuteNonQueryAsync().ConfigureAwait(false);
         }
     }
 
     private static async Task WriteNodesAsync(SqliteConnection connection, IEnumerable<GraphNode> nodes)
     {
-        using var nodeCmd = connection.CreateCommand();
-        nodeCmd.CommandText = """
-            INSERT OR REPLACE INTO nodes (id, name, kind, file_path, start_line, end_line, signature, doc_comment,
-                               containing_type_id, containing_namespace_id, accessibility, assembly_name)
-            VALUES ($id, $name, $kind, $filePath, $startLine, $endLine, $signature, $docComment,
-                    $containingTypeId, $containingNamespaceId, $accessibility, $assemblyName)
-            """;
-
-        var pId = nodeCmd.Parameters.Add("$id", SqliteType.Text);
-        var pName = nodeCmd.Parameters.Add("$name", SqliteType.Text);
-        var pKind = nodeCmd.Parameters.Add("$kind", SqliteType.Integer);
-        var pFilePath = nodeCmd.Parameters.Add("$filePath", SqliteType.Text);
-        var pStartLine = nodeCmd.Parameters.Add("$startLine", SqliteType.Integer);
-        var pEndLine = nodeCmd.Parameters.Add("$endLine", SqliteType.Integer);
-        var pSignature = nodeCmd.Parameters.Add("$signature", SqliteType.Text);
-        var pDocComment = nodeCmd.Parameters.Add("$docComment", SqliteType.Text);
-        var pContainingTypeId = nodeCmd.Parameters.Add("$containingTypeId", SqliteType.Text);
-        var pContainingNamespaceId = nodeCmd.Parameters.Add("$containingNamespaceId", SqliteType.Text);
-        var pAccessibility = nodeCmd.Parameters.Add("$accessibility", SqliteType.Integer);
-        var pAssemblyName = nodeCmd.Parameters.Add("$assemblyName", SqliteType.Text);
-
-        using var metaCmd = connection.CreateCommand();
-        metaCmd.CommandText = "INSERT OR REPLACE INTO node_metadata (node_id, key, value) VALUES ($nodeId, $key, $value)";
-        var pmNodeId = metaCmd.Parameters.Add("$nodeId", SqliteType.Text);
-        var pmKey = metaCmd.Parameters.Add("$key", SqliteType.Text);
-        var pmValue = metaCmd.Parameters.Add("$value", SqliteType.Text);
+        using var nodeCommand = CreateNodeInsertCommand(connection);
+        using var metadataCommand = CreateNodeMetadataInsertCommand(connection);
 
         foreach (var node in nodes)
         {
-            pId.Value = node.Id;
-            pName.Value = node.Name;
-            pKind.Value = (int)node.Kind;
-            pFilePath.Value = node.FilePath;
-            pStartLine.Value = node.StartLine;
-            pEndLine.Value = node.EndLine;
-            pSignature.Value = node.Signature;
-            pDocComment.Value = (object?)node.DocComment ?? DBNull.Value;
-            pContainingTypeId.Value = (object?)node.ContainingTypeId ?? DBNull.Value;
-            pContainingNamespaceId.Value = (object?)node.ContainingNamespaceId ?? DBNull.Value;
-            pAccessibility.Value = (int)node.Accessibility;
-            pAssemblyName.Value = node.AssemblyName;
+            BindNodeParameters(nodeCommand, node);
+            await nodeCommand.ExecuteNonQueryAsync().ConfigureAwait(false);
+            await WriteNodeMetadataAsync(metadataCommand, node).ConfigureAwait(false);
+        }
+    }
 
-            await nodeCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+    private static SqliteCommand CreateNodeInsertCommand(SqliteConnection connection)
+    {
+        var command = connection.CreateCommand();
+        command.CommandText = InsertNodeSql;
+        command.Parameters.Add("$id", SqliteType.Text);
+        command.Parameters.Add("$name", SqliteType.Text);
+        command.Parameters.Add("$kind", SqliteType.Integer);
+        command.Parameters.Add("$filePath", SqliteType.Text);
+        command.Parameters.Add("$startLine", SqliteType.Integer);
+        command.Parameters.Add("$endLine", SqliteType.Integer);
+        command.Parameters.Add("$signature", SqliteType.Text);
+        command.Parameters.Add("$docComment", SqliteType.Text);
+        command.Parameters.Add("$containingTypeId", SqliteType.Text);
+        command.Parameters.Add("$containingNamespaceId", SqliteType.Text);
+        command.Parameters.Add("$accessibility", SqliteType.Integer);
+        command.Parameters.Add("$assemblyName", SqliteType.Text);
+        return command;
+    }
 
-            foreach (var meta in node.Metadata)
-            {
-                pmNodeId.Value = node.Id;
-                pmKey.Value = meta.Key;
-                pmValue.Value = meta.Value;
-                await metaCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-            }
+    private static SqliteCommand CreateNodeMetadataInsertCommand(SqliteConnection connection)
+    {
+        var command = connection.CreateCommand();
+        command.CommandText = InsertNodeMetadataSql;
+        command.Parameters.Add("$nodeId", SqliteType.Text);
+        command.Parameters.Add("$key", SqliteType.Text);
+        command.Parameters.Add("$value", SqliteType.Text);
+        return command;
+    }
+
+    private static void BindNodeParameters(SqliteCommand command, GraphNode node)
+    {
+        SetParameterValue(command, "$id", node.Id);
+        SetParameterValue(command, "$name", node.Name);
+        SetParameterValue(command, "$kind", (int)node.Kind);
+        SetParameterValue(command, "$filePath", node.FilePath);
+        SetParameterValue(command, "$startLine", node.StartLine);
+        SetParameterValue(command, "$endLine", node.EndLine);
+        SetParameterValue(command, "$signature", node.Signature);
+        SetParameterValue(command, "$docComment", node.DocComment);
+        SetParameterValue(command, "$containingTypeId", node.ContainingTypeId);
+        SetParameterValue(command, "$containingNamespaceId", node.ContainingNamespaceId);
+        SetParameterValue(command, "$accessibility", (int)node.Accessibility);
+        SetParameterValue(command, "$assemblyName", node.AssemblyName);
+    }
+
+    private static async Task WriteNodeMetadataAsync(SqliteCommand command, GraphNode node)
+    {
+        foreach (var metadataEntry in node.Metadata)
+        {
+            SetParameterValue(command, "$nodeId", node.Id);
+            SetParameterValue(command, "$key", metadataEntry.Key);
+            SetParameterValue(command, "$value", metadataEntry.Value);
+            await command.ExecuteNonQueryAsync().ConfigureAwait(false);
         }
     }
 
     private static async Task WriteEdgesAsync(SqliteConnection connection, IEnumerable<GraphEdge> edges)
     {
-        using var edgeCmd = connection.CreateCommand();
-        edgeCmd.CommandText = """
-            INSERT OR IGNORE INTO edges (from_id, to_id, type, is_external, package_source, source_link, resolution, confidence)
-            VALUES ($fromId, $toId, $type, $isExternal, $packageSource, $sourceLink, $resolution, $confidence)
-            """;
-
-        var pFromId = edgeCmd.Parameters.Add("$fromId", SqliteType.Text);
-        var pToId = edgeCmd.Parameters.Add("$toId", SqliteType.Text);
-        var pType = edgeCmd.Parameters.Add("$type", SqliteType.Integer);
-        var pIsExternal = edgeCmd.Parameters.Add("$isExternal", SqliteType.Integer);
-        var pPackageSource = edgeCmd.Parameters.Add("$packageSource", SqliteType.Text);
-        var pSourceLink = edgeCmd.Parameters.Add("$sourceLink", SqliteType.Text);
-        var pResolution = edgeCmd.Parameters.Add("$resolution", SqliteType.Text);
-        var pConfidence = edgeCmd.Parameters.Add("$confidence", SqliteType.Integer);
-
-        using var metaCmd = connection.CreateCommand();
-        metaCmd.CommandText = "INSERT INTO edge_metadata (edge_rowid, key, value) VALUES ($edgeRowid, $key, $value)";
-        var pmRowid = metaCmd.Parameters.Add("$edgeRowid", SqliteType.Integer);
-        var pmKey = metaCmd.Parameters.Add("$key", SqliteType.Text);
-        var pmValue = metaCmd.Parameters.Add("$value", SqliteType.Text);
+        using var edgeCommand = CreateEdgeInsertCommand(connection);
+        using var metadataCommand = CreateEdgeMetadataInsertCommand(connection);
 
         foreach (var edge in edges)
         {
-            pFromId.Value = edge.FromId;
-            pToId.Value = edge.ToId;
-            pType.Value = (int)edge.Type;
-            pIsExternal.Value = edge.IsExternal ? 1 : 0;
-            pPackageSource.Value = (object?)edge.PackageSource ?? DBNull.Value;
-            pSourceLink.Value = (object?)edge.SourceLink ?? DBNull.Value;
-            pResolution.Value = (object?)edge.Resolution ?? DBNull.Value;
-            pConfidence.Value = (int)edge.Confidence;
-
-            await edgeCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-
-            if (edge.Metadata.Count > 0)
-            {
-                // Get the rowid of the just-inserted edge
-                using var rowidCmd = connection.CreateCommand();
-                rowidCmd.CommandText = "SELECT last_insert_rowid()";
-                var rowid = (long)(await rowidCmd.ExecuteScalarAsync().ConfigureAwait(false))!;
-
-                foreach (var meta in edge.Metadata)
-                {
-                    pmRowid.Value = rowid;
-                    pmKey.Value = meta.Key;
-                    pmValue.Value = meta.Value;
-                    await metaCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-                }
-            }
+            BindEdgeParameters(edgeCommand, edge);
+            await edgeCommand.ExecuteNonQueryAsync().ConfigureAwait(false);
+            await WriteEdgeMetadataAsync(connection, metadataCommand, edge).ConfigureAwait(false);
         }
+    }
+
+    private static SqliteCommand CreateEdgeInsertCommand(SqliteConnection connection)
+    {
+        var command = connection.CreateCommand();
+        command.CommandText = InsertEdgeSql;
+        command.Parameters.Add("$fromId", SqliteType.Text);
+        command.Parameters.Add("$toId", SqliteType.Text);
+        command.Parameters.Add("$type", SqliteType.Integer);
+        command.Parameters.Add("$isExternal", SqliteType.Integer);
+        command.Parameters.Add("$packageSource", SqliteType.Text);
+        command.Parameters.Add("$sourceLink", SqliteType.Text);
+        command.Parameters.Add("$resolution", SqliteType.Text);
+        command.Parameters.Add("$confidence", SqliteType.Integer);
+        return command;
+    }
+
+    private static SqliteCommand CreateEdgeMetadataInsertCommand(SqliteConnection connection)
+    {
+        var command = connection.CreateCommand();
+        command.CommandText = InsertEdgeMetadataSql;
+        command.Parameters.Add("$edgeRowid", SqliteType.Integer);
+        command.Parameters.Add("$key", SqliteType.Text);
+        command.Parameters.Add("$value", SqliteType.Text);
+        return command;
+    }
+
+    private static void BindEdgeParameters(SqliteCommand command, GraphEdge edge)
+    {
+        SetParameterValue(command, "$fromId", edge.FromId);
+        SetParameterValue(command, "$toId", edge.ToId);
+        SetParameterValue(command, "$type", (int)edge.Type);
+        SetParameterValue(command, "$isExternal", edge.IsExternal ? 1 : 0);
+        SetParameterValue(command, "$packageSource", edge.PackageSource);
+        SetParameterValue(command, "$sourceLink", edge.SourceLink);
+        SetParameterValue(command, "$resolution", edge.Resolution);
+        SetParameterValue(command, "$confidence", (int)edge.Confidence);
+    }
+
+    private static async Task WriteEdgeMetadataAsync(
+        SqliteConnection connection,
+        SqliteCommand command,
+        GraphEdge edge)
+    {
+        if (edge.Metadata.Count == 0)
+            return;
+
+        var rowId = await ReadLastInsertRowIdAsync(connection).ConfigureAwait(false);
+        foreach (var metadataEntry in edge.Metadata)
+        {
+            SetParameterValue(command, "$edgeRowid", rowId);
+            SetParameterValue(command, "$key", metadataEntry.Key);
+            SetParameterValue(command, "$value", metadataEntry.Value);
+            await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<long> ReadLastInsertRowIdAsync(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT last_insert_rowid()";
+        return (long)(await command.ExecuteScalarAsync().ConfigureAwait(false))!;
+    }
+
+    private static string AddInClauseParameters(
+        SqliteCommand command,
+        string parameterPrefix,
+        IEnumerable<string> values)
+    {
+        var parameterNames = new List<string>();
+        var parameterIndex = 0;
+
+        foreach (var value in values)
+        {
+            var parameterName = $"{parameterPrefix}{parameterIndex}";
+            parameterNames.Add(parameterName);
+            command.Parameters.AddWithValue(parameterName, value);
+            parameterIndex++;
+        }
+
+        return string.Join(",", parameterNames);
+    }
+
+    private static void SetParameterValue(SqliteCommand command, string parameterName, object? value)
+    {
+        command.Parameters[parameterName].Value = value ?? DBNull.Value;
     }
 }

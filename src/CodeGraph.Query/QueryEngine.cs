@@ -26,19 +26,8 @@ public class QueryEngine
 
         foreach (var edge in edges)
         {
-            if (!_outgoing.TryGetValue(edge.FromId, out var outList))
-            {
-                outList = new List<GraphEdge>();
-                _outgoing[edge.FromId] = outList;
-            }
-            outList.Add(edge);
-
-            if (!_incoming.TryGetValue(edge.ToId, out var inList))
-            {
-                inList = new List<GraphEdge>();
-                _incoming[edge.ToId] = inList;
-            }
-            inList.Add(edge);
+            AddEdgeLookupEntry(_outgoing, edge.FromId, edge);
+            AddEdgeLookupEntry(_incoming, edge.ToId, edge);
         }
     }
 
@@ -55,27 +44,26 @@ public class QueryEngine
         if (string.IsNullOrWhiteSpace(query))
             return [];
 
-        var results = _nodes.Values
-            .Where(n => n.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                        n.Id.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                        (n.FilePath?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                        (n.ContainingNamespaceId?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false));
-
+        IEnumerable<GraphNode> results = _nodes.Values.Where(node => MatchesSearchQuery(node, query));
         if (kindFilter.HasValue)
-            results = results.Where(n => n.Kind == kindFilter.Value);
+            results = results.Where(node => node.Kind == kindFilter.Value);
 
         return results
-            .OrderByDescending(n => n.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ? 1 : 0)
-            .ThenByDescending(n => n.Kind == NodeKind.Type ? 1 : 0)
-            .ThenBy(n => n.Name.Length)
+            .OrderByDescending(node => node.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+            .ThenByDescending(node => node.Kind == NodeKind.Type ? 1 : 0)
+            .ThenBy(node => node.Name.Length)
             .Take(maxResults)
             .ToList();
     }
 
     public static bool LooksLikeFilePath(string value)
     {
-        if (string.IsNullOrEmpty(value)) return false;
-        return value.Contains('/') || value.Contains('\\') || value.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrEmpty(value))
+            return false;
+
+        return value.Contains('/')
+            || value.Contains('\\')
+            || value.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
     }
 
     public List<GraphNode> FindByFilePath(string path, NodeKind? kindFilter = null)
@@ -83,13 +71,10 @@ public class QueryEngine
         if (string.IsNullOrWhiteSpace(path))
             return [];
 
-        var normalized = path.Replace('\\', '/');
-        var results = _nodes.Values.Where(n =>
-            n.FilePath.Replace('\\', '/').Contains(normalized, StringComparison.OrdinalIgnoreCase) ||
-            n.FilePath.Replace('\\', '/').EndsWith(normalized, StringComparison.OrdinalIgnoreCase));
-
+        var normalizedPath = NormalizePath(path);
+        IEnumerable<GraphNode> results = _nodes.Values.Where(node => MatchesFilePath(node, normalizedPath));
         if (kindFilter.HasValue)
-            results = results.Where(n => n.Kind == kindFilter.Value);
+            results = results.Where(node => node.Kind == kindFilter.Value);
 
         return results.ToList();
     }
@@ -101,207 +86,53 @@ public class QueryEngine
 
     public static async Task<QueryEngine> LoadAsync(string graphDirectory, string? solutionFilter)
     {
-        // Check if this is a federated graph directory (has subdirectories with meta.json)
-        var subGraphDirs = Directory.Exists(graphDirectory)
+        var subGraphDirectories = Directory.Exists(graphDirectory)
             ? Directory.GetDirectories(graphDirectory)
-                .Where(d => File.Exists(Path.Combine(d, "meta.json")))
+                .Where(directory => File.Exists(Path.Combine(directory, "meta.json")))
                 .ToArray()
             : Array.Empty<string>();
 
-        if (subGraphDirs.Length == 0)
-        {
-            // Single-solution graph — prefer SQLite when available
-            var dbPath = Path.Combine(graphDirectory, "graph.db");
-            if (File.Exists(dbPath))
-            {
-                var (metadata, nodes, edges) = await SqliteGraphReader.ReadAsync(dbPath);
-                return new QueryEngine(nodes, edges, metadata);
-            }
+        if (subGraphDirectories.Length == 0)
+            return await LoadSingleGraphAsync(graphDirectory);
 
-            // Fall back to JSON
-            var result = await GraphReader.ReadAsync(graphDirectory);
-            return new QueryEngine(result.Nodes, result.Edges, result.Metadata);
-        }
-
-        // Federated: load all sub-graphs, deduplicate nodes, merge edges
-        var allNodes = new Dictionary<string, GraphNode>();
-        var allEdges = new List<GraphEdge>();
-        var solutionNames = new List<string>();
-        var allProjectsIndexed = new List<string>();
-        GraphMetadata? firstMetadata = null;
-
-        foreach (var subDir in subGraphDirs)
-        {
-            var solutionName = Path.GetFileName(subDir);
-
-            // Apply solution filter if provided
-            if (!string.IsNullOrEmpty(solutionFilter) &&
-                !solutionName.Equals(solutionFilter, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            var (metadata, nodes, edges) = await GraphReader.ReadAsync(subDir);
-            firstMetadata ??= metadata;
-            solutionNames.Add(solutionName);
-            allProjectsIndexed.AddRange(metadata.ProjectsIndexed);
-
-            // Deduplicate nodes by ID (first-seen wins)
-            foreach (var kvp in nodes)
-            {
-                allNodes.TryAdd(kvp.Key, kvp.Value);
-            }
-
-            allEdges.AddRange(edges);
-        }
-
-        if (firstMetadata is null)
-        {
-            throw new FileNotFoundException("meta.json not found in graph directory.",
-                Path.Combine(graphDirectory, "meta.json"));
-        }
-
-        // Deduplicate edges
-        var uniqueEdges = allEdges
-            .GroupBy(e => (e.FromId, e.ToId, e.Type))
-            .Select(g => g.First())
-            .ToList();
-
-        // Build a federated metadata record
-        var federatedMetadata = firstMetadata with
-        {
-            SolutionName = string.Join(", ", solutionNames),
-            Solution = string.Join(", ", solutionNames.Select(n => n + ".sln")),
-            ProjectsIndexed = allProjectsIndexed.Distinct().ToArray()
-        };
-
-        return new QueryEngine(allNodes, uniqueEdges, federatedMetadata);
+        return await LoadFederatedGraphAsync(graphDirectory, subGraphDirectories, solutionFilter);
     }
 
     public QueryResult Query(QueryOptions options)
     {
-        // Step 1: Find matching nodes by pattern
-        var matchedNodes = FindMatchingNodes(options.Pattern);
-
-        // Step 2: Apply namespace filter
-        if (options.NamespaceFilter is not null)
-        {
-            var allowedIds = NamespaceFilter.Apply(_nodes, options.NamespaceFilter);
-            matchedNodes = matchedNodes.Where(n => allowedIds.ContainsKey(n.Id)).ToList();
-        }
-
-        // Step 3: Apply project filter
-        if (options.ProjectFilter is not null)
-        {
-            matchedNodes = matchedNodes
-                .Where(n => n.Id.StartsWith(options.ProjectFilter, StringComparison.OrdinalIgnoreCase)
-                    || (n.ContainingNamespaceId?.StartsWith(options.ProjectFilter, StringComparison.OrdinalIgnoreCase) ?? false))
-                .ToList();
-        }
-
+        var matchedNodes = ApplyNodeFilters(FindMatchingNodes(options.Pattern), options);
         var totalMatchCount = matchedNodes.Count;
         var targetNode = matchedNodes.Count == 1 ? matchedNodes[0] : null;
 
-        // Step 4: Depth traversal (BFS)
-        var seedIds = matchedNodes.Select(n => n.Id).ToList();
+        var seedIds = matchedNodes.Select(node => node.Id).ToList();
         var allowedEdges = QueryModeEdgeSets.ForMode(options.Mode);
-        var reachableIds = DepthFilter.Traverse(
-            seedIds, _outgoing, _incoming, options.Depth, options.IncludeExternal, allowedEdges);
-
-        // Collect direct neighbors for ranking
+        var reachableIds = TraverseFromSeeds(seedIds, options.Depth, options.IncludeExternal, allowedEdges);
         var directNeighborIds = options.Depth >= 1
-            ? DepthFilter.Traverse(seedIds, _outgoing, _incoming, 1, options.IncludeExternal, allowedEdges)
+            ? TraverseFromSeeds(seedIds, 1, options.IncludeExternal, allowedEdges)
             : new HashSet<string>(seedIds);
 
-        // Step 5: Build subgraph
-        var subgraphNodes = new Dictionary<string, GraphNode>();
-        foreach (var id in reachableIds)
-        {
-            if (_nodes.TryGetValue(id, out var node))
-                subgraphNodes[id] = node;
-        }
+        var subgraphNodes = BuildSubgraphNodes(reachableIds);
+        var subgraphEdges = BuildSubgraphEdges(reachableIds);
+        subgraphEdges = ApplyEdgeFilters(subgraphEdges, options);
 
-        // Step 6: Collect edges within the subgraph
-        var subgraphEdges = _edges
-            .Where(e => reachableIds.Contains(e.FromId) && reachableIds.Contains(e.ToId))
-            .ToList();
+        var (finalNodes, finalEdges, wasTruncated) = TruncateSubgraphIfNeeded(
+            subgraphNodes,
+            subgraphEdges,
+            seedIds,
+            directNeighborIds,
+            targetNode,
+            options);
 
-        // Step 7: Apply edge type filter
-        if (options.EdgeTypeFilter is not null)
-        {
-            subgraphEdges = EdgeTypeFilter.Apply(subgraphEdges, options.EdgeTypeFilter);
-        }
-
-        // Step 7b: Apply confidence filter (lower enum value = higher confidence)
-        if (options.ConfidenceThreshold is not null)
-        {
-            subgraphEdges = subgraphEdges.Where(e => e.Confidence <= options.ConfidenceThreshold.Value).ToList();
-        }
-
-        // Step 8: Filter out external if not requested
-        if (!options.IncludeExternal)
-        {
-            subgraphEdges = subgraphEdges.Where(e => !e.IsExternal).ToList();
-        }
-
-        // Step 9: Rank and truncate
-        var wasTruncated = false;
-        if (options.Rank && subgraphNodes.Count > options.MaxNodes)
-        {
-            var externalIds = new HashSet<string>(
-                _edges.Where(e => e.IsExternal).SelectMany(e => new[] { e.FromId, e.ToId }));
-
-            var targetProject = targetNode?.ContainingNamespaceId;
-            var rankedNodes = RankingStrategy.Rank(
-                subgraphNodes.Values.ToList(),
-                directNeighborIds,
-                externalIds,
-                targetProject);
-
-            var keepIds = new HashSet<string>(rankedNodes.Take(options.MaxNodes).Select(n => n.Id));
-            // Always keep seed nodes
-            foreach (var id in seedIds)
-                keepIds.Add(id);
-
-            subgraphNodes = subgraphNodes
-                .Where(kvp => keepIds.Contains(kvp.Key))
-                .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-
-            subgraphEdges = subgraphEdges
-                .Where(e => keepIds.Contains(e.FromId) && keepIds.Contains(e.ToId))
-                .ToList();
-
-            wasTruncated = true;
-        }
-        else if (subgraphNodes.Count > options.MaxNodes)
-        {
-            wasTruncated = true;
-            var keepIds = new HashSet<string>(subgraphNodes.Keys.Take(options.MaxNodes));
-            foreach (var id in seedIds)
-                keepIds.Add(id);
-
-            subgraphNodes = subgraphNodes
-                .Where(kvp => keepIds.Contains(kvp.Key))
-                .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-
-            subgraphEdges = subgraphEdges
-                .Where(e => keepIds.Contains(e.FromId) && keepIds.Contains(e.ToId))
-                .ToList();
-        }
-
-        // Fuzzy fallback: if no matches and pattern has no wildcards, suggest similar names
-        var suggestions = new List<string>();
-        if (matchedNodes.Count == 0 && !options.Pattern.Contains('*'))
-        {
-            suggestions = FindFuzzyMatches(options.Pattern, maxDistance: 2, maxResults: 5);
-        }
+        var suggestions = matchedNodes.Count == 0 && !options.Pattern.Contains('*')
+            ? FindFuzzyMatches(options.Pattern, maxDistance: 2, maxResults: 5)
+            : new List<string>();
 
         return new QueryResult
         {
             TargetNode = targetNode,
             MatchedNodes = matchedNodes,
-            Nodes = subgraphNodes,
-            Edges = subgraphEdges,
+            Nodes = finalNodes,
+            Edges = finalEdges,
             Metadata = _metadata,
             WasTruncated = wasTruncated,
             TotalMatchCount = totalMatchCount,
@@ -315,18 +146,18 @@ public class QueryEngine
     /// </summary>
     public List<string> FindFuzzyMatches(string pattern, int maxDistance = 2, int maxResults = 5)
     {
-        var candidates = _nodes.Values
-            .Where(n => n.Kind == NodeKind.Type || n.Kind == NodeKind.Namespace)
-            .Select(n => (n.Name, Distance: LevenshteinDistance(pattern.ToLowerInvariant(), n.Name.ToLowerInvariant())))
-            .Where(x => x.Distance > 0 && x.Distance <= maxDistance)
-            .OrderBy(x => x.Distance)
-            .ThenBy(x => x.Name)
-            .Select(x => x.Name)
+        var normalizedPattern = pattern.ToLowerInvariant();
+
+        return _nodes.Values
+            .Where(node => node.Kind == NodeKind.Type || node.Kind == NodeKind.Namespace)
+            .Select(node => (node.Name, Distance: LevenshteinDistance(normalizedPattern, node.Name.ToLowerInvariant())))
+            .Where(candidate => candidate.Distance > 0 && candidate.Distance <= maxDistance)
+            .OrderBy(candidate => candidate.Distance)
+            .ThenBy(candidate => candidate.Name)
+            .Select(candidate => candidate.Name)
             .Distinct()
             .Take(maxResults)
             .ToList();
-
-        return candidates;
     }
 
     /// <summary>
@@ -334,28 +165,34 @@ public class QueryEngine
     /// </summary>
     public static int LevenshteinDistance(string source, string target)
     {
-        if (string.IsNullOrEmpty(source)) return target?.Length ?? 0;
-        if (string.IsNullOrEmpty(target)) return source.Length;
+        if (string.IsNullOrEmpty(source))
+            return target?.Length ?? 0;
 
-        var m = source.Length;
-        var n = target.Length;
-        var dp = new int[m + 1, n + 1];
+        if (string.IsNullOrEmpty(target))
+            return source.Length;
 
-        for (var i = 0; i <= m; i++) dp[i, 0] = i;
-        for (var j = 0; j <= n; j++) dp[0, j] = j;
+        var sourceLength = source.Length;
+        var targetLength = target.Length;
+        var distances = new int[sourceLength + 1, targetLength + 1];
 
-        for (var i = 1; i <= m; i++)
+        for (var sourceIndex = 0; sourceIndex <= sourceLength; sourceIndex++)
+            distances[sourceIndex, 0] = sourceIndex;
+
+        for (var targetIndex = 0; targetIndex <= targetLength; targetIndex++)
+            distances[0, targetIndex] = targetIndex;
+
+        for (var sourceIndex = 1; sourceIndex <= sourceLength; sourceIndex++)
         {
-            for (var j = 1; j <= n; j++)
+            for (var targetIndex = 1; targetIndex <= targetLength; targetIndex++)
             {
-                var cost = source[i - 1] == target[j - 1] ? 0 : 1;
-                dp[i, j] = Math.Min(
-                    Math.Min(dp[i - 1, j] + 1, dp[i, j - 1] + 1),
-                    dp[i - 1, j - 1] + cost);
+                var substitutionCost = source[sourceIndex - 1] == target[targetIndex - 1] ? 0 : 1;
+                distances[sourceIndex, targetIndex] = Math.Min(
+                    Math.Min(distances[sourceIndex - 1, targetIndex] + 1, distances[sourceIndex, targetIndex - 1] + 1),
+                    distances[sourceIndex - 1, targetIndex - 1] + substitutionCost);
             }
         }
 
-        return dp[m, n];
+        return distances[sourceLength, targetLength];
     }
 
     /// <summary>
@@ -368,16 +205,13 @@ public class QueryEngine
         if (matchedNodes.Count == 0)
             return new QueryCostEstimate(0, 0, 0, 0);
 
-        var seedIds = matchedNodes.Select(n => n.Id).ToList();
+        var seedIds = matchedNodes.Select(node => node.Id).ToList();
         var allowedEdges = QueryModeEdgeSets.ForMode(options.Mode);
-        var reachableIds = DepthFilter.Traverse(
-            seedIds, _outgoing, _incoming, options.Depth, options.IncludeExternal, allowedEdges);
+        var reachableIds = TraverseFromSeeds(seedIds, options.Depth, options.IncludeExternal, allowedEdges);
 
         var nodeCount = Math.Min(reachableIds.Count, options.MaxNodes);
-        var edgeCount = _edges
-            .Count(e => reachableIds.Contains(e.FromId) && reachableIds.Contains(e.ToId));
+        var edgeCount = _edges.Count(edge => reachableIds.Contains(edge.FromId) && reachableIds.Contains(edge.ToId));
 
-        // Token estimates: compact ~50/node + 20/edge, context ~150/node + 60/edge
         var tokensCompact = nodeCount * 50 + edgeCount * 20;
         var tokensContext = nodeCount * 150 + edgeCount * 60;
 
@@ -395,64 +229,262 @@ public class QueryEngine
 
         var nodeA = nodesA.FirstOrDefault();
         var nodeB = nodesB.FirstOrDefault();
-
         if (nodeA is null && nodeB is null)
             return new CompareResult(null, null, [], [], [], [], []);
 
-        // Gather edges for each symbol at the given depth
-        var seedIdsA = nodesA.Select(n => n.Id).ToList();
-        var seedIdsB = nodesB.Select(n => n.Id).ToList();
+        var seedIdsA = nodesA.Select(node => node.Id).ToList();
+        var seedIdsB = nodesB.Select(node => node.Id).ToList();
 
-        var reachableA = DepthFilter.Traverse(seedIdsA, _outgoing, _incoming, depth, false, null);
-        var reachableB = DepthFilter.Traverse(seedIdsB, _outgoing, _incoming, depth, false, null);
+        var reachableA = TraverseFromSeeds(seedIdsA, depth, includeExternal: false, allowedEdges: null);
+        var reachableB = TraverseFromSeeds(seedIdsB, depth, includeExternal: false, allowedEdges: null);
 
-        var edgesA = _edges
-            .Where(e => reachableA.Contains(e.FromId) && reachableA.Contains(e.ToId))
-            .ToList();
-        var edgesB = _edges
-            .Where(e => reachableB.Contains(e.FromId) && reachableB.Contains(e.ToId))
-            .ToList();
+        var edgesA = BuildSubgraphEdges(reachableA);
+        var edgesB = BuildSubgraphEdges(reachableB);
 
-        // Normalize edges for comparison: compare by (Type, ToId) for outgoing from seeds
-        var outgoingA = edgesA
-            .Where(e => seedIdsA.Contains(e.FromId))
-            .ToList();
-        var outgoingB = edgesB
-            .Where(e => seedIdsB.Contains(e.FromId))
-            .ToList();
+        var outgoingA = edgesA.Where(edge => seedIdsA.Contains(edge.FromId)).ToList();
+        var outgoingB = edgesB.Where(edge => seedIdsB.Contains(edge.FromId)).ToList();
 
-        // Edges are "shared" if they have the same target and type
-        var edgeKeyA = outgoingA.Select(e => (e.Type, e.ToId)).ToHashSet();
-        var edgeKeyB = outgoingB.Select(e => (e.Type, e.ToId)).ToHashSet();
-
-        var sharedKeys = edgeKeyA.Intersect(edgeKeyB).ToHashSet();
-        var sharedEdges = outgoingA.Where(e => sharedKeys.Contains((e.Type, e.ToId))).ToList();
-        var uniqueToA = outgoingA.Where(e => !sharedKeys.Contains((e.Type, e.ToId))).ToList();
-        var uniqueToB = outgoingB.Where(e => !sharedKeys.Contains((e.Type, e.ToId))).ToList();
-
-        // Find shared interfaces (both implement the same interface)
-        var interfacesA = edgesA
-            .Where(e => e.Type == EdgeType.Implements && seedIdsA.Contains(e.FromId))
-            .Select(e => e.ToId)
+        var sharedEdgeKeys = outgoingA
+            .Select(edge => (edge.Type, edge.ToId))
+            .ToHashSet()
+            .Intersect(outgoingB.Select(edge => (edge.Type, edge.ToId)).ToHashSet())
             .ToHashSet();
-        var interfacesB = edgesB
-            .Where(e => e.Type == EdgeType.Implements && seedIdsB.Contains(e.FromId))
-            .Select(e => e.ToId)
-            .ToHashSet();
-        var sharedInterfaces = interfacesA.Intersect(interfacesB).OrderBy(x => x).ToList();
 
-        // Find shared base classes
-        var basesA = edgesA
-            .Where(e => e.Type == EdgeType.Inherits && seedIdsA.Contains(e.FromId))
-            .Select(e => e.ToId)
-            .ToHashSet();
-        var basesB = edgesB
-            .Where(e => e.Type == EdgeType.Inherits && seedIdsB.Contains(e.FromId))
-            .Select(e => e.ToId)
-            .ToHashSet();
-        var sharedBases = basesA.Intersect(basesB).OrderBy(x => x).ToList();
+        var sharedEdges = outgoingA.Where(edge => sharedEdgeKeys.Contains((edge.Type, edge.ToId))).ToList();
+        var uniqueToA = outgoingA.Where(edge => !sharedEdgeKeys.Contains((edge.Type, edge.ToId))).ToList();
+        var uniqueToB = outgoingB.Where(edge => !sharedEdgeKeys.Contains((edge.Type, edge.ToId))).ToList();
+
+        var sharedInterfaces = GetSharedEdgeTargets(edgesA, edgesB, seedIdsA, seedIdsB, EdgeType.Implements);
+        var sharedBases = GetSharedEdgeTargets(edgesA, edgesB, seedIdsA, seedIdsB, EdgeType.Inherits);
 
         return new CompareResult(nodeA, nodeB, sharedEdges, uniqueToA, uniqueToB, sharedInterfaces, sharedBases);
+    }
+
+    private static void AddEdgeLookupEntry(Dictionary<string, List<GraphEdge>> lookup, string nodeId, GraphEdge edge)
+    {
+        if (!lookup.TryGetValue(nodeId, out var edges))
+        {
+            edges = new List<GraphEdge>();
+            lookup[nodeId] = edges;
+        }
+
+        edges.Add(edge);
+    }
+
+    private static bool MatchesSearchQuery(GraphNode node, string query)
+    {
+        return node.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
+            || node.Id.Contains(query, StringComparison.OrdinalIgnoreCase)
+            || (node.FilePath?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
+            || (node.ContainingNamespaceId?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false);
+    }
+
+    private static string NormalizePath(string path)
+    {
+        return path.Replace('\\', '/');
+    }
+
+    private static bool MatchesFilePath(GraphNode node, string normalizedPath)
+    {
+        var filePath = NormalizePath(node.FilePath);
+        return filePath.Contains(normalizedPath, StringComparison.OrdinalIgnoreCase)
+            || filePath.EndsWith(normalizedPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task<QueryEngine> LoadSingleGraphAsync(string graphDirectory)
+    {
+        var dbPath = Path.Combine(graphDirectory, "graph.db");
+        if (File.Exists(dbPath))
+        {
+            var (metadata, nodes, edges) = await SqliteGraphReader.ReadAsync(dbPath);
+            return new QueryEngine(nodes, edges, metadata);
+        }
+
+        var graph = await GraphReader.ReadAsync(graphDirectory);
+        return new QueryEngine(graph.Nodes, graph.Edges, graph.Metadata);
+    }
+
+    private static async Task<QueryEngine> LoadFederatedGraphAsync(
+        string graphDirectory,
+        IEnumerable<string> subGraphDirectories,
+        string? solutionFilter)
+    {
+        var allNodes = new Dictionary<string, GraphNode>();
+        var allEdges = new List<GraphEdge>();
+        var solutionNames = new List<string>();
+        var allProjectsIndexed = new List<string>();
+        GraphMetadata? firstMetadata = null;
+
+        foreach (var subGraphDirectory in subGraphDirectories)
+        {
+            var solutionName = Path.GetFileName(subGraphDirectory);
+            if (!ShouldIncludeSolution(solutionName, solutionFilter))
+                continue;
+
+            var (metadata, nodes, edges) = await GraphReader.ReadAsync(subGraphDirectory);
+            firstMetadata ??= metadata;
+            solutionNames.Add(solutionName);
+            allProjectsIndexed.AddRange(metadata.ProjectsIndexed);
+
+            foreach (var node in nodes)
+                allNodes.TryAdd(node.Key, node.Value);
+
+            allEdges.AddRange(edges);
+        }
+
+        if (firstMetadata is null)
+        {
+            throw new FileNotFoundException(
+                "meta.json not found in graph directory.",
+                Path.Combine(graphDirectory, "meta.json"));
+        }
+
+        var uniqueEdges = allEdges
+            .GroupBy(edge => (edge.FromId, edge.ToId, edge.Type))
+            .Select(group => group.First())
+            .ToList();
+
+        var federatedMetadata = firstMetadata with
+        {
+            SolutionName = string.Join(", ", solutionNames),
+            Solution = string.Join(", ", solutionNames.Select(name => name + ".sln")),
+            ProjectsIndexed = allProjectsIndexed.Distinct().ToArray()
+        };
+
+        return new QueryEngine(allNodes, uniqueEdges, federatedMetadata);
+    }
+
+    private static bool ShouldIncludeSolution(string solutionName, string? solutionFilter)
+    {
+        return string.IsNullOrEmpty(solutionFilter)
+            || solutionName.Equals(solutionFilter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private List<GraphNode> ApplyNodeFilters(List<GraphNode> matchedNodes, QueryOptions options)
+    {
+        if (options.NamespaceFilter is not null)
+        {
+            var allowedIds = NamespaceFilter.Apply(_nodes, options.NamespaceFilter);
+            matchedNodes = matchedNodes.Where(node => allowedIds.ContainsKey(node.Id)).ToList();
+        }
+
+        if (options.ProjectFilter is not null)
+        {
+            matchedNodes = matchedNodes
+                .Where(node => node.Id.StartsWith(options.ProjectFilter, StringComparison.OrdinalIgnoreCase)
+                    || (node.ContainingNamespaceId?.StartsWith(options.ProjectFilter, StringComparison.OrdinalIgnoreCase) ?? false))
+                .ToList();
+        }
+
+        return matchedNodes;
+    }
+
+    private HashSet<string> TraverseFromSeeds(
+        List<string> seedIds,
+        int depth,
+        bool includeExternal,
+        HashSet<EdgeType>? allowedEdges)
+    {
+        return DepthFilter.Traverse(seedIds, _outgoing, _incoming, depth, includeExternal, allowedEdges);
+    }
+
+    private Dictionary<string, GraphNode> BuildSubgraphNodes(HashSet<string> reachableIds)
+    {
+        var subgraphNodes = new Dictionary<string, GraphNode>();
+        foreach (var nodeId in reachableIds)
+        {
+            if (_nodes.TryGetValue(nodeId, out var node))
+                subgraphNodes[nodeId] = node;
+        }
+
+        return subgraphNodes;
+    }
+
+    private List<GraphEdge> BuildSubgraphEdges(HashSet<string> reachableIds)
+    {
+        return _edges
+            .Where(edge => reachableIds.Contains(edge.FromId) && reachableIds.Contains(edge.ToId))
+            .ToList();
+    }
+
+    private static List<GraphEdge> ApplyEdgeFilters(List<GraphEdge> subgraphEdges, QueryOptions options)
+    {
+        if (options.EdgeTypeFilter is not null)
+            subgraphEdges = EdgeTypeFilter.Apply(subgraphEdges, options.EdgeTypeFilter);
+
+        if (options.ConfidenceThreshold is not null)
+            subgraphEdges = subgraphEdges.Where(edge => edge.Confidence <= options.ConfidenceThreshold.Value).ToList();
+
+        if (!options.IncludeExternal)
+            subgraphEdges = subgraphEdges.Where(edge => !edge.IsExternal).ToList();
+
+        return subgraphEdges;
+    }
+
+    private (Dictionary<string, GraphNode> Nodes, List<GraphEdge> Edges, bool WasTruncated) TruncateSubgraphIfNeeded(
+        Dictionary<string, GraphNode> subgraphNodes,
+        List<GraphEdge> subgraphEdges,
+        List<string> seedIds,
+        HashSet<string> directNeighborIds,
+        GraphNode? targetNode,
+        QueryOptions options)
+    {
+        if (subgraphNodes.Count <= options.MaxNodes)
+            return (subgraphNodes, subgraphEdges, false);
+
+        var keepIds = options.Rank
+            ? GetRankedNodeIds(subgraphNodes, directNeighborIds, targetNode, options.MaxNodes)
+            : new HashSet<string>(subgraphNodes.Keys.Take(options.MaxNodes));
+
+        foreach (var seedId in seedIds)
+            keepIds.Add(seedId);
+
+        var truncatedNodes = subgraphNodes
+            .Where(node => keepIds.Contains(node.Key))
+            .ToDictionary(node => node.Key, node => node.Value);
+        var truncatedEdges = subgraphEdges
+            .Where(edge => keepIds.Contains(edge.FromId) && keepIds.Contains(edge.ToId))
+            .ToList();
+
+        return (truncatedNodes, truncatedEdges, true);
+    }
+
+    private HashSet<string> GetRankedNodeIds(
+        Dictionary<string, GraphNode> subgraphNodes,
+        HashSet<string> directNeighborIds,
+        GraphNode? targetNode,
+        int maxNodes)
+    {
+        var externalIds = new HashSet<string>(
+            _edges.Where(edge => edge.IsExternal).SelectMany(edge => new[] { edge.FromId, edge.ToId }));
+        var targetProject = targetNode?.ContainingNamespaceId;
+
+        var rankedNodes = RankingStrategy.Rank(
+            subgraphNodes.Values.ToList(),
+            directNeighborIds,
+            externalIds,
+            targetProject);
+
+        return new HashSet<string>(rankedNodes.Take(maxNodes).Select(node => node.Id));
+    }
+
+    private static List<string> GetSharedEdgeTargets(
+        List<GraphEdge> edgesA,
+        List<GraphEdge> edgesB,
+        List<string> seedIdsA,
+        List<string> seedIdsB,
+        EdgeType edgeType)
+    {
+        var targetsA = edgesA
+            .Where(edge => edge.Type == edgeType && seedIdsA.Contains(edge.FromId))
+            .Select(edge => edge.ToId)
+            .ToHashSet();
+        var targetsB = edgesB
+            .Where(edge => edge.Type == edgeType && seedIdsB.Contains(edge.FromId))
+            .Select(edge => edge.ToId)
+            .ToHashSet();
+
+        return targetsA.Intersect(targetsB).OrderBy(target => target).ToList();
     }
 
     private List<GraphNode> FindMatchingNodes(string pattern)
@@ -460,56 +492,56 @@ public class QueryEngine
         if (string.IsNullOrWhiteSpace(pattern))
             return _nodes.Values.ToList();
 
-        // Kind filter: "type:OrderService"
-        NodeKind? kindFilter = null;
-        var searchPattern = pattern;
-
-        var kindPrefixMatch = Regex.Match(pattern, @"^(namespace|type|method|property|field|event|constructor):(.+)$",
-            RegexOptions.IgnoreCase);
-        if (kindPrefixMatch.Success)
-        {
-            kindFilter = Enum.Parse<NodeKind>(kindPrefixMatch.Groups[1].Value, ignoreCase: true);
-            searchPattern = kindPrefixMatch.Groups[2].Value;
-        }
-
-        List<GraphNode> results;
-
-        if (searchPattern.Contains('*'))
-        {
-            // Wildcard match
-            var regexPattern = "^" + Regex.Escape(searchPattern).Replace("\\*", ".*") + "$";
-            var regex = new Regex(regexPattern, RegexOptions.IgnoreCase);
-            results = _nodes.Values
-                .Where(n => regex.IsMatch(n.Id) || regex.IsMatch(n.Name))
-                .ToList();
-        }
-        else
-        {
-            // Exact match: try Id ending with pattern
-            var exact = _nodes.Values
-                .Where(n => n.Id.Equals(searchPattern, StringComparison.OrdinalIgnoreCase)
-                    || n.Id.EndsWith("." + searchPattern, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-
-            if (exact.Count > 0)
-            {
-                results = exact;
-            }
-            else
-            {
-                // Partial match: Name or Id ends with pattern
-                results = _nodes.Values
-                    .Where(n => n.Name.Equals(searchPattern, StringComparison.OrdinalIgnoreCase)
-                        || n.Id.EndsWith(searchPattern, StringComparison.OrdinalIgnoreCase)
-                        || n.Name.EndsWith(searchPattern, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-            }
-        }
+        var (kindFilter, searchPattern) = ParseKindFilter(pattern);
+        var results = searchPattern.Contains('*')
+            ? FindWildcardMatches(searchPattern)
+            : FindExactOrPartialMatches(searchPattern);
 
         if (kindFilter is not null)
-            results = results.Where(n => n.Kind == kindFilter.Value).ToList();
+            results = results.Where(node => node.Kind == kindFilter.Value).ToList();
 
         return results;
+    }
+
+    private static (NodeKind? KindFilter, string SearchPattern) ParseKindFilter(string pattern)
+    {
+        var kindPrefixMatch = Regex.Match(
+            pattern,
+            @"^(namespace|type|method|property|field|event|constructor):(.+)$",
+            RegexOptions.IgnoreCase);
+
+        if (!kindPrefixMatch.Success)
+            return (null, pattern);
+
+        var kindFilter = Enum.Parse<NodeKind>(kindPrefixMatch.Groups[1].Value, ignoreCase: true);
+        var searchPattern = kindPrefixMatch.Groups[2].Value;
+        return (kindFilter, searchPattern);
+    }
+
+    private List<GraphNode> FindWildcardMatches(string searchPattern)
+    {
+        var regexPattern = "^" + Regex.Escape(searchPattern).Replace("\\*", ".*") + "$";
+        var regex = new Regex(regexPattern, RegexOptions.IgnoreCase);
+
+        return _nodes.Values
+            .Where(node => regex.IsMatch(node.Id) || regex.IsMatch(node.Name))
+            .ToList();
+    }
+
+    private List<GraphNode> FindExactOrPartialMatches(string searchPattern)
+    {
+        var exactMatches = _nodes.Values
+            .Where(node => node.Id.Equals(searchPattern, StringComparison.OrdinalIgnoreCase)
+                || node.Id.EndsWith("." + searchPattern, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (exactMatches.Count > 0)
+            return exactMatches;
+
+        return _nodes.Values
+            .Where(node => node.Name.Equals(searchPattern, StringComparison.OrdinalIgnoreCase)
+                || node.Id.EndsWith(searchPattern, StringComparison.OrdinalIgnoreCase)
+                || node.Name.EndsWith(searchPattern, StringComparison.OrdinalIgnoreCase))
+            .ToList();
     }
 }
 

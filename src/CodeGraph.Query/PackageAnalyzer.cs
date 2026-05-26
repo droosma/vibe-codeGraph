@@ -15,27 +15,14 @@ public class PackageQueryEngine
 
     public IReadOnlyList<PackageUsage> ListPackages(string? projectFilter = null)
     {
-        var groups = GetPackageEdges(projectFilter)
+        var groupedPackages = GetPackageEdges(projectFilter)
             .GroupBy(edge => (edge.ProjectName, edge.PackageId, edge.Version), edge => edge);
 
-        var result = new List<PackageUsage>();
-        foreach (var group in groups)
-        {
-            var edgesInGroup = group.ToList();
-            var externalSymbols = edgesInGroup.Select(edge => edge.ExternalSymbolId).Distinct(StringComparer.Ordinal).ToList();
-            var internalUsers = edgesInGroup.Select(edge => edge.ConsumerId).Distinct(StringComparer.Ordinal).ToList();
+        var usages = new List<PackageUsage>();
+        foreach (var group in groupedPackages)
+            usages.Add(CreatePackageUsage(group));
 
-            result.Add(new PackageUsage(
-                PackageId: group.Key.PackageId,
-                Version: group.Key.Version,
-                ProjectName: group.Key.ProjectName,
-                ExternalTypeCount: externalSymbols.Count,
-                InternalUsageCount: internalUsers.Count,
-                ExampleInternalUsers: internalUsers.Take(5).ToList(),
-                ExampleExternalSymbols: externalSymbols.Take(5).ToList()));
-        }
-
-        return result
+        return usages
             .OrderBy(usage => usage.ProjectName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(usage => usage.PackageId, StringComparer.OrdinalIgnoreCase)
             .ThenBy(usage => usage.Version, StringComparer.OrdinalIgnoreCase)
@@ -47,42 +34,23 @@ public class PackageQueryEngine
         if (string.IsNullOrWhiteSpace(packageName))
             return Array.Empty<PackageDependent>();
 
-        var result = GetPackageEdges(projectFilter)
+        return GetPackageEdges(projectFilter)
             .Where(edge => edge.PackageId.Equals(packageName, StringComparison.OrdinalIgnoreCase))
-            .GroupBy(edge => (edge.ProjectName, edge.PackageId, edge.Version, edge.ConsumerId, edge.ConsumerName, edge.ConsumerKind), edge => edge)
-            .Select(group => new PackageDependent(
-                PackageId: group.Key.PackageId,
-                Version: group.Key.Version,
-                ProjectName: group.Key.ProjectName,
-                ConsumerId: group.Key.ConsumerId,
-                ConsumerName: group.Key.ConsumerName,
-                ConsumerKind: group.Key.ConsumerKind,
-                ExternalSymbols: group.Select(edge => edge.ExternalSymbolId).Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal).ToList()))
+            .GroupBy(
+                edge => (edge.ProjectName, edge.PackageId, edge.Version, edge.ConsumerId, edge.ConsumerName, edge.ConsumerKind),
+                edge => edge)
+            .Select(CreatePackageDependent)
             .OrderBy(dependent => dependent.ProjectName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(dependent => dependent.ConsumerKind)
             .ThenBy(dependent => dependent.ConsumerId, StringComparer.OrdinalIgnoreCase)
             .ToList();
-
-        return result;
     }
 
     public IReadOnlyList<PackageConflict> FindConflicts()
     {
-        var packageProjectVersions = new Dictionary<string, Dictionary<string, string?>>(StringComparer.OrdinalIgnoreCase);
+        var versionsByPackage = BuildVersionsByPackage();
 
-        foreach (var edge in GetPackageEdges())
-        {
-            if (!packageProjectVersions.TryGetValue(edge.PackageId, out var projectVersions))
-            {
-                projectVersions = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-                packageProjectVersions[edge.PackageId] = projectVersions;
-            }
-
-            if (!projectVersions.ContainsKey(edge.ProjectName))
-                projectVersions[edge.ProjectName] = edge.Version;
-        }
-
-        return packageProjectVersions
+        return versionsByPackage
             .Where(entry => entry.Value.Values.Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
             .Select(entry => new PackageConflict(
                 entry.Key,
@@ -100,34 +68,108 @@ public class PackageQueryEngine
         return (packageSource, null);
     }
 
+    private static PackageUsage CreatePackageUsage(IGrouping<(string ProjectName, string PackageId, string? Version), PackageEdge> group)
+    {
+        var edges = group.ToList();
+        var externalSymbols = GetDistinctValues(edges.Select(edge => edge.ExternalSymbolId), StringComparer.Ordinal);
+        var internalUsers = GetDistinctValues(edges.Select(edge => edge.ConsumerId), StringComparer.Ordinal);
+
+        return new PackageUsage(
+            PackageId: group.Key.PackageId,
+            Version: group.Key.Version,
+            ProjectName: group.Key.ProjectName,
+            ExternalTypeCount: externalSymbols.Count,
+            InternalUsageCount: internalUsers.Count,
+            ExampleInternalUsers: internalUsers.Take(5).ToList(),
+            ExampleExternalSymbols: externalSymbols.Take(5).ToList());
+    }
+
+    private static PackageDependent CreatePackageDependent(
+        IGrouping<(string ProjectName, string PackageId, string? Version, string ConsumerId, string ConsumerName, NodeKind ConsumerKind), PackageEdge> group)
+    {
+        var externalSymbols = group
+            .Select(edge => edge.ExternalSymbolId)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToList();
+
+        return new PackageDependent(
+            PackageId: group.Key.PackageId,
+            Version: group.Key.Version,
+            ProjectName: group.Key.ProjectName,
+            ConsumerId: group.Key.ConsumerId,
+            ConsumerName: group.Key.ConsumerName,
+            ConsumerKind: group.Key.ConsumerKind,
+            ExternalSymbols: externalSymbols);
+    }
+
+    private static List<string> GetDistinctValues(IEnumerable<string> values, IEqualityComparer<string> comparer)
+    {
+        return values.Distinct(comparer).ToList();
+    }
+
+    private Dictionary<string, Dictionary<string, string?>> BuildVersionsByPackage()
+    {
+        var versionsByPackage = new Dictionary<string, Dictionary<string, string?>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var edge in GetPackageEdges())
+            RegisterPackageVersion(versionsByPackage, edge);
+
+        return versionsByPackage;
+    }
+
+    private static void RegisterPackageVersion(Dictionary<string, Dictionary<string, string?>> versionsByPackage, PackageEdge edge)
+    {
+        if (!versionsByPackage.TryGetValue(edge.PackageId, out var versionsByProject))
+        {
+            versionsByProject = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            versionsByPackage[edge.PackageId] = versionsByProject;
+        }
+
+        if (!versionsByProject.ContainsKey(edge.ProjectName))
+            versionsByProject[edge.ProjectName] = edge.Version;
+    }
+
     private IEnumerable<PackageEdge> GetPackageEdges(string? projectFilter = null)
     {
         foreach (var edge in _edges)
         {
-            if (!edge.IsExternal || string.IsNullOrWhiteSpace(edge.PackageSource))
-                continue;
-
-            var (packageId, version) = ParsePackageSource(edge.PackageSource);
-            if (string.IsNullOrWhiteSpace(packageId))
-                continue;
-
-            var projectName = GetProjectName(edge.FromId);
-            if (!string.IsNullOrWhiteSpace(projectFilter) &&
-                !projectName.Equals(projectFilter, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            var consumer = GetConsumer(edge.FromId);
-            yield return new PackageEdge(
-                ProjectName: projectName,
-                PackageId: packageId,
-                Version: version,
-                ConsumerId: edge.FromId,
-                ConsumerName: consumer.Name,
-                ConsumerKind: consumer.Kind,
-                ExternalSymbolId: edge.ToId);
+            if (TryCreatePackageEdge(edge, projectFilter, out var packageEdge))
+                yield return packageEdge;
         }
+    }
+
+    private bool TryCreatePackageEdge(GraphEdge edge, string? projectFilter, out PackageEdge packageEdge)
+    {
+        packageEdge = null!;
+
+        if (!edge.IsExternal || string.IsNullOrWhiteSpace(edge.PackageSource))
+            return false;
+
+        var (packageId, version) = ParsePackageSource(edge.PackageSource);
+        if (string.IsNullOrWhiteSpace(packageId))
+            return false;
+
+        var projectName = GetProjectName(edge.FromId);
+        if (!MatchesProjectFilter(projectName, projectFilter))
+            return false;
+
+        var consumer = GetConsumer(edge.FromId);
+        packageEdge = new PackageEdge(
+            ProjectName: projectName,
+            PackageId: packageId,
+            Version: version,
+            ConsumerId: edge.FromId,
+            ConsumerName: consumer.Name,
+            ConsumerKind: consumer.Kind,
+            ExternalSymbolId: edge.ToId);
+        return true;
+    }
+
+    private static bool MatchesProjectFilter(string projectName, string? projectFilter)
+    {
+        return string.IsNullOrWhiteSpace(projectFilter)
+            || projectName.Equals(projectFilter, StringComparison.OrdinalIgnoreCase);
     }
 
     private (string Name, NodeKind Kind) GetConsumer(string nodeId)
@@ -136,9 +178,9 @@ public class PackageQueryEngine
             return (string.IsNullOrWhiteSpace(node.Name) ? nodeId : node.Name, node.Kind);
 
         var lastDot = nodeId.LastIndexOf('.');
-        var name = lastDot >= 0 && lastDot < nodeId.Length - 1 ? nodeId[(lastDot + 1)..] : nodeId;
-        var kind = nodeId.Contains('(') ? NodeKind.Method : NodeKind.Type;
-        return (name, kind);
+        var inferredName = lastDot >= 0 && lastDot < nodeId.Length - 1 ? nodeId[(lastDot + 1)..] : nodeId;
+        var inferredKind = nodeId.Contains('(') ? NodeKind.Method : NodeKind.Type;
+        return (inferredName, inferredKind);
     }
 
     private string GetProjectName(string nodeId)

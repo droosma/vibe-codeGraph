@@ -487,6 +487,25 @@ internal static class AgentTemplates
         """;
 
     /// <summary>
+    /// Ordered template list for Claude-specific skill files.
+    /// </summary>
+    public static IReadOnlyList<(string RelativePath, string Content)> ClaudeSkillFiles { get; } =
+    [
+        (".claude/skills/codegraph/SKILL.md", ClaudeSkillMd),
+        (".claude/skills/codegraph/scripts/query-wrapper.sh", ClaudeQueryWrapperSh)
+    ];
+
+    /// <summary>
+    /// Ordered template list for reusable agent definition files.
+    /// </summary>
+    public static IReadOnlyList<(string FileName, string Content)> AgentDefinitionFiles { get; } =
+    [
+        ("codegraph-architecture.md", ArchitectureAgentMd),
+        ("codegraph-impact.md", ImpactAgentMd),
+        ("codegraph-review.md", CodeReviewAgentMd)
+    ];
+
+    /// <summary>
     /// Marker text used to detect if a CodeGraph section has already been appended
     /// to an existing file (Copilot instructions, AGENTS.md).
     /// </summary>

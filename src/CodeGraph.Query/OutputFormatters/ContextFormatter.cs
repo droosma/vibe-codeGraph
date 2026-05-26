@@ -47,9 +47,25 @@ public static class ContextFormatter
     {
         var sb = new StringBuilder();
 
-        // Header
+        AppendHeader(sb, result, queryDescription);
+        AppendTargetSection(sb, result, includeSource, sourceMaxLines);
+
+        var targetNodeIds = GetTargetNodeIds(result);
+        var targetIds = new HashSet<string>(targetNodeIds, StringComparer.Ordinal);
+
+        AppendEdgeSections(sb, result, targetIds, includeSource, sourceMaxLines, outgoing: true);
+        AppendEdgeSections(sb, result, targetIds, includeSource, sourceMaxLines, outgoing: false);
+        AppendTruncationWarning(sb, result);
+        AppendSuggestions(sb, result.Suggestions);
+
+        return sb.ToString().TrimEnd();
+    }
+
+    private static void AppendHeader(StringBuilder sb, QueryResult result, string? queryDescription)
+    {
         var targetName = result.TargetNode?.Id
             ?? (result.MatchedNodes.Count > 0 ? result.MatchedNodes[0].Id : "query");
+
         sb.AppendLine($"# Subgraph for {targetName}");
 
         if (result.Metadata is not null)
@@ -66,84 +82,97 @@ public static class ContextFormatter
             sb.AppendLine($"## Query: {queryDescription}");
 
         sb.AppendLine();
+    }
 
-        // Target section
+    private static void AppendTargetSection(StringBuilder sb, QueryResult result, bool includeSource, int sourceMaxLines)
+    {
         if (result.TargetNode is not null)
         {
             sb.AppendLine("### Target");
             AppendNodeDetail(sb, result.TargetNode, includeSource: includeSource, sourceMaxLines: sourceMaxLines);
             sb.AppendLine();
-        }
-        else if (result.MatchedNodes.Count > 0)
-        {
-            sb.AppendLine($"### Matched Nodes ({result.MatchedNodes.Count})");
-            foreach (var node in result.MatchedNodes)
-            {
-                AppendNodeDetail(sb, node, includeSource: includeSource, sourceMaxLines: sourceMaxLines);
-            }
-            sb.AppendLine();
+            return;
         }
 
-        // Determine the target IDs for edge grouping
-        var targetIds = new HashSet<string>();
+        if (result.MatchedNodes.Count == 0)
+            return;
+
+        sb.AppendLine($"### Matched Nodes ({result.MatchedNodes.Count})");
+        foreach (var node in result.MatchedNodes)
+            AppendNodeDetail(sb, node, includeSource: includeSource, sourceMaxLines: sourceMaxLines);
+
+        sb.AppendLine();
+    }
+
+    private static IReadOnlyList<string> GetTargetNodeIds(QueryResult result)
+    {
         if (result.TargetNode is not null)
-            targetIds.Add(result.TargetNode.Id);
-        else
-            foreach (var n in result.MatchedNodes)
-                targetIds.Add(n.Id);
+            return [result.TargetNode.Id];
 
-        // Group outgoing edges by type
-        var outgoing = result.Edges
-            .Where(e => targetIds.Contains(e.FromId))
-            .GroupBy(e => e.Type)
-            .OrderBy(g => g.Key);
+        return result.MatchedNodes.Select(node => node.Id).ToList();
+    }
 
-        foreach (var group in outgoing)
+    private static void AppendEdgeSections(
+        StringBuilder sb,
+        QueryResult result,
+        HashSet<string> targetIds,
+        bool includeSource,
+        int sourceMaxLines,
+        bool outgoing)
+    {
+        var edgeGroups = outgoing
+            ? result.Edges
+                .Where(edge => targetIds.Contains(edge.FromId))
+                .GroupBy(edge => edge.Type)
+                .OrderBy(group => group.Key)
+            : result.Edges
+                .Where(edge => targetIds.Contains(edge.ToId) && !targetIds.Contains(edge.FromId))
+                .GroupBy(edge => edge.Type)
+                .OrderBy(group => group.Key);
+
+        foreach (var group in edgeGroups)
         {
-            var header = OutgoingHeaders.TryGetValue(group.Key, out var h) ? h : group.Key.ToString();
+            var header = ResolveHeader(group.Key, outgoing);
             sb.AppendLine($"### {header}");
+
             foreach (var edge in group)
             {
-                if (result.Nodes.TryGetValue(edge.ToId, out var node))
+                var nodeId = outgoing ? edge.ToId : edge.FromId;
+                if (result.Nodes.TryGetValue(nodeId, out var node))
                     AppendNodeDetail(sb, node, edge, includeSource, sourceMaxLines);
                 else
-                    sb.AppendLine($"- {edge.ToId}");
+                    sb.AppendLine($"- {nodeId}");
             }
+
             sb.AppendLine();
         }
+    }
 
-        // Group incoming edges by type
-        var incoming = result.Edges
-            .Where(e => targetIds.Contains(e.ToId) && !targetIds.Contains(e.FromId))
-            .GroupBy(e => e.Type)
-            .OrderBy(g => g.Key);
+    private static string ResolveHeader(EdgeType edgeType, bool outgoing)
+    {
+        if (outgoing)
+            return OutgoingHeaders.TryGetValue(edgeType, out var header) ? header : edgeType.ToString();
 
-        foreach (var group in incoming)
-        {
-            var header = IncomingHeaders.TryGetValue(group.Key, out var h) ? h : $"{group.Key} (incoming)";
-            sb.AppendLine($"### {header}");
-            foreach (var edge in group)
-            {
-                if (result.Nodes.TryGetValue(edge.FromId, out var node))
-                    AppendNodeDetail(sb, node, edge, includeSource, sourceMaxLines);
-                else
-                    sb.AppendLine($"- {edge.FromId}");
-            }
-            sb.AppendLine();
-        }
+        return IncomingHeaders.TryGetValue(edgeType, out var incomingHeader)
+            ? incomingHeader
+            : $"{edgeType} (incoming)";
+    }
 
+    private static void AppendTruncationWarning(StringBuilder sb, QueryResult result)
+    {
         if (result.WasTruncated)
             sb.AppendLine($"⚠ Results truncated. Showing subset of {result.TotalMatchCount} total matches.");
+    }
 
-        if (result.Suggestions.Count > 0)
-        {
-            sb.AppendLine();
-            sb.AppendLine("Did you mean:");
-            foreach (var suggestion in result.Suggestions)
-                sb.AppendLine($"  - {suggestion}");
-        }
+    private static void AppendSuggestions(StringBuilder sb, IReadOnlyList<string> suggestions)
+    {
+        if (suggestions.Count == 0)
+            return;
 
-        return sb.ToString().TrimEnd();
+        sb.AppendLine();
+        sb.AppendLine("Did you mean:");
+        foreach (var suggestion in suggestions)
+            sb.AppendLine($"  - {suggestion}");
     }
 
     private static void AppendNodeDetail(StringBuilder sb, GraphNode node, GraphEdge? edge = null, bool includeSource = false, int sourceMaxLines = 20)
@@ -189,6 +218,7 @@ public static class ContextFormatter
 
             var maxLines = Math.Max(1, sourceMaxLines);
             sb.AppendLine("  ```csharp");
+
             if (lines.Count <= maxLines)
             {
                 foreach (var line in lines)
@@ -198,8 +228,10 @@ public static class ContextFormatter
             {
                 foreach (var line in lines.Take(maxLines))
                     sb.AppendLine($"  {line}");
+
                 sb.AppendLine($"  // ... ({lines.Count - maxLines} more lines)");
             }
+
             sb.AppendLine("  ```");
         }
         catch

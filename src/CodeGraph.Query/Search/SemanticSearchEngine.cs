@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using CodeGraph.Core.Models;
 
 namespace CodeGraph.Query.Search;
@@ -22,6 +23,8 @@ public class SemanticSearchEngine
     private const double ShortNameMaxBonus = 0.5;
     private const int ShortNameThreshold = 100;
 
+    private static readonly Regex XmlTagPattern = new(@"<[^>]+>", RegexOptions.Compiled);
+
     private readonly Dictionary<string, GraphNode> _nodes;
     private readonly Dictionary<string, IReadOnlyList<string>> _tokenCache;
 
@@ -29,12 +32,9 @@ public class SemanticSearchEngine
     {
         _nodes = nodes;
 
-        // Pre-tokenize all nodes
         _tokenCache = new Dictionary<string, IReadOnlyList<string>>(nodes.Count);
         foreach (var (id, node) in nodes)
-        {
             _tokenCache[id] = SearchTokenizer.TokenizeSymbol(node);
-        }
     }
 
     /// <summary>
@@ -49,43 +49,43 @@ public class SemanticSearchEngine
         if (queryTokens.Count == 0)
             return [];
 
-        // Build the set of synonym tokens for each query token
-        var synonymSets = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var qt in queryTokens)
+        var synonymSets = BuildSynonymSets(queryTokens);
+        var scoredResults = new List<SearchResult>();
+
+        foreach (var node in EnumerateCandidates(kindFilter))
         {
-            var expanded = SynonymMap.Expand(qt);
-            if (expanded.Count > 0)
-                synonymSets[qt] = new HashSet<string>(expanded, StringComparer.OrdinalIgnoreCase);
-        }
-
-        var scored = new List<SearchResult>();
-
-        foreach (var (id, node) in _nodes)
-        {
-            if (kindFilter.HasValue && node.Kind != kindFilter.Value)
-                continue;
-
             var (score, reasons) = ScoreNode(node, query, queryTokens, synonymSets);
             if (score > 0)
-                scored.Add(new SearchResult(node, score, reasons));
+                scoredResults.Add(new SearchResult(node, score, reasons));
         }
 
-        // Deterministic ordering: score desc, then type/method boost, then shorter name, then name alpha
-        scored.Sort((a, b) =>
+        SortResults(scoredResults);
+        if (scoredResults.Count > top)
+            scoredResults = scoredResults.GetRange(0, top);
+
+        return scoredResults;
+    }
+
+    private IEnumerable<GraphNode> EnumerateCandidates(NodeKind? kindFilter)
+    {
+        IEnumerable<GraphNode> candidates = _nodes.Values;
+        if (kindFilter.HasValue)
+            candidates = candidates.Where(node => node.Kind == kindFilter.Value);
+
+        return candidates;
+    }
+
+    private static Dictionary<string, HashSet<string>> BuildSynonymSets(IReadOnlyList<string> queryTokens)
+    {
+        var synonymSets = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var queryToken in queryTokens)
         {
-            var cmp = b.Score.CompareTo(a.Score);
-            if (cmp != 0) return cmp;
+            var expanded = SynonymMap.Expand(queryToken);
+            if (expanded.Count > 0)
+                synonymSets[queryToken] = new HashSet<string>(expanded, StringComparer.OrdinalIgnoreCase);
+        }
 
-            cmp = a.Node.Name.Length.CompareTo(b.Node.Name.Length);
-            if (cmp != 0) return cmp;
-
-            return string.Compare(a.Node.Name, b.Node.Name, StringComparison.OrdinalIgnoreCase);
-        });
-
-        if (scored.Count > top)
-            scored = scored.GetRange(0, top);
-
-        return scored;
+        return synonymSets;
     }
 
     private (double Score, List<string> Reasons) ScoreNode(
@@ -94,10 +94,9 @@ public class SemanticSearchEngine
         IReadOnlyList<string> queryTokens,
         Dictionary<string, HashSet<string>> synonymSets)
     {
-        double score = 0;
+        var score = 0.0;
         var reasons = new List<string>();
 
-        // Exact name match (case-insensitive)
         if (node.Name.Equals(rawQuery, StringComparison.OrdinalIgnoreCase))
         {
             score += ExactNameScore;
@@ -107,69 +106,120 @@ public class SemanticSearchEngine
         var symbolTokens = _tokenCache[node.Id];
         var nameTokens = GetNameTokens(node.Name);
         var docTokens = GetDocCommentTokens(node.DocComment);
-        var nsPathTokens = GetNamespacePathTokens(node);
+        var namespacePathTokens = GetNamespacePathTokens(node);
 
-        foreach (var qt in queryTokens)
+        foreach (var queryToken in queryTokens)
         {
-            // Token match in name
-            if (nameTokens.Contains(qt))
-            {
-                score += TokenInNameScore;
-                reasons.Add($"token '{qt}' in name");
-            }
-
-            // Token match in doc comment
-            if (docTokens.Contains(qt))
-            {
-                score += TokenInDocCommentScore;
-                reasons.Add($"token '{qt}' in doc comment");
-            }
-
-            // Synonym match: check if any symbol token is a synonym of the query token
-            if (synonymSets.TryGetValue(qt, out var synonyms))
-            {
-                foreach (var syn in synonyms)
-                {
-                    if (symbolTokens.Any(st => st.Equals(syn, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        score += SynonymMatchScore;
-                        reasons.Add($"synonym '{syn}' of '{qt}'");
-                        break; // count each synonym group once per query token
-                    }
-                }
-            }
-
-            // Token match in namespace/path
-            if (nsPathTokens.Contains(qt))
-            {
-                score += TokenInNamespaceOrPathScore;
-                reasons.Add($"token '{qt}' in namespace/path");
-            }
+            score += ScoreQueryToken(
+                queryToken,
+                symbolTokens,
+                nameTokens,
+                docTokens,
+                namespacePathTokens,
+                synonymSets,
+                reasons);
         }
 
         if (score > 0)
-        {
-            // Kind boost: types and methods rank higher than fields/properties/events
-            if (node.Kind is NodeKind.Type or NodeKind.Method)
-            {
-                score += TypeMethodBoost;
-                reasons.Add("type/method boost");
-            }
-
-            // Shorter names get a small bonus (tie-breaker within same base score)
-            var nameLen = Math.Min(node.Name.Length, ShortNameThreshold);
-            score += ShortNameMaxBonus * (1.0 - (double)nameLen / ShortNameThreshold);
-        }
+            ApplyResultBoosts(node, ref score, reasons);
 
         return (score, reasons);
+    }
+
+    private static double ScoreQueryToken(
+        string queryToken,
+        IReadOnlyList<string> symbolTokens,
+        HashSet<string> nameTokens,
+        HashSet<string> docTokens,
+        HashSet<string> namespacePathTokens,
+        Dictionary<string, HashSet<string>> synonymSets,
+        List<string> reasons)
+    {
+        var score = 0.0;
+
+        if (nameTokens.Contains(queryToken))
+        {
+            score += TokenInNameScore;
+            reasons.Add($"token '{queryToken}' in name");
+        }
+
+        if (docTokens.Contains(queryToken))
+        {
+            score += TokenInDocCommentScore;
+            reasons.Add($"token '{queryToken}' in doc comment");
+        }
+
+        if (TryFindSynonymMatch(queryToken, synonymSets, symbolTokens, out var synonym))
+        {
+            score += SynonymMatchScore;
+            reasons.Add($"synonym '{synonym}' of '{queryToken}'");
+        }
+
+        if (namespacePathTokens.Contains(queryToken))
+        {
+            score += TokenInNamespaceOrPathScore;
+            reasons.Add($"token '{queryToken}' in namespace/path");
+        }
+
+        return score;
+    }
+
+    private static bool TryFindSynonymMatch(
+        string queryToken,
+        Dictionary<string, HashSet<string>> synonymSets,
+        IReadOnlyList<string> symbolTokens,
+        out string synonym)
+    {
+        synonym = string.Empty;
+        if (!synonymSets.TryGetValue(queryToken, out var synonyms))
+            return false;
+
+        foreach (var candidateSynonym in synonyms)
+        {
+            if (symbolTokens.Any(symbolToken => symbolToken.Equals(candidateSynonym, StringComparison.OrdinalIgnoreCase)))
+            {
+                synonym = candidateSynonym;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void ApplyResultBoosts(GraphNode node, ref double score, List<string> reasons)
+    {
+        if (node.Kind is NodeKind.Type or NodeKind.Method)
+        {
+            score += TypeMethodBoost;
+            reasons.Add("type/method boost");
+        }
+
+        var nameLength = Math.Min(node.Name.Length, ShortNameThreshold);
+        score += ShortNameMaxBonus * (1.0 - (double)nameLength / ShortNameThreshold);
+    }
+
+    private static void SortResults(List<SearchResult> results)
+    {
+        results.Sort((left, right) =>
+        {
+            var scoreComparison = right.Score.CompareTo(left.Score);
+            if (scoreComparison != 0)
+                return scoreComparison;
+
+            var nameLengthComparison = left.Node.Name.Length.CompareTo(right.Node.Name.Length);
+            if (nameLengthComparison != 0)
+                return nameLengthComparison;
+
+            return string.Compare(left.Node.Name, right.Node.Name, StringComparison.OrdinalIgnoreCase);
+        });
     }
 
     private static HashSet<string> GetNameTokens(string name)
     {
         var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var parts = SearchTokenizer.TokenizeQuery(name);
-        foreach (var p in parts)
-            tokens.Add(p);
+        foreach (var token in SearchTokenizer.TokenizeQuery(name))
+            tokens.Add(token);
+
         return tokens;
     }
 
@@ -178,12 +228,11 @@ public class SemanticSearchEngine
         if (string.IsNullOrEmpty(docComment))
             return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // Create a minimal node just to extract doc comment tokens
         var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var allTokens = SearchTokenizer.TokenizeQuery(
-            System.Text.RegularExpressions.Regex.Replace(docComment, @"<[^>]+>", " "));
-        foreach (var t in allTokens)
-            tokens.Add(t);
+        var text = XmlTagPattern.Replace(docComment, " ");
+        foreach (var token in SearchTokenizer.TokenizeQuery(text))
+            tokens.Add(token);
+
         return tokens;
     }
 
@@ -193,14 +242,14 @@ public class SemanticSearchEngine
 
         if (!string.IsNullOrEmpty(node.ContainingNamespaceId))
         {
-            foreach (var t in SearchTokenizer.TokenizeQuery(node.ContainingNamespaceId))
-                tokens.Add(t);
+            foreach (var token in SearchTokenizer.TokenizeQuery(node.ContainingNamespaceId))
+                tokens.Add(token);
         }
 
         if (!string.IsNullOrEmpty(node.FilePath))
         {
-            foreach (var t in SearchTokenizer.TokenizeQuery(node.FilePath))
-                tokens.Add(t);
+            foreach (var token in SearchTokenizer.TokenizeQuery(node.FilePath))
+                tokens.Add(token);
         }
 
         return tokens;

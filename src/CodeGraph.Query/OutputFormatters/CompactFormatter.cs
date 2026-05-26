@@ -10,29 +10,56 @@ public static class CompactFormatter
     public static string Format(QueryResult result, bool includeSource = false, bool includeDocs = true, int sourceMaxLines = 20)
     {
         var sb = new StringBuilder();
-
-        // Detect common namespace prefix for compression
         var prefix = DetectCommonPrefix(result.Nodes.Keys);
 
-        // Header
+        AppendHeader(sb, result, prefix);
+
+        var targetNodeIds = GetTargetNodeIds(result);
+        var targetIds = new HashSet<string>(targetNodeIds, StringComparer.Ordinal);
+        var documentationNodeId = GetDocumentationNodeId(result);
+
+        AppendTargetSections(sb, result, targetNodeIds, targetIds, prefix, includeSource, includeDocs, documentationNodeId, sourceMaxLines);
+        AppendRelatedNodesSection(sb, result, targetIds, prefix);
+        AppendTruncationWarning(sb, result);
+        AppendSuggestions(sb, result.Suggestions);
+
+        return sb.ToString().TrimEnd();
+    }
+
+    private static void AppendHeader(StringBuilder sb, QueryResult result, string prefix)
+    {
         var targetName = result.TargetNode?.Id ?? result.MatchedNodes.FirstOrDefault()?.Id ?? "query";
         sb.AppendLine($"# {StripPrefix(targetName, prefix)}");
         sb.AppendLine();
+    }
 
-        // Determine target IDs
-        var targetIds = new HashSet<string>();
+    private static IReadOnlyList<string> GetTargetNodeIds(QueryResult result)
+    {
         if (result.TargetNode is not null)
-            targetIds.Add(result.TargetNode.Id);
-        else
-            foreach (var n in result.MatchedNodes)
-                targetIds.Add(n.Id);
+            return [result.TargetNode.Id];
 
-        var docCommentNodeId = result.TargetNode?.Id ?? result.MatchedNodes.FirstOrDefault()?.Id;
+        return result.MatchedNodes.Select(node => node.Id).ToList();
+    }
 
-        // Format each target node with its relationships
-        foreach (var targetId in targetIds)
+    private static string? GetDocumentationNodeId(QueryResult result)
+    {
+        return result.TargetNode?.Id ?? result.MatchedNodes.FirstOrDefault()?.Id;
+    }
+
+    private static void AppendTargetSections(
+        StringBuilder sb,
+        QueryResult result,
+        IReadOnlyList<string> targetNodeIds,
+        HashSet<string> targetIds,
+        string prefix,
+        bool includeSource,
+        bool includeDocs,
+        string? documentationNodeId,
+        int sourceMaxLines)
+    {
+        foreach (var targetNodeId in targetNodeIds)
         {
-            if (!result.Nodes.TryGetValue(targetId, out var targetNode))
+            if (!result.Nodes.TryGetValue(targetNodeId, out var targetNode))
                 continue;
 
             AppendNodeBlock(
@@ -42,92 +69,109 @@ public static class CompactFormatter
                 result,
                 prefix,
                 includeSource,
-                includeDocs && string.Equals(targetNode.Id, docCommentNodeId, StringComparison.Ordinal),
+                includeDocs && string.Equals(targetNode.Id, documentationNodeId, StringComparison.Ordinal),
                 sourceMaxLines);
         }
-
-        // Format remaining nodes (non-target matched)
-        var remainingNodes = result.Nodes.Values
-            .Where(n => !targetIds.Contains(n.Id))
-            .OrderBy(n => n.Kind)
-            .ThenBy(n => n.Id);
-
-        var hasRemainingSection = false;
-        foreach (var node in remainingNodes)
-        {
-            if (!hasRemainingSection)
-            {
-                sb.AppendLine("## Related");
-                hasRemainingSection = true;
-            }
-            AppendCompactNode(sb, node, prefix);
-        }
-
-        if (result.WasTruncated)
-            sb.AppendLine($"\n⚠ Truncated ({result.TotalMatchCount} total matches)");
-
-        if (result.Suggestions.Count > 0)
-        {
-            sb.AppendLine();
-            sb.AppendLine("Did you mean:");
-            foreach (var suggestion in result.Suggestions)
-                sb.AppendLine($"  - {suggestion}");
-        }
-
-        return sb.ToString().TrimEnd();
     }
 
-    private static void AppendNodeBlock(StringBuilder sb, GraphNode node, HashSet<string> targetIds, QueryResult result, string prefix, bool includeSource, bool showDocComment, int sourceMaxLines)
+    private static void AppendRelatedNodesSection(StringBuilder sb, QueryResult result, HashSet<string> targetIds, string prefix)
     {
-        // Node header: Name [kind, file:lines]
+        var remainingNodes = result.Nodes.Values
+            .Where(node => !targetIds.Contains(node.Id))
+            .OrderBy(node => node.Kind)
+            .ThenBy(node => node.Id);
+
+        var wroteHeader = false;
+        foreach (var node in remainingNodes)
+        {
+            if (!wroteHeader)
+            {
+                sb.AppendLine("## Related");
+                wroteHeader = true;
+            }
+
+            AppendCompactNode(sb, node, prefix);
+        }
+    }
+
+    private static void AppendTruncationWarning(StringBuilder sb, QueryResult result)
+    {
+        if (result.WasTruncated)
+            sb.AppendLine($"\n⚠ Truncated ({result.TotalMatchCount} total matches)");
+    }
+
+    private static void AppendSuggestions(StringBuilder sb, IReadOnlyList<string> suggestions)
+    {
+        if (suggestions.Count == 0)
+            return;
+
+        sb.AppendLine();
+        sb.AppendLine("Did you mean:");
+        foreach (var suggestion in suggestions)
+            sb.AppendLine($"  - {suggestion}");
+    }
+
+    private static void AppendNodeBlock(
+        StringBuilder sb,
+        GraphNode node,
+        HashSet<string> targetIds,
+        QueryResult result,
+        string prefix,
+        bool includeSource,
+        bool showDocComment,
+        int sourceMaxLines)
+    {
         var shortId = StripPrefix(node.Id, prefix);
         var fileInfo = !string.IsNullOrEmpty(node.FilePath)
             ? $", {node.FilePath}:{node.StartLine}-{node.EndLine}"
-            : "";
+            : string.Empty;
         var summary = showDocComment ? ExtractSummary(node.DocComment) : string.Empty;
-        var inlineComment = !string.IsNullOrEmpty(summary) ? $" // {summary}" : "";
+        var inlineComment = !string.IsNullOrEmpty(summary) ? $" // {summary}" : string.Empty;
+
         sb.AppendLine($"## {shortId} [{node.Kind.ToString().ToLowerInvariant()}{fileInfo}]{inlineComment}");
 
         if (includeSource)
             AppendSourceSnippet(sb, node, sourceMaxLines);
 
-        // Group outgoing edges by type
-        var outgoing = result.Edges
-            .Where(e => e.FromId == node.Id)
-            .GroupBy(e => e.Type)
-            .OrderBy(g => g.Key);
+        var outgoingGroups = result.Edges
+            .Where(edge => edge.FromId == node.Id)
+            .GroupBy(edge => edge.Type)
+            .OrderBy(group => group.Key);
 
-        foreach (var group in outgoing)
-        {
-            var targets = group.Select(e =>
-            {
-                var name = StripPrefix(e.ToId, prefix);
-                return e.Confidence != EdgeConfidence.Verified
-                    ? $"{name} [{e.Confidence.ToString().ToLowerInvariant()}]"
-                    : name;
-            }).ToList();
-            sb.AppendLine($"  → {FormatEdgeType(group.Key)}: {string.Join(", ", targets)}");
-        }
+        AppendEdgeGroups(sb, outgoingGroups, "→", edge => edge.ToId, prefix);
 
-        // Group incoming edges by type (exclude from other targets)
-        var incoming = result.Edges
-            .Where(e => e.ToId == node.Id && !targetIds.Contains(e.FromId))
-            .GroupBy(e => e.Type)
-            .OrderBy(g => g.Key);
+        var incomingGroups = result.Edges
+            .Where(edge => edge.ToId == node.Id && !targetIds.Contains(edge.FromId))
+            .GroupBy(edge => edge.Type)
+            .OrderBy(group => group.Key);
 
-        foreach (var group in incoming)
-        {
-            var sources = group.Select(e =>
-            {
-                var name = StripPrefix(e.FromId, prefix);
-                return e.Confidence != EdgeConfidence.Verified
-                    ? $"{name} [{e.Confidence.ToString().ToLowerInvariant()}]"
-                    : name;
-            }).ToList();
-            sb.AppendLine($"  ← {FormatEdgeType(group.Key)}: {string.Join(", ", sources)}");
-        }
-
+        AppendEdgeGroups(sb, incomingGroups, "←", edge => edge.FromId, prefix);
         sb.AppendLine();
+    }
+
+    private static void AppendEdgeGroups(
+        StringBuilder sb,
+        IEnumerable<IGrouping<EdgeType, GraphEdge>> edgeGroups,
+        string arrow,
+        Func<GraphEdge, string> getConnectedNodeId,
+        string prefix)
+    {
+        foreach (var group in edgeGroups)
+        {
+            var connectedNodes = group
+                .Select(edge => FormatConnectedNode(edge, getConnectedNodeId(edge), prefix))
+                .ToList();
+
+            sb.AppendLine($"  {arrow} {FormatEdgeType(group.Key)}: {string.Join(", ", connectedNodes)}");
+        }
+    }
+
+    private static string FormatConnectedNode(GraphEdge edge, string connectedNodeId, string prefix)
+    {
+        var shortId = StripPrefix(connectedNodeId, prefix);
+        return edge.Confidence != EdgeConfidence.Verified
+            ? $"{shortId} [{edge.Confidence.ToString().ToLowerInvariant()}]"
+            : shortId;
     }
 
     private static void AppendSourceSnippet(StringBuilder sb, GraphNode node, int sourceMaxLines)
@@ -156,6 +200,7 @@ public static class CompactFormatter
 
             var maxLines = Math.Max(1, sourceMaxLines);
             sb.AppendLine($"  ```csharp  // {node.FilePath}:{node.StartLine}-{node.EndLine}");
+
             if (lines.Count <= maxLines)
             {
                 foreach (var line in lines)
@@ -165,8 +210,10 @@ public static class CompactFormatter
             {
                 foreach (var line in lines.Take(maxLines))
                     sb.AppendLine($"  {line}");
+
                 sb.AppendLine($"  // ... truncated ({lines.Count - maxLines} more lines) — read {node.FilePath}:{node.StartLine + maxLines}-{node.EndLine} for full source");
             }
+
             sb.AppendLine("  ```");
         }
         catch
@@ -224,7 +271,6 @@ public static class CompactFormatter
             }
         }
 
-        // Trim to last dot boundary (we want full namespace segments)
         var prefix = first[..prefixLength];
         var lastDot = prefix.LastIndexOf('.');
         return lastDot > 0 ? prefix[..(lastDot + 1)] : string.Empty;
@@ -234,6 +280,7 @@ public static class CompactFormatter
     {
         if (string.IsNullOrEmpty(prefix))
             return id;
+
         return id.StartsWith(prefix, StringComparison.Ordinal) ? id[prefix.Length..] : id;
     }
 
@@ -242,33 +289,11 @@ public static class CompactFormatter
         if (string.IsNullOrWhiteSpace(docComment))
             return string.Empty;
 
-        string text;
-        // Check if the doc comment contains XML
-        if (docComment.Contains('<'))
-        {
-            try
-            {
-                var wrapped = $"<root>{docComment}</root>";
-                var doc = XDocument.Parse(wrapped);
-                var summaryElement = doc.Root?.Element("summary");
-                if (summaryElement is null)
-                    return string.Empty;
-                text = summaryElement.Value;
-            }
-            catch
-            {
-                // Not valid XML — treat as plain text
-                text = docComment;
-            }
-        }
-        else
-        {
-            text = docComment;
-        }
+        var text = TryExtractXmlSummary(docComment, out var summaryText)
+            ? summaryText
+            : docComment;
 
-        // Collapse whitespace
         text = Regex.Replace(text.Trim(), @"\s+", " ");
-
         if (string.IsNullOrEmpty(text))
             return string.Empty;
 
@@ -277,5 +302,28 @@ public static class CompactFormatter
             text = string.Concat(text.AsSpan(0, maxLength), "\u2026");
 
         return text;
+    }
+
+    private static bool TryExtractXmlSummary(string docComment, out string summary)
+    {
+        summary = string.Empty;
+        if (!docComment.Contains('<'))
+            return false;
+
+        try
+        {
+            var wrapped = $"<root>{docComment}</root>";
+            var doc = XDocument.Parse(wrapped);
+            var summaryElement = doc.Root?.Element("summary");
+            if (summaryElement is null)
+                return true;
+
+            summary = summaryElement.Value;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

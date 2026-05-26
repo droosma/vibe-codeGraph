@@ -1,13 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using CodeGraph.Core.IO;
-using CodeGraph.Core.Models;
 using CodeGraph.Query;
-using CodeGraph.Query.Filters;
-using CodeGraph.Query.Metrics;
-using CodeGraph.Query.OutputFormatters;
-using CodeGraph.Query.Report;
 
 namespace CodeGraph.Indexer.Mcp;
 
@@ -15,17 +9,64 @@ namespace CodeGraph.Indexer.Mcp;
 /// Minimal MCP (Model Context Protocol) stdio server exposing codegraph_query as a tool.
 /// Implements JSON-RPC 2.0 over stdin/stdout with Content-Length framing.
 /// </summary>
-internal sealed class McpServer
+internal sealed partial class McpServer
 {
+    private const string ArgumentsPropertyName = "arguments";
+    private const string ContentLengthHeader = "Content-Length:";
+    private const string DefaultAllKind = "all";
+    private const string DefaultAssembliesScope = "assemblies";
+    private const string DefaultCompactFormat = "compact";
+    private const string DefaultFocusedMode = "focused";
+    private const string DefaultGraphSnapshotPath = ".codegraph";
+    private const string DefaultProtocolVersion = "2024-11-05";
+    private const string DefaultTypeKind = "type";
+    private const string GraphIndexHint = "Run 'codegraph index' to generate the graph first.";
+    private const int DefaultImpactDepth = 3;
+    private const int DefaultListSkip = 0;
+    private const int DefaultListTop = 50;
+    private const int DefaultMaxNodes = 50;
+    private const int DefaultPathDepth = 10;
+    private const int DefaultQueryDepth = 1;
+    private const int DefaultSearchTop = 20;
+    private const int InvalidParamsErrorCode = -32602;
+    private const string JsonRpcVersion = "2.0";
+    private const int MethodNotFoundErrorCode = -32601;
+    private const string MethodInitialize = "initialize";
+    private const string MethodInitializedNotification = "notifications/initialized";
+    private const string MethodPing = "ping";
+    private const string MethodToolsCall = "tools/call";
+    private const string MethodToolsList = "tools/list";
+    private const string ServerName = "codegraph";
+    private const string ServerVersion = "0.1.0";
+    private const string SnapshotHint = "Use 'codegraph snapshot save <name>' to create a snapshot first.";
+    private const string TextContentType = "text";
+    private const string ToolBatch = "codegraph_batch";
+    private const string ToolCompare = "codegraph_compare";
+    private const string ToolDiff = "codegraph_diff";
+    private const string ToolExplain = "codegraph_explain";
+    private const string ToolFile = "codegraph_file";
+    private const string ToolImpact = "codegraph_impact";
+    private const string ToolList = "codegraph_list";
+    private const string ToolPackages = "codegraph_packages";
+    private const string ToolPath = "codegraph_path";
+    private const string ToolQuery = "codegraph_query";
+    private const string ToolSearch = "codegraph_search";
+    private const string ToolSummary = "codegraph_summary";
+    private const string ToolTestImpact = "codegraph_test_impact";
+
+    private static readonly JsonSerializerOptions CompactJsonOptions = new() { WriteIndented = false };
+
     private readonly string _graphDir;
+    private readonly QuerySessionTracker _sessionTracker = new();
     private QueryEngine? _engine;
     private string? _lastSolutionFilter;
-    private readonly QuerySessionTracker _sessionTracker = new();
 
     internal McpServer(string graphDir)
     {
         _graphDir = graphDir;
     }
+
+    #region Message loop
 
     internal async Task<int> RunAsync()
     {
@@ -34,70 +75,57 @@ internal sealed class McpServer
         using var reader = new StreamReader(stdin, Encoding.UTF8);
         using var writer = new StreamWriter(stdout, new UTF8Encoding(false)) { AutoFlush = true };
 
-        // Detect framing by reading the first line
         var firstLine = await reader.ReadLineAsync();
         if (firstLine is null)
+        {
             return 0;
-
-        var useFraming = firstLine.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase);
-
-        // Process first message
-        JsonNode? firstMessage;
-        if (useFraming)
-        {
-            var contentLength = int.Parse(firstLine["Content-Length:".Length..].Trim());
-            await reader.ReadLineAsync(); // blank separator
-            var buffer = new char[contentLength];
-            var totalRead = 0;
-            while (totalRead < contentLength)
-            {
-                var read = await reader.ReadAsync(buffer, totalRead, contentLength - totalRead);
-                if (read == 0) return 0;
-                totalRead += read;
-            }
-            firstMessage = JsonNode.Parse(new string(buffer));
-        }
-        else
-        {
-            firstMessage = JsonNode.Parse(firstLine);
         }
 
-        if (firstMessage is not null)
+        var useFraming = firstLine.StartsWith(ContentLengthHeader, StringComparison.OrdinalIgnoreCase);
+        var firstMessage = await ReadFirstMessageAsync(reader, firstLine, useFraming);
+        if (firstMessage is null)
         {
-            var response = await HandleMessageAsync(firstMessage);
-            if (response is not null)
-            {
-                if (useFraming)
-                    await WriteFramedMessageAsync(writer, response);
-                else
-                    await WriteJsonMessageAsync(writer, response);
-            }
+            return 0;
         }
 
-        // Continue reading messages
-        while (true)
+        await WriteResponseAsync(writer, useFraming, await HandleMessageAsync(firstMessage));
+
+        while (await ReadNextMessageAsync(reader, useFraming) is { } message)
         {
-            JsonNode? message;
-            if (useFraming)
-                message = await ReadFramedMessageAsync(reader);
-            else
-                message = await ReadJsonLineMessageAsync(reader);
-
-            if (message is null)
-                break;
-
-            var response = await HandleMessageAsync(message);
-            if (response is not null)
-            {
-                if (useFraming)
-                    await WriteFramedMessageAsync(writer, response);
-                else
-                    await WriteJsonMessageAsync(writer, response);
-            }
+            await WriteResponseAsync(writer, useFraming, await HandleMessageAsync(message));
         }
 
         return 0;
     }
+
+    private static async Task<JsonNode?> ReadFirstMessageAsync(StreamReader reader, string firstLine, bool useFraming)
+    {
+        if (!useFraming)
+        {
+            return JsonNode.Parse(firstLine);
+        }
+
+        var contentLength = int.Parse(firstLine[ContentLengthHeader.Length..].Trim());
+        await reader.ReadLineAsync();
+        return await ReadMessageBodyAsync(reader, contentLength);
+    }
+
+    private static Task<JsonNode?> ReadNextMessageAsync(StreamReader reader, bool useFraming)
+        => useFraming ? ReadFramedMessageAsync(reader) : ReadJsonLineMessageAsync(reader);
+
+    private static Task WriteResponseAsync(StreamWriter writer, bool useFraming, JsonNode? response)
+    {
+        if (response is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        return useFraming ? WriteFramedMessageAsync(writer, response) : WriteJsonMessageAsync(writer, response);
+    }
+
+    #endregion
+
+    #region Protocol helpers
 
     /// <summary>
     /// Reads a single JSON-RPC message as one line (newline-delimited JSON).
@@ -107,17 +135,31 @@ internal sealed class McpServer
         while (true)
         {
             var line = await reader.ReadLineAsync();
-            if (line is null) return null;
+            if (line is null)
+            {
+                return null;
+            }
+
             line = line.Trim();
-            if (line.Length == 0) continue;
-            try { return JsonNode.Parse(line); }
-            catch { continue; }
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            try
+            {
+                return JsonNode.Parse(line);
+            }
+            catch
+            {
+                continue;
+            }
         }
     }
 
     private static async Task WriteJsonMessageAsync(StreamWriter writer, JsonNode message)
     {
-        var json = message.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
+        var json = message.ToJsonString(CompactJsonOptions);
         await writer.WriteLineAsync(json);
         await writer.FlushAsync();
     }
@@ -127,35 +169,47 @@ internal sealed class McpServer
     /// </summary>
     private static async Task<JsonNode?> ReadFramedMessageAsync(StreamReader reader)
     {
-        int contentLength = -1;
+        var contentLength = -1;
 
         while (true)
         {
             var headerLine = await reader.ReadLineAsync();
             if (headerLine is null)
+            {
                 return null;
+            }
 
             if (string.IsNullOrEmpty(headerLine))
             {
                 if (contentLength <= 0)
+                {
                     continue;
+                }
+
                 break;
             }
 
-            if (headerLine.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+            if (headerLine.StartsWith(ContentLengthHeader, StringComparison.OrdinalIgnoreCase))
             {
-                var value = headerLine["Content-Length:".Length..].Trim();
-                contentLength = int.Parse(value);
+                contentLength = int.Parse(headerLine[ContentLengthHeader.Length..].Trim());
             }
         }
 
+        return await ReadMessageBodyAsync(reader, contentLength);
+    }
+
+    private static async Task<JsonNode?> ReadMessageBodyAsync(StreamReader reader, int contentLength)
+    {
         var buffer = new char[contentLength];
         var totalRead = 0;
         while (totalRead < contentLength)
         {
             var read = await reader.ReadAsync(buffer, totalRead, contentLength - totalRead);
             if (read == 0)
+            {
                 return null;
+            }
+
             totalRead += read;
         }
 
@@ -164,635 +218,42 @@ internal sealed class McpServer
 
     private static async Task WriteFramedMessageAsync(StreamWriter writer, JsonNode message)
     {
-        var json = message.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
-        var bytes = Encoding.UTF8.GetByteCount(json);
-        await writer.WriteAsync($"Content-Length: {bytes}\r\n\r\n");
+        var json = message.ToJsonString(CompactJsonOptions);
+        var byteCount = Encoding.UTF8.GetByteCount(json);
+        await writer.WriteAsync($"{ContentLengthHeader} {byteCount}\r\n\r\n");
         await writer.WriteAsync(json);
         await writer.FlushAsync();
     }
 
+    #endregion
+
+    #region Message routing
+
     internal async Task<JsonNode?> HandleMessageAsync(JsonNode message)
     {
-        var method = message["method"]?.GetValue<string>();
+        var method = GetStringValue(message, "method");
         var id = message["id"];
 
         return method switch
         {
-            "initialize" => HandleInitialize(id, message["params"]),
-            "notifications/initialized" => null,
-            "tools/list" => HandleToolsList(id),
-            "tools/call" => await HandleToolsCallAsync(id, message["params"]),
-            "ping" => CreateResponse(id, new JsonObject()),
-            _ => id is not null ? CreateError(id, -32601, $"Method not found: {method}") : null
+            MethodInitialize => HandleInitialize(id, message["params"]),
+            MethodInitializedNotification => null,
+            MethodToolsList => HandleToolsList(id),
+            MethodToolsCall => await HandleToolsCallAsync(id, message["params"]),
+            MethodPing => CreateResponse(id, new JsonObject()),
+            _ => id is not null ? CreateError(id, MethodNotFoundErrorCode, $"Method not found: {method}") : null
         };
     }
 
-    private static JsonNode HandleInitialize(JsonNode? id, JsonNode? parameters)
+    private async Task<JsonNode> ExecuteToolAsync(JsonNode? id, Func<Task<JsonNode>> handler, string missingDataHint)
     {
-        // Echo back the client's protocol version for compatibility
-        var clientVersion = parameters?["protocolVersion"]?.GetValue<string>() ?? "2024-11-05";
-
-        var result = new JsonObject
-        {
-            ["protocolVersion"] = clientVersion,
-            ["capabilities"] = new JsonObject
-            {
-                ["tools"] = new JsonObject()
-            },
-            ["serverInfo"] = new JsonObject
-            {
-                ["name"] = "codegraph",
-                ["version"] = "0.1.0"
-            }
-        };
-        return CreateResponse(id, result);
-    }
-
-    private static JsonNode HandleToolsList(JsonNode? id)
-    {
-        var tool = new JsonObject
-        {
-            ["name"] = "codegraph_query",
-            ["description"] = "Query the code graph for structural relationships (calls, implements, DI wiring, inheritance). TIP: Start with codegraph_summary for orientation, then use this for specific symbols. BEST FOR: 'What calls X?', 'What implements Y?', 'How is Z wired in DI?' Use include_source=true only AFTER narrowing to a specific method/type when you need implementation details — snippets are capped at 20 lines for token safety. NOT FOR: Broad text search or reading entire files — use file reading/grep for those.",
-            ["inputSchema"] = new JsonObject
-            {
-                ["type"] = "object",
-                ["properties"] = new JsonObject
-                {
-                    ["symbol"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Symbol name or pattern to search for. Supports wildcards (*). Examples: 'OrderService', 'IOrder*', 'type:OrderService'"
-                    },
-                    ["depth"] = new JsonObject
-                    {
-                        ["type"] = "integer",
-                        ["description"] = "Traversal depth from matched nodes (0 = node only, 1 = direct neighbors)",
-                        ["default"] = 1
-                    },
-                    ["kind"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Edge type filter",
-                        ["enum"] = new JsonArray("calls-to", "calls-from", "inherits", "implements", "depends-on", "resolves-to", "covers", "covered-by", "references", "overrides", "contains", "handles-route", "binds-configuration", "uses-middleware", "maps-to-table", "navigates-to", "configured-by", "all")
-                    },
-                    ["namespace"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Namespace filter (wildcards OK)"
-                    },
-                    ["project"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Project/assembly filter"
-                    },
-                    ["format"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Output format. compact=minimal tokens (recommended), context=rich detail, json=structured, text=plain",
-                        ["enum"] = new JsonArray("compact", "context", "json", "text"),
-                        ["default"] = "compact"
-                    },
-                    ["max_nodes"] = new JsonObject
-                    {
-                        ["type"] = "integer",
-                        ["description"] = "Maximum nodes to return",
-                        ["default"] = 50
-                    },
-                    ["include_external"] = new JsonObject
-                    {
-                        ["type"] = "boolean",
-                        ["description"] = "Include external dependency nodes",
-                        ["default"] = false
-                    },
-                    ["solution"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Scope query to a specific solution (multi-solution support). Uses the solution name without extension."
-                    },
-                    ["mode"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["enum"] = new JsonArray("focused", "structural", "all"),
-                        ["description"] = "Query traversal mode. focused=high-signal edges only (default, recommended), structural=includes containment, all=everything",
-                        ["default"] = "focused"
-                    },
-                    ["confidence"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["enum"] = new JsonArray("verified", "inferred", "unresolved"),
-                        ["description"] = "Minimum confidence level for edges. verified=only verified, inferred=verified+inferred, unresolved=all (default: all)"
-                    },
-                    ["budget"] = new JsonObject
-                    {
-                        ["type"] = "integer",
-                        ["description"] = "Maximum token budget for output. Output is truncated with a hint when exceeded."
-                    },
-                    ["include_source"] = new JsonObject
-                    {
-                        ["type"] = "boolean",
-                        ["description"] = "Embed source code snippets (up to 20 lines) for queried nodes. Set true only AFTER narrowing to a specific symbol when you need implementation details. Snippets include file path and line range. If truncated, output shows how to read the full source.",
-                        ["default"] = false
-                    }
-                },
-                ["required"] = new JsonArray("symbol")
-            }
-        };
-
-        var listTool = new JsonObject
-        {
-            ["name"] = "codegraph_list",
-            ["description"] = "Browse the code graph hierarchy. Use to discover assemblies, types, interfaces, or namespaces. BEST FOR: 'What projects exist?', 'What types are in module X?' NOT FOR: Searching inside method bodies or comments — use grep for those.",
-            ["inputSchema"] = new JsonObject
-            {
-                ["type"] = "object",
-                ["properties"] = new JsonObject
-                {
-                    ["scope"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["enum"] = new JsonArray("assemblies", "types", "interfaces", "namespaces"),
-                        ["description"] = "What to list (default: assemblies)"
-                    },
-                    ["assembly"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Filter by assembly name"
-                    },
-                    ["top"] = new JsonObject
-                    {
-                        ["type"] = "integer",
-                        ["description"] = "Max results (default: 50)",
-                        ["default"] = 50
-                    },
-                    ["skip"] = new JsonObject
-                    {
-                        ["type"] = "integer",
-                        ["description"] = "Skip N results for pagination",
-                        ["default"] = 0
-                    },
-                    ["filter"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Filter by name substring (case-insensitive)"
-                    }
-                }
-            }
-        };
-
-        var summaryTool = new JsonObject
-        {
-            ["name"] = "codegraph_summary",
-            ["description"] = "Get architectural overview of the codebase (hub types, domain clusters, suggested queries). READ THIS FIRST before other queries — it provides free orientation that saves multiple discovery calls.",
-            ["inputSchema"] = new JsonObject
-            {
-                ["type"] = "object",
-                ["properties"] = new JsonObject()
-            }
-        };
-
-        var pathTool = new JsonObject
-        {
-            ["name"] = "codegraph_path",
-            ["description"] = "Find the shortest dependency path between two symbols in the code graph. BEST FOR: 'How are A and B connected?', 'What's the call chain from X to Y?'",
-            ["inputSchema"] = new JsonObject
-            {
-                ["type"] = "object",
-                ["properties"] = new JsonObject
-                {
-                    ["from"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Source symbol name or pattern"
-                    },
-                    ["to"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Target symbol name or pattern"
-                    },
-                    ["maxDepth"] = new JsonObject
-                    {
-                        ["type"] = "integer",
-                        ["description"] = "Maximum search depth (default: 10)",
-                        ["default"] = 10
-                    }
-                },
-                ["required"] = new JsonArray("from", "to")
-            }
-        };
-
-        var impactTool = new JsonObject
-        {
-            ["name"] = "codegraph_impact",
-            ["description"] = "Analyze the impact of changing a symbol by finding all dependents (reverse traversal). BEST FOR: 'What breaks if I change X?', 'What's the blast radius of this change?'",
-            ["inputSchema"] = new JsonObject
-            {
-                ["type"] = "object",
-                ["properties"] = new JsonObject
-                {
-                    ["symbol"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Symbol name or pattern to analyze impact for"
-                    },
-                    ["depth"] = new JsonObject
-                    {
-                        ["type"] = "integer",
-                        ["description"] = "Reverse traversal depth (default: 3)",
-                        ["default"] = 3
-                    }
-                },
-                ["required"] = new JsonArray("symbol")
-            }
-        };
-
-        var explainTool = new JsonObject
-        {
-            ["name"] = "codegraph_explain",
-            ["description"] = "Get a comprehensive view of a single symbol: type, location, signature, members, all edges, and test coverage. BEST FOR: 'Tell me everything about X', 'What does X look like structurally?'",
-            ["inputSchema"] = new JsonObject
-            {
-                ["type"] = "object",
-                ["properties"] = new JsonObject
-                {
-                    ["symbol"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Symbol name or pattern to explain"
-                    }
-                },
-                ["required"] = new JsonArray("symbol")
-            }
-        };
-
-        var fileTool = new JsonObject
-        {
-            ["name"] = "codegraph_file",
-            ["description"] = "Find all symbols defined in a file path. Use when you know the file but not the symbol names.",
-            ["inputSchema"] = new JsonObject
-            {
-                ["type"] = "object",
-                ["properties"] = new JsonObject
-                {
-                    ["path"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "File path (partial match OK, e.g., 'OrderService.cs')"
-                    },
-                    ["kind"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["enum"] = new JsonArray("type", "method", "all"),
-                        ["description"] = "Filter by node kind (default: type)"
-                    }
-                },
-                ["required"] = new JsonArray("path")
-            }
-        };
-
-        var batchTool = new JsonObject
-        {
-            ["name"] = "codegraph_batch",
-            ["description"] = "Query multiple symbols in one call. Returns combined results with shared context. More efficient than separate queries. BEST FOR: 'Compare these 3 services', 'Show all related types together'.",
-            ["inputSchema"] = new JsonObject
-            {
-                ["type"] = "object",
-                ["properties"] = new JsonObject
-                {
-                    ["symbols"] = new JsonObject
-                    {
-                        ["type"] = "array",
-                        ["items"] = new JsonObject { ["type"] = "string" },
-                        ["description"] = "List of symbol names/patterns to query"
-                    },
-                    ["depth"] = new JsonObject
-                    {
-                        ["type"] = "integer",
-                        ["description"] = "Traversal depth (default: 1)",
-                        ["default"] = 1
-                    },
-                    ["format"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["enum"] = new JsonArray("compact", "context", "json", "text"),
-                        ["description"] = "Output format (default: compact)",
-                        ["default"] = "compact"
-                    },
-                    ["mode"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["enum"] = new JsonArray("focused", "structural", "all"),
-                        ["description"] = "Query traversal mode (default: focused)",
-                        ["default"] = "focused"
-                    }
-                },
-                ["required"] = new JsonArray("symbols")
-            }
-        };
-
-        var searchTool = new JsonObject
-        {
-            ["name"] = "codegraph_search",
-            ["description"] = "Search for symbols by name, namespace, or file path. Use for discovery when you don't know exact names. BEST FOR: 'Find things related to payments', 'What types exist in the auth module?' NOT FOR: Searching inside method bodies or comments — use grep for those.",
-            ["inputSchema"] = new JsonObject
-            {
-                ["type"] = "object",
-                ["properties"] = new JsonObject
-                {
-                    ["query"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Search term (matches name, namespace, file path)"
-                    },
-                    ["top"] = new JsonObject
-                    {
-                        ["type"] = "integer",
-                        ["description"] = "Max results (default: 20)",
-                        ["default"] = 20
-                    },
-                    ["kind"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["enum"] = new JsonArray("type", "method", "namespace", "all"),
-                        ["description"] = "Filter by node kind (default: all)",
-                        ["default"] = "all"
-                    }
-                },
-                ["required"] = new JsonArray("query")
-            }
-        };
-
-        var compareTool = new JsonObject
-        {
-            ["name"] = "codegraph_compare",
-            ["description"] = "Compare two symbols structurally. BEST FOR: 'What's different between ServiceA and ServiceB?', 'Compare implementations of interface X'. Shows shared interfaces/bases, unique dependencies, and structural differences.",
-            ["inputSchema"] = new JsonObject
-            {
-                ["type"] = "object",
-                ["properties"] = new JsonObject
-                {
-                    ["symbolA"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "First symbol to compare"
-                    },
-                    ["symbolB"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Second symbol to compare"
-                    },
-                    ["depth"] = new JsonObject
-                    {
-                        ["type"] = "integer",
-                        ["description"] = "Traversal depth for each (default: 1)",
-                        ["default"] = 1
-                    }
-                },
-                ["required"] = new JsonArray("symbolA", "symbolB")
-            }
-        };
-
-        var testImpactTool = new JsonObject
-        {
-            ["name"] = "codegraph_test_impact",
-            ["description"] = "Analyze test coverage for a symbol. Shows direct tests (CoveredBy edges), indirect tests (via call chains), uncovered callers, and suggests a 'dotnet test --filter' command. BEST FOR: 'What tests cover X?', 'Is this method tested?', 'What tests should I run after changing X?'",
-            ["inputSchema"] = new JsonObject
-            {
-                ["type"] = "object",
-                ["properties"] = new JsonObject
-                {
-                    ["symbol"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Symbol name or pattern to analyze test coverage for"
-                    },
-                    ["depth"] = new JsonObject
-                    {
-                        ["type"] = "integer",
-                        ["description"] = "Backward traversal depth for indirect coverage (default: 3)",
-                        ["default"] = 3
-                    }
-                },
-                ["required"] = new JsonArray("symbol")
-            }
-        };
-
-        var diffTool = new JsonObject
-        {
-            ["name"] = "codegraph_diff",
-            ["description"] = "Compare two graph snapshots to find structural changes. BEST FOR: 'What changed between branches?', 'PR review of structural changes', 'What types/edges were added or removed?'",
-            ["inputSchema"] = new JsonObject
-            {
-                ["type"] = "object",
-                ["properties"] = new JsonObject
-                {
-                    ["base"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Path to the base graph directory (e.g., '.codegraph\\snapshots\\main')"
-                    },
-                    ["head"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Path to the head graph directory (default: '.codegraph')",
-                        ["default"] = ".codegraph"
-                    },
-                    ["format"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Diff output format: compact, context, text, or json",
-                        ["default"] = "compact"
-                    }
-                },
-                ["required"] = new JsonArray("base")
-            }
-        };
-
-        var packagesTool = new JsonObject
-        {
-            ["name"] = "codegraph_packages",
-            ["description"] = "Analyze NuGet package usage across the solution. Shows which packages each project uses, how many internal types reference them, and detects version conflicts. BEST FOR: 'What packages does this project use?', 'Are there version conflicts?', 'Why is this package referenced?'",
-            ["inputSchema"] = new JsonObject
-            {
-                ["type"] = "object",
-                ["properties"] = new JsonObject
-                {
-                    ["project"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Filter to a specific project name"
-                    },
-                    ["package"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Filter to a specific package name"
-                    }
-                }
-            }
-        };
-
-        var result = new JsonObject
-        {
-            ["tools"] = new JsonArray(summaryTool, tool, listTool, searchTool, pathTool, impactTool, explainTool, fileTool, batchTool, compareTool, testImpactTool, diffTool, packagesTool)
-        };
-        return CreateResponse(id, result);
-    }
-
-    private async Task<JsonNode> HandleToolsCallAsync(JsonNode? id, JsonNode? parameters)
-    {
-        var toolName = parameters?["name"]?.GetValue<string>();
-        return toolName switch
-        {
-            "codegraph_list" => await HandleListCallAsync(id, parameters),
-            "codegraph_search" => await HandleSearchCallAsync(id, parameters),
-            "codegraph_summary" => await HandleSummaryCallAsync(id),
-            "codegraph_path" => await HandlePathCallAsync(id, parameters),
-            "codegraph_impact" => await HandleImpactCallAsync(id, parameters),
-            "codegraph_explain" => await HandleExplainCallAsync(id, parameters),
-            "codegraph_file" => await HandleFileCallAsync(id, parameters),
-            "codegraph_batch" => await HandleBatchCallAsync(id, parameters),
-            "codegraph_compare" => await HandleCompareCallAsync(id, parameters),
-            "codegraph_test_impact" => await HandleTestImpactCallAsync(id, parameters),
-            "codegraph_diff" => await HandleDiffCallAsync(id, parameters),
-            "codegraph_packages" => await HandlePackagesCallAsync(id, parameters),
-            "codegraph_query" => await HandleQueryCallAsync(id, parameters),
-            _ => CreateError(id, -32602, $"Unknown tool: {toolName}")
-        };
-    }
-
-    private async Task<JsonNode> HandleQueryCallAsync(JsonNode? id, JsonNode? parameters)
-    {
-        var arguments = parameters?["arguments"];
-        var symbol = arguments?["symbol"]?.GetValue<string>();
-        if (string.IsNullOrEmpty(symbol))
-            return CreateError(id, -32602, "Missing required parameter: symbol");
-
         try
         {
-            var solutionFilter = arguments?["solution"]?.GetValue<string>();
-            var engine = await GetOrLoadEngineAsync(solutionFilter);
-
-            // If symbol looks like a file path, resolve to symbols first
-            string pattern;
-            if (QueryEngine.LooksLikeFilePath(symbol))
-            {
-                var fileNodes = engine.FindByFilePath(symbol);
-                if (fileNodes.Count == 0)
-                    return CreateToolResult(id, $"No symbols found in file '{symbol}'.", true);
-                if (fileNodes.Count == 1)
-                    pattern = fileNodes[0].Id;
-                else
-                    pattern = "*" + Path.GetFileNameWithoutExtension(symbol) + "*";
-            }
-            else
-            {
-                pattern = symbol;
-            }
-
-            var depth = arguments?["depth"]?.GetValue<int>() ?? 1;
-            var kind = arguments?["kind"]?.GetValue<string>();
-            var ns = arguments?["namespace"]?.GetValue<string>();
-            var project = arguments?["project"]?.GetValue<string>();
-            var format = arguments?["format"]?.GetValue<string>() ?? "compact";
-            var maxNodes = arguments?["max_nodes"]?.GetValue<int>() ?? 50;
-            var includeExternal = arguments?["include_external"]?.GetValue<bool>() ?? false;
-            var modeStr = arguments?["mode"]?.GetValue<string>();
-            var budget = arguments?["budget"]?.GetValue<int>();
-            var confidenceStr = arguments?["confidence"]?.GetValue<string>();
-            var includeSource = arguments?["include_source"]?.GetValue<bool>() ?? false;
-
-            var queryMode = modeStr?.ToLowerInvariant() switch
-            {
-                "focused" => QueryMode.Focused,
-                "structural" => QueryMode.Structural,
-                "all" => QueryMode.All,
-                _ => QueryMode.Focused
-            };
-
-            EdgeType? edgeTypeFilter;
-            try
-            {
-                edgeTypeFilter = EdgeTypeFilter.Parse(kind);
-            }
-            catch (ArgumentException ex)
-            {
-                return CreateToolError(id, ex.Message);
-            }
-
-            var outputFormat = format.ToLowerInvariant() switch
-            {
-                "json" => OutputFormat.Json,
-                "text" => OutputFormat.Text,
-                "compact" => OutputFormat.Compact,
-                _ => OutputFormat.Context
-            };
-
-            EdgeConfidence? minConfidence = confidenceStr?.ToLowerInvariant() switch
-            {
-                "verified" => EdgeConfidence.Verified,
-                "inferred" => EdgeConfidence.Inferred,
-                "unresolved" => EdgeConfidence.Unresolved,
-                _ => null
-            };
-
-            var options = new QueryOptions
-            {
-                Pattern = pattern,
-                Depth = depth,
-                EdgeTypeFilter = edgeTypeFilter,
-                NamespaceFilter = ns,
-                ProjectFilter = project,
-                MaxNodes = maxNodes,
-                IncludeExternal = includeExternal,
-                Rank = true,
-                Format = outputFormat,
-                Mode = queryMode,
-                Budget = budget,
-                ConfidenceThreshold = minConfidence,
-                IgnoreCase = true
-            };
-
-            var result = engine.Query(options);
-
-            // Record query in session tracker
-            _sessionTracker.Record(symbol, depth, result.MatchedNodes.Count);
-
-            if (result.MatchedNodes.Count == 0)
-            {
-                var msg = $"No nodes found matching '{symbol}'.";
-                if (result.Suggestions.Count > 0)
-                    msg += $"\nDid you mean: {string.Join(", ", result.Suggestions)}";
-                return CreateToolResult(id, msg, true);
-            }
-
-            var queryDesc = $"{symbol} --depth {depth} --kind {kind ?? "all"}";
-            var output = outputFormat switch
-            {
-                OutputFormat.Json => JsonFormatter.Format(result),
-                OutputFormat.Text => TextFormatter.Format(result),
-                OutputFormat.Compact => CompactFormatter.Format(result, includeSource),
-                _ => ContextFormatter.Format(result, queryDesc, includeSource)
-            };
-
-            output = BudgetTruncator.Apply(output, budget);
-
-            var metrics = CompressionCalculator.Calculate(result, output);
-            output = MetricsFormatter.AppendMetrics(output, metrics);
-
-            // Append cost metadata
-            output += $"\n[Cost: {metrics.NodeCount} nodes, {metrics.EdgeCount} edges, ~{metrics.OutputTokens} tokens]";
-
-            // Append session-aware suggestions
-            var suggestions = QuerySuggestionGenerator.Generate(result, options, session: _sessionTracker);
-            var hints = QuerySuggestionGenerator.FormatHints(suggestions);
-            if (!string.IsNullOrEmpty(hints))
-                output += hints;
-
-            return CreateToolResult(id, output, false);
+            return await handler();
         }
         catch (FileNotFoundException ex)
         {
-            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
+            return CreateToolError(id, $"{ex.Message}\n{missingDataHint}");
         }
         catch (Exception ex)
         {
@@ -800,568 +261,47 @@ internal sealed class McpServer
         }
     }
 
-    private async Task<JsonNode> HandlePathCallAsync(JsonNode? id, JsonNode? parameters)
-    {
-        var arguments = parameters?["arguments"];
-        var from = arguments?["from"]?.GetValue<string>();
-        var to = arguments?["to"]?.GetValue<string>();
+    private Task<JsonNode> ExecuteToolAsync(JsonNode? id, Func<Task<JsonNode>> handler)
+        => ExecuteToolAsync(id, handler, GraphIndexHint);
 
-        if (string.IsNullOrEmpty(from) || string.IsNullOrEmpty(to))
-            return CreateToolError(id, "Missing required parameters: from and to");
+    private static JsonNode? GetArguments(JsonNode? parameters)
+        => parameters?[ArgumentsPropertyName];
 
-        try
-        {
-            var engine = await GetOrLoadEngineAsync();
-            var finder = new PathFinder(engine.Nodes, engine.Edges);
-            var maxDepth = arguments?["maxDepth"]?.GetValue<int>() ?? 10;
-            var result = finder.FindPath(from, to, maxDepth);
+    private static string? GetStringArgument(JsonNode? parameters, string name)
+        => GetArguments(parameters)?[name]?.GetValue<string>();
 
-            if (result is null)
-                return CreateToolResult(id, $"No path found from '{from}' to '{to}'.", true);
+    private static int GetIntArgument(JsonNode? parameters, string name, int defaultValue)
+        => GetArguments(parameters)?[name]?.GetValue<int>() ?? defaultValue;
 
-            return CreateToolResult(id, PathFormatter.Format(result), false);
-        }
-        catch (FileNotFoundException ex)
-        {
-            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
-        }
-        catch (Exception ex)
-        {
-            return CreateToolError(id, ex.Message);
-        }
-    }
+    private static int? GetNullableIntArgument(JsonNode? parameters, string name)
+        => GetArguments(parameters)?[name]?.GetValue<int>();
 
-    private async Task<JsonNode> HandleImpactCallAsync(JsonNode? id, JsonNode? parameters)
-    {
-        var arguments = parameters?["arguments"];
-        var symbol = arguments?["symbol"]?.GetValue<string>();
+    private static bool GetBoolArgument(JsonNode? parameters, string name, bool defaultValue)
+        => GetArguments(parameters)?[name]?.GetValue<bool>() ?? defaultValue;
 
-        if (string.IsNullOrEmpty(symbol))
-            return CreateToolError(id, "Missing required parameter: symbol");
+    private static JsonArray? GetArrayArgument(JsonNode? parameters, string name)
+        => GetArguments(parameters)?[name]?.AsArray();
 
-        try
-        {
-            var engine = await GetOrLoadEngineAsync();
-            var analyzer = new ImpactAnalyzer(engine.Nodes, engine.Edges);
-            var depth = arguments?["depth"]?.GetValue<int>() ?? 3;
-            var result = analyzer.Analyze(symbol, depth);
+    private static string? GetStringValue(JsonNode? node, string propertyName)
+        => node?[propertyName]?.GetValue<string>();
 
-            return CreateToolResult(id, ImpactFormatter.Format(result), false);
-        }
-        catch (FileNotFoundException ex)
-        {
-            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
-        }
-        catch (Exception ex)
-        {
-            return CreateToolError(id, ex.Message);
-        }
-    }
+    #endregion
 
-    private async Task<JsonNode> HandleExplainCallAsync(JsonNode? id, JsonNode? parameters)
-    {
-        var arguments = parameters?["arguments"];
-        var symbol = arguments?["symbol"]?.GetValue<string>();
-
-        if (string.IsNullOrEmpty(symbol))
-            return CreateToolError(id, "Missing required parameter: symbol");
-
-        try
-        {
-            var engine = await GetOrLoadEngineAsync();
-            var explainer = new SymbolExplainer(engine.Nodes, engine.Edges);
-            var result = explainer.Explain(symbol);
-
-            if (result is null)
-                return CreateToolResult(id, $"No node found matching '{symbol}'.", true);
-
-            return CreateToolResult(id, ExplainFormatter.Format(result), false);
-        }
-        catch (FileNotFoundException ex)
-        {
-            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
-        }
-        catch (Exception ex)
-        {
-            return CreateToolError(id, ex.Message);
-        }
-    }
-
-    private async Task<JsonNode> HandleFileCallAsync(JsonNode? id, JsonNode? parameters)
-    {
-        var arguments = parameters?["arguments"];
-        var path = arguments?["path"]?.GetValue<string>();
-
-        if (string.IsNullOrEmpty(path))
-            return CreateToolError(id, "Missing required parameter: path");
-
-        try
-        {
-            var engine = await GetOrLoadEngineAsync();
-            var kindStr = arguments?["kind"]?.GetValue<string>() ?? "type";
-
-            NodeKind? kindFilter = kindStr.ToLowerInvariant() switch
-            {
-                "type" => NodeKind.Type,
-                "method" => NodeKind.Method,
-                "all" => null,
-                _ => NodeKind.Type
-            };
-
-            var nodes = engine.FindByFilePath(path, kindFilter);
-
-            if (nodes.Count == 0)
-                return CreateToolResult(id, $"No symbols found in file '{path}'.", true);
-
-            var sb = new StringBuilder();
-            sb.AppendLine($"Symbols in '{path}' ({nodes.Count} found):");
-            sb.AppendLine();
-            foreach (var node in nodes.OrderBy(n => n.StartLine))
-            {
-                sb.AppendLine($"  {node.Kind}: {node.Id}");
-                if (!string.IsNullOrEmpty(node.Signature))
-                    sb.AppendLine($"    sig: {node.Signature}");
-                sb.AppendLine($"    lines: {node.StartLine}-{node.EndLine}");
-            }
-
-            return CreateToolResult(id, sb.ToString().TrimEnd(), false);
-        }
-        catch (FileNotFoundException ex)
-        {
-            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
-        }
-        catch (Exception ex)
-        {
-            return CreateToolError(id, ex.Message);
-        }
-    }
-
-    private async Task<JsonNode> HandleBatchCallAsync(JsonNode? id, JsonNode? parameters)
-    {
-        var arguments = parameters?["arguments"];
-        var symbolsNode = arguments?["symbols"]?.AsArray();
-
-        if (symbolsNode is null || symbolsNode.Count == 0)
-            return CreateToolError(id, "Missing required parameter: symbols (must be a non-empty array)");
-
-        try
-        {
-            var engine = await GetOrLoadEngineAsync();
-            var depth = arguments?["depth"]?.GetValue<int>() ?? 1;
-            var formatStr = arguments?["format"]?.GetValue<string>() ?? "compact";
-            var modeStr = arguments?["mode"]?.GetValue<string>();
-            var batchIncludeSource = arguments?["include_source"]?.GetValue<bool>() ?? false;
-
-            var queryMode = modeStr?.ToLowerInvariant() switch
-            {
-                "focused" => QueryMode.Focused,
-                "structural" => QueryMode.Structural,
-                "all" => QueryMode.All,
-                _ => QueryMode.Focused
-            };
-
-            var outputFormat = formatStr.ToLowerInvariant() switch
-            {
-                "json" => OutputFormat.Json,
-                "text" => OutputFormat.Text,
-                "compact" => OutputFormat.Compact,
-                _ => OutputFormat.Context
-            };
-
-            // Run each symbol query against the same loaded engine, merge results
-            var mergedNodes = new Dictionary<string, GraphNode>();
-            var mergedEdges = new List<GraphEdge>();
-            var matchedNodes = new List<GraphNode>();
-            var edgeSet = new HashSet<(string, string, EdgeType)>();
-
-            foreach (var symbolNode in symbolsNode)
-            {
-                var sym = symbolNode?.GetValue<string>();
-                if (string.IsNullOrEmpty(sym)) continue;
-
-                var options = new QueryOptions
-                {
-                    Pattern = sym,
-                    Depth = depth,
-                    MaxNodes = 50,
-                    Rank = true,
-                    Mode = queryMode,
-                    Format = outputFormat
-                };
-
-                var result = engine.Query(options);
-                matchedNodes.AddRange(result.MatchedNodes);
-
-                foreach (var kvp in result.Nodes)
-                    mergedNodes.TryAdd(kvp.Key, kvp.Value);
-
-                foreach (var edge in result.Edges)
-                {
-                    var key = (edge.FromId, edge.ToId, edge.Type);
-                    if (edgeSet.Add(key))
-                        mergedEdges.Add(edge);
-                }
-            }
-
-            if (matchedNodes.Count == 0)
-            {
-                var symbols = string.Join(", ", symbolsNode.Select(s => s?.GetValue<string>()));
-                return CreateToolResult(id, $"No nodes found matching any of: {symbols}", true);
-            }
-
-            var mergedResult = new QueryResult
-            {
-                MatchedNodes = matchedNodes.DistinctBy(n => n.Id).ToList(),
-                Nodes = mergedNodes,
-                Edges = mergedEdges,
-                Metadata = engine.Metadata,
-                TotalMatchCount = matchedNodes.Count
-            };
-
-            var symbolsList = string.Join(", ", symbolsNode.Select(s => s?.GetValue<string>()));
-            var queryDesc = $"batch [{symbolsList}] --depth {depth}";
-            var output = outputFormat switch
-            {
-                OutputFormat.Json => JsonFormatter.Format(mergedResult),
-                OutputFormat.Text => TextFormatter.Format(mergedResult),
-                OutputFormat.Compact => CompactFormatter.Format(mergedResult, batchIncludeSource),
-                _ => ContextFormatter.Format(mergedResult, queryDesc, batchIncludeSource)
-            };
-
-            return CreateToolResult(id, output, false);
-        }
-        catch (FileNotFoundException ex)
-        {
-            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
-        }
-        catch (Exception ex)
-        {
-            return CreateToolError(id, ex.Message);
-        }
-    }
-
-    private async Task<JsonNode> HandleCompareCallAsync(JsonNode? id, JsonNode? parameters)
-    {
-        var arguments = parameters?["arguments"];
-        var symbolA = arguments?["symbolA"]?.GetValue<string>();
-        var symbolB = arguments?["symbolB"]?.GetValue<string>();
-
-        if (string.IsNullOrEmpty(symbolA) || string.IsNullOrEmpty(symbolB))
-            return CreateToolError(id, "Missing required parameters: symbolA and symbolB");
-
-        try
-        {
-            var engine = await GetOrLoadEngineAsync();
-            var depth = arguments?["depth"]?.GetValue<int>() ?? 1;
-
-            var optionsA = new QueryOptions { Pattern = symbolA, Depth = depth, MaxNodes = 50, Mode = QueryMode.Focused, IgnoreCase = true };
-            var optionsB = new QueryOptions { Pattern = symbolB, Depth = depth, MaxNodes = 50, Mode = QueryMode.Focused, IgnoreCase = true };
-
-            var resultA = engine.Query(optionsA);
-            var resultB = engine.Query(optionsB);
-
-            if (resultA.MatchedNodes.Count == 0 && resultB.MatchedNodes.Count == 0)
-                return CreateToolResult(id, $"No nodes found matching '{symbolA}' or '{symbolB}'.", true);
-
-            var sb = new StringBuilder();
-            sb.AppendLine($"## Compare: {symbolA} vs {symbolB}");
-            sb.AppendLine();
-
-            // Show edges for A
-            sb.AppendLine($"### {symbolA} ({resultA.MatchedNodes.Count} matched, {resultA.Edges.Count} edges)");
-            var edgesA = resultA.Edges.Where(e => e.Type != EdgeType.Contains)
-                .Select(e => $"  {e.Type}: {e.FromId} → {e.ToId}").Take(20);
-            foreach (var e in edgesA) sb.AppendLine(e);
-            sb.AppendLine();
-
-            // Show edges for B
-            sb.AppendLine($"### {symbolB} ({resultB.MatchedNodes.Count} matched, {resultB.Edges.Count} edges)");
-            var edgesB = resultB.Edges.Where(e => e.Type != EdgeType.Contains)
-                .Select(e => $"  {e.Type}: {e.FromId} → {e.ToId}").Take(20);
-            foreach (var e in edgesB) sb.AppendLine(e);
-            sb.AppendLine();
-
-            // Shared dependencies
-            var depsA = new HashSet<string>(resultA.Edges.Where(e => e.Type != EdgeType.Contains).Select(e => e.ToId));
-            var depsB = new HashSet<string>(resultB.Edges.Where(e => e.Type != EdgeType.Contains).Select(e => e.ToId));
-            var shared = depsA.Intersect(depsB).ToList();
-            var uniqueA = depsA.Except(depsB).ToList();
-            var uniqueB = depsB.Except(depsA).ToList();
-
-            sb.AppendLine($"### Shared dependencies ({shared.Count})");
-            foreach (var s in shared.Take(10)) sb.AppendLine($"  {s}");
-            sb.AppendLine();
-            sb.AppendLine($"### Unique to {symbolA} ({uniqueA.Count})");
-            foreach (var s in uniqueA.Take(10)) sb.AppendLine($"  {s}");
-            sb.AppendLine();
-            sb.AppendLine($"### Unique to {symbolB} ({uniqueB.Count})");
-            foreach (var s in uniqueB.Take(10)) sb.AppendLine($"  {s}");
-
-            return CreateToolResult(id, sb.ToString().TrimEnd(), false);
-        }
-        catch (FileNotFoundException ex)
-        {
-            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
-        }
-        catch (Exception ex)
-        {
-            return CreateToolError(id, ex.Message);
-        }
-    }
-
-    private async Task<JsonNode> HandleTestImpactCallAsync(JsonNode? id, JsonNode? parameters)
-    {
-        var arguments = parameters?["arguments"];
-        var symbol = arguments?["symbol"]?.GetValue<string>();
-
-        if (string.IsNullOrEmpty(symbol))
-            return CreateToolError(id, "Missing required parameter: symbol");
-
-        try
-        {
-            var engine = await GetOrLoadEngineAsync();
-            var analyzer = new TestImpactAnalyzer(engine.Nodes, engine.Edges);
-            var depth = arguments?["depth"]?.GetValue<int>() ?? 3;
-            var result = analyzer.Analyze(symbol, depth);
-
-            return CreateToolResult(id, TestImpactFormatter.Format(result), false);
-        }
-        catch (FileNotFoundException ex)
-        {
-            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
-        }
-        catch (Exception ex)
-        {
-            return CreateToolError(id, ex.Message);
-        }
-    }
-
-    private async Task<JsonNode> HandleDiffCallAsync(JsonNode? id, JsonNode? parameters)
-    {
-        var arguments = parameters?["arguments"];
-        var baseDir = arguments?["base"]?.GetValue<string>();
-        var headDir = arguments?["head"]?.GetValue<string>() ?? _graphDir;
-        var format = arguments?["format"]?.GetValue<string>() ?? "compact";
-
-        if (string.IsNullOrEmpty(baseDir))
-            return CreateToolError(id, "Missing required parameter: base");
-
-        try
-        {
-            var (baseMeta, baseNodes, baseEdges) = await GraphReader.ReadAsync(baseDir);
-            var (headMeta, headNodes, headEdges) = await GraphReader.ReadAsync(headDir);
-
-            var diff = GraphDiffEngine.Compare(baseMeta, baseNodes, baseEdges, headMeta, headNodes, headEdges);
-            var output = format.ToLowerInvariant() switch
-            {
-                "json" => GraphDiffJsonFormatter.Format(diff),
-                "text" => GraphDiffTextFormatter.Format(diff),
-                "context" => GraphDiffContextFormatter.Format(diff),
-                _ => GraphDiffGroupFormatter.Format(diff)
-            };
-
-            return CreateToolResult(id, output, false);
-        }
-        catch (FileNotFoundException ex)
-        {
-            return CreateToolError(id, $"{ex.Message}\nUse 'codegraph snapshot save <name>' to create a snapshot first.");
-        }
-        catch (Exception ex)
-        {
-            return CreateToolError(id, ex.Message);
-        }
-    }
-
-    private async Task<JsonNode> HandlePackagesCallAsync(JsonNode? id, JsonNode? parameters)
-    {
-        var arguments = parameters?["arguments"];
-        var projectFilter = arguments?["project"]?.GetValue<string>();
-        var packageFilter = arguments?["package"]?.GetValue<string>();
-
-        try
-        {
-            var engine = await GetOrLoadEngineAsync();
-            var analyzer = new PackageAnalyzer(engine.Nodes, engine.Edges);
-
-            string output;
-            if (!string.IsNullOrEmpty(packageFilter))
-            {
-                var usages = analyzer.AnalyzeByPackage(packageFilter);
-                output = PackageFormatter.FormatUsage(usages);
-            }
-            else
-            {
-                var usages = analyzer.AnalyzeByProject(projectFilter);
-                output = PackageFormatter.FormatUsage(usages);
-
-                var conflicts = analyzer.FindConflicts();
-                if (conflicts.Count > 0)
-                    output += "\n" + PackageFormatter.FormatConflicts(conflicts);
-            }
-
-            return CreateToolResult(id, output, false);
-        }
-        catch (FileNotFoundException ex)
-        {
-            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
-        }
-        catch (Exception ex)
-        {
-            return CreateToolError(id, ex.Message);
-        }
-    }
-
-    private async Task<QueryEngine> GetOrLoadEngineAsync(string? solutionFilter = null)
-    {
-        if (_engine is null || solutionFilter != _lastSolutionFilter)
-        {
-            _engine = await QueryEngine.LoadAsync(_graphDir, solutionFilter);
-            _lastSolutionFilter = solutionFilter;
-        }
-        return _engine;
-    }
-
-    private async Task<JsonNode> HandleListCallAsync(JsonNode? id, JsonNode? parameters)
-    {
-        var arguments = parameters?["arguments"];
-        var scope = arguments?["scope"]?.GetValue<string>() ?? "assemblies";
-        var assemblyFilter = arguments?["assembly"]?.GetValue<string>();
-        var top = arguments?["top"]?.GetValue<int>() ?? 50;
-        var skip = arguments?["skip"]?.GetValue<int>() ?? 0;
-        var filter = arguments?["filter"]?.GetValue<string>();
-
-        try
-        {
-            var engine = await GetOrLoadEngineAsync();
-            var list = new ListEngine(engine.Nodes, engine.Edges);
-            var sb = new StringBuilder();
-
-            switch (scope)
-            {
-                case "assemblies":
-                    var assemblies = list.ListAssemblies();
-                    sb.AppendLine($"{"Assembly",-40} {"Types",6} {"Methods",8} {"Total",6}");
-                    sb.AppendLine(new string('-', 62));
-                    foreach (var a in assemblies)
-                        sb.AppendLine($"{a.Name,-40} {a.TypeCount,6} {a.MethodCount,8} {a.TotalNodeCount,6}");
-                    break;
-
-                case "types":
-                    var result = list.ListTypes(assemblyFilter, top, skip, filter);
-                    sb.AppendLine($"{"Type",-50} {"In",4} {"Out",4} {"Assembly",-20}");
-                    sb.AppendLine(new string('-', 80));
-                    foreach (var t in result.Types)
-                        sb.AppendLine($"{t.Name,-50} {t.InDegree,4} {t.OutDegree,4} {t.Assembly,-20}");
-                    var endIndex = Math.Min(skip + top, result.TotalCount);
-                    sb.AppendLine($"\nShowing {skip + 1}-{endIndex} of {result.TotalCount:N0} types. Use --skip {endIndex} for next page.");
-                    break;
-
-                case "interfaces":
-                    var ifaces = list.ListInterfaces(assemblyFilter);
-                    sb.AppendLine($"{"Interface",-50} {"Impls",6} {"Assembly",-20}");
-                    sb.AppendLine(new string('-', 78));
-                    foreach (var iface in ifaces)
-                        sb.AppendLine($"{iface.Name,-50} {iface.ImplementationCount,6} {iface.Assembly,-20}");
-                    break;
-
-                case "namespaces":
-                    var namespaces = list.ListNamespaces(assemblyFilter);
-                    sb.AppendLine($"{"Namespace",-50} {"Types",6} {"Methods",8}");
-                    sb.AppendLine(new string('-', 66));
-                    foreach (var ns in namespaces)
-                        sb.AppendLine($"{ns.Name,-50} {ns.TypeCount,6} {ns.MethodCount,8}");
-                    break;
-
-                default:
-                    return CreateToolError(id, $"Unknown list scope: {scope}. Use: assemblies, types, interfaces, namespaces");
-            }
-
-            return CreateToolResult(id, sb.ToString(), false);
-        }
-        catch (FileNotFoundException ex)
-        {
-            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
-        }
-        catch (Exception ex)
-        {
-            return CreateToolError(id, ex.Message);
-        }
-    }
-
-    private async Task<JsonNode> HandleSearchCallAsync(JsonNode? id, JsonNode? parameters)
-    {
-        var arguments = parameters?["arguments"];
-        var query = arguments?["query"]?.GetValue<string>();
-        if (string.IsNullOrEmpty(query))
-            return CreateToolError(id, "Missing required parameter: query");
-
-        var top = arguments?["top"]?.GetValue<int>() ?? 20;
-        var kindStr = arguments?["kind"]?.GetValue<string>();
-
-        NodeKind? kindFilter = kindStr?.ToLowerInvariant() switch
-        {
-            "type" => NodeKind.Type,
-            "method" => NodeKind.Method,
-            "namespace" => NodeKind.Namespace,
-            _ => null
-        };
-
-        try
-        {
-            var engine = await GetOrLoadEngineAsync();
-            var results = engine.Search(query, top, kindFilter);
-
-            if (results.Count == 0)
-                return CreateToolResult(id, $"No results for '{query}'.", false);
-
-            var sb = new StringBuilder();
-            foreach (var node in results)
-            {
-                var ns = node.ContainingNamespaceId ?? "";
-                var filePart = !string.IsNullOrEmpty(node.FilePath) ? $" ({node.FilePath})" : "";
-                sb.AppendLine($"[{node.Kind}] {node.Name}  ns={ns}{filePart}");
-            }
-            sb.AppendLine($"\n{results.Count} result(s) for '{query}'.");
-
-            return CreateToolResult(id, sb.ToString(), false);
-        }
-        catch (FileNotFoundException ex)
-        {
-            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
-        }
-        catch (Exception ex)
-        {
-            return CreateToolError(id, ex.Message);
-        }
-    }
-
-    private async Task<JsonNode> HandleSummaryCallAsync(JsonNode? id)
-    {
-        try
-        {
-            var engine = await GetOrLoadEngineAsync();
-            var report = ReportGenerator.Generate(engine.Nodes, engine.Edges, engine.Metadata);
-            return CreateToolResult(id, report, false);
-        }
-        catch (FileNotFoundException ex)
-        {
-            return CreateToolError(id, $"{ex.Message}\nRun 'codegraph index' to generate the graph first.");
-        }
-        catch (Exception ex)
-        {
-            return CreateToolError(id, ex.Message);
-        }
-    }
+    #region Response builders
 
     private static JsonNode CreateResponse(JsonNode? id, JsonNode result)
     {
         var response = new JsonObject
         {
-            ["jsonrpc"] = "2.0",
+            ["jsonrpc"] = JsonRpcVersion,
             ["result"] = result
         };
+
         if (id is not null)
+        {
             response["id"] = id.DeepClone();
+        }
+
         return response;
     }
 
@@ -1369,29 +309,31 @@ internal sealed class McpServer
     {
         var response = new JsonObject
         {
-            ["jsonrpc"] = "2.0",
+            ["jsonrpc"] = JsonRpcVersion,
             ["error"] = new JsonObject
             {
                 ["code"] = code,
                 ["message"] = message
             }
         };
+
         if (id is not null)
+        {
             response["id"] = id.DeepClone();
+        }
+
         return response;
     }
 
     private static JsonNode CreateToolResult(JsonNode? id, string text, bool isError)
     {
-        var content = new JsonArray(new JsonObject
-        {
-            ["type"] = "text",
-            ["text"] = text
-        });
-
         var result = new JsonObject
         {
-            ["content"] = content,
+            ["content"] = new JsonArray(new JsonObject
+            {
+                ["type"] = TextContentType,
+                ["text"] = text
+            }),
             ["isError"] = isError
         };
 
@@ -1399,7 +341,7 @@ internal sealed class McpServer
     }
 
     private static JsonNode CreateToolError(JsonNode? id, string message)
-    {
-        return CreateToolResult(id, message, true);
-    }
+        => CreateToolResult(id, message, true);
+
+    #endregion
 }

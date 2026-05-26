@@ -8,7 +8,6 @@ public record SolutionProjectEntry(string Name, string RelativePath, string Proj
 
 public static class SolutionParser
 {
-    // Matches: Project("{TypeGuid}") = "Name", "Path", "{ProjectGuid}"
     private static readonly Regex ProjectLineRegex = new(
         @"^Project\(""\{[^}]+\}""\)\s*=\s*""([^""]+)""\s*,\s*""([^""]+)""\s*,\s*""\{([^}]+)\}""",
         RegexOptions.Multiline | RegexOptions.Compiled);
@@ -19,11 +18,9 @@ public static class SolutionParser
             throw new FileNotFoundException($"Solution file not found: {solutionPath}");
 
         var content = File.ReadAllText(solutionPath);
-
-        if (solutionPath.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
-            return ParseSlnxContent(content);
-
-        return ParseContent(content);
+        return solutionPath.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase)
+            ? ParseSlnxContent(content)
+            : ParseContent(content);
     }
 
     public static IReadOnlyList<SolutionProjectEntry> ParseContent(string content)
@@ -32,17 +29,14 @@ public static class SolutionParser
 
         foreach (Match match in ProjectLineRegex.Matches(content))
         {
-            var name = match.Groups[1].Value;
-            var relativePath = match.Groups[2].Value
-                .Replace('/', Path.DirectorySeparatorChar)
-                .Replace('\\', Path.DirectorySeparatorChar);
-            var guid = match.Groups[3].Value;
+            var relativePath = NormalizePath(match.Groups[2].Value);
+            if (!IsCSharpProject(relativePath))
+                continue;
 
-            // Filter to C# projects only
-            if (relativePath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
-            {
-                entries.Add(new SolutionProjectEntry(name, relativePath, guid));
-            }
+            entries.Add(new SolutionProjectEntry(
+                match.Groups[1].Value,
+                relativePath,
+                match.Groups[3].Value));
         }
 
         return entries;
@@ -50,46 +44,59 @@ public static class SolutionParser
 
     public static IReadOnlyList<SolutionProjectEntry> ParseSlnxContent(string content)
     {
-        var entries = new List<SolutionProjectEntry>();
+        if (!TryParseDocument(content, out var document) || document.Root is null)
+            return Array.Empty<SolutionProjectEntry>();
 
-        XDocument doc;
+        return document.Root
+            .Descendants("Project")
+            .Select(CreateProjectEntry)
+            .Where(static entry => entry is not null)
+            .Select(static entry => entry!)
+            .ToList();
+    }
+
+    private static bool TryParseDocument(string content, out XDocument document)
+    {
         try
         {
-            doc = XDocument.Parse(content);
+            document = XDocument.Parse(content);
+            return true;
         }
         catch (XmlException)
         {
-            return entries;
+            document = new XDocument();
+            return false;
         }
+    }
 
-        if (doc.Root is null)
-            return entries;
+    private static SolutionProjectEntry? CreateProjectEntry(XElement projectElement)
+    {
+        var path = projectElement.Attribute("Path")?.Value;
+        if (string.IsNullOrEmpty(path))
+            return null;
 
-        foreach (var project in doc.Root.Descendants("Project"))
-        {
-            var path = project.Attribute("Path")?.Value;
-            if (string.IsNullOrEmpty(path))
-                continue;
+        if (string.Equals(projectElement.Attribute("Type")?.Value, "Folder", StringComparison.OrdinalIgnoreCase))
+            return null;
 
-            // Skip folders (Type="Folder" or no .csproj extension)
-            var type = project.Attribute("Type")?.Value;
-            if (string.Equals(type, "Folder", StringComparison.OrdinalIgnoreCase))
-                continue;
+        var normalizedPath = NormalizePath(path);
+        if (!IsCSharpProject(normalizedPath))
+            return null;
 
-            var normalizedPath = path
-                .Replace('/', Path.DirectorySeparatorChar)
-                .Replace('\\', Path.DirectorySeparatorChar);
+        var name = projectElement.Attribute("Name")?.Value
+                   ?? Path.GetFileNameWithoutExtension(normalizedPath);
 
-            // Filter to C# projects only
-            if (!normalizedPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
-                continue;
+        return new SolutionProjectEntry(name, normalizedPath, string.Empty);
+    }
 
-            var name = project.Attribute("Name")?.Value
-                       ?? Path.GetFileNameWithoutExtension(normalizedPath);
+    private static bool IsCSharpProject(string path)
+    {
+        return path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase);
+    }
 
-            entries.Add(new SolutionProjectEntry(name, normalizedPath, string.Empty));
-        }
-
-        return entries;
+    private static string NormalizePath(string path)
+    {
+        return path
+            .Replace('/', Path.DirectorySeparatorChar)
+            .Replace('\\', Path.DirectorySeparatorChar);
     }
 }

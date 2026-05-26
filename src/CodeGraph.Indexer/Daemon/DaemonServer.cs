@@ -14,6 +14,9 @@ namespace CodeGraph.Indexer.Daemon;
 /// </summary>
 internal sealed class DaemonServer : IDisposable
 {
+    private const int PipeProbeAttempts = 5;
+    private const int PipeProbeTimeoutMs = 500;
+
     private readonly string _graphDir;
     private readonly CancellationTokenSource _cts = new();
     private QueryEngine? _engine;
@@ -31,37 +34,13 @@ internal sealed class DaemonServer : IDisposable
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, cancellationToken);
         var token = linked.Token;
-        var pipeName = GetPipeName(_graphDir);
 
         PidFile.Write(_graphDir, Environment.ProcessId);
 
         try
         {
-            // Pre-load the engine so the first query is fast
             await GetOrLoadEngineAsync().ConfigureAwait(false);
-
-            while (!token.IsCancellationRequested)
-            {
-                var pipe = new NamedPipeServerStream(
-                    pipeName,
-                    PipeDirection.InOut,
-                    NamedPipeServerStream.MaxAllowedServerInstances,
-                    PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous);
-
-                try
-                {
-                    await pipe.WaitForConnectionAsync(token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    await pipe.DisposeAsync().ConfigureAwait(false);
-                    break;
-                }
-
-                // Handle client on a background task so we can accept new connections
-                _ = HandleClientAsync(pipe, token);
-            }
+            await AcceptClientsAsync(GetPipeName(_graphDir), token).ConfigureAwait(false);
         }
         finally
         {
@@ -83,8 +62,8 @@ internal sealed class DaemonServer : IDisposable
     /// </summary>
     internal static string GetPipeName(string graphDir)
     {
-        var absolute = Path.GetFullPath(graphDir);
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(absolute));
+        var absolutePath = Path.GetFullPath(graphDir);
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(absolutePath));
         var hex = Convert.ToHexString(hash)[..16].ToLowerInvariant();
         return $"codegraph-{hex}";
     }
@@ -97,18 +76,57 @@ internal sealed class DaemonServer : IDisposable
         if (!PidFile.IsProcessRunning(graphDir))
             return false;
 
-        // Verify the pipe is actually connectable
-        var pipeName = GetPipeName(graphDir);
-        try
+        return CanConnectToPipe(GetPipeName(graphDir));
+    }
+
+    private static bool CanConnectToPipe(string pipeName)
+    {
+        for (var attempt = 0; attempt < PipeProbeAttempts; attempt++)
         {
-            using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut);
-            client.Connect(timeout: 500);
-            return true;
+            try
+            {
+                using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut);
+                client.Connect(timeout: PipeProbeTimeoutMs);
+                return true;
+            }
+            catch
+            {
+                if (attempt < PipeProbeAttempts - 1)
+                    Thread.Sleep(50);
+            }
         }
-        catch
+
+        return false;
+    }
+
+    private async Task AcceptClientsAsync(string pipeName, CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
         {
-            return false;
+            var pipe = CreateServerPipe(pipeName);
+
+            try
+            {
+                await pipe.WaitForConnectionAsync(token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                await pipe.DisposeAsync().ConfigureAwait(false);
+                break;
+            }
+
+            _ = HandleClientAsync(pipe, token);
         }
+    }
+
+    private static NamedPipeServerStream CreateServerPipe(string pipeName)
+    {
+        return new NamedPipeServerStream(
+            pipeName,
+            PipeDirection.InOut,
+            NamedPipeServerStream.MaxAllowedServerInstances,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous);
     }
 
     private async Task HandleClientAsync(NamedPipeServerStream pipe, CancellationToken token)
@@ -126,19 +144,13 @@ internal sealed class DaemonServer : IDisposable
                     if (line is null)
                         break;
 
-                    line = line.Trim();
-                    if (line.Length == 0)
+                    if (string.IsNullOrWhiteSpace(line))
                         continue;
 
-                    JsonNode? request;
-                    try
+                    if (!TryParseRequest(line, out var request))
                     {
-                        request = JsonNode.Parse(line);
-                    }
-                    catch
-                    {
-                        var error = CreateError(null, -32700, "Parse error");
-                        await writer.WriteLineAsync(error.ToJsonString(JsonOptions)).ConfigureAwait(false);
+                        await writer.WriteLineAsync(
+                            CreateError(null, -32700, "Parse error").ToJsonString(JsonOptions)).ConfigureAwait(false);
                         continue;
                     }
 
@@ -149,11 +161,23 @@ internal sealed class DaemonServer : IDisposable
         }
         catch (OperationCanceledException)
         {
-            // Expected on shutdown
         }
         catch (IOException)
         {
-            // Client disconnected
+        }
+    }
+
+    private static bool TryParseRequest(string line, out JsonNode? request)
+    {
+        try
+        {
+            request = JsonNode.Parse(line.Trim());
+            return request is not null;
+        }
+        catch
+        {
+            request = null;
+            return false;
         }
     }
 
@@ -168,21 +192,8 @@ internal sealed class DaemonServer : IDisposable
         try
         {
             var engine = await GetOrLoadEngineAsync().ConfigureAwait(false);
-            var argsNode = request["args"];
-            var args = argsNode is JsonArray arr
-                ? arr.Select(a => a?.GetValue<string>() ?? "").ToArray()
-                : Array.Empty<string>();
-
-            var result = command switch
-            {
-                "ping" => "pong",
-                "query" => ExecuteQuery(engine, args),
-                "search" => ExecuteSearch(engine, args),
-                "list" => ExecuteList(engine, args),
-                "stats" => ExecuteStats(engine),
-                _ => throw new InvalidOperationException($"Unknown command: {command}")
-            };
-
+            var args = GetArguments(request["args"]);
+            var result = ExecuteCommand(engine, command, args);
             return CreateResponse(id, result);
         }
         catch (Exception ex)
@@ -191,35 +202,53 @@ internal sealed class DaemonServer : IDisposable
         }
     }
 
+    private static string[] GetArguments(JsonNode? argsNode)
+    {
+        return argsNode is JsonArray arguments
+            ? arguments.Select(argument => argument?.GetValue<string>() ?? string.Empty).ToArray()
+            : Array.Empty<string>();
+    }
+
+    private static string ExecuteCommand(QueryEngine engine, string command, string[] args)
+    {
+        return command switch
+        {
+            "ping" => "pong",
+            "query" => ExecuteQuery(engine, args),
+            "search" => ExecuteSearch(engine, args),
+            "list" => ExecuteList(engine, args),
+            "stats" => ExecuteStats(engine),
+            _ => throw new InvalidOperationException($"Unknown command: {command}")
+        };
+    }
+
     private static string ExecuteQuery(QueryEngine engine, string[] args)
     {
         if (args.Length == 0)
             return "Error: symbol pattern required";
 
-        var pattern = args[0];
-        var depth = 1;
-        var maxNodes = 50;
-
-        for (int i = 1; i < args.Length - 1; i++)
-        {
-            if (args[i] == "--depth" && int.TryParse(args[i + 1], out var d))
-                depth = d;
-            if (args[i] == "--max-nodes" && int.TryParse(args[i + 1], out var m))
-                maxNodes = m;
-        }
-
         var options = new QueryOptions
         {
-            Pattern = pattern,
-            Depth = depth,
-            MaxNodes = maxNodes,
+            Pattern = args[0],
+            Depth = ReadIntegerOption(args, "--depth", 1),
+            MaxNodes = ReadIntegerOption(args, "--max-nodes", 50),
             Format = OutputFormat.Compact,
             Rank = true,
             IgnoreCase = true
         };
 
-        var queryResult = engine.Query(options);
-        return CompactFormatter.Format(queryResult);
+        return CompactFormatter.Format(engine.Query(options));
+    }
+
+    private static int ReadIntegerOption(string[] args, string optionName, int defaultValue)
+    {
+        for (var index = 1; index < args.Length - 1; index++)
+        {
+            if (args[index] == optionName && int.TryParse(args[index + 1], out var value))
+                return value;
+        }
+
+        return defaultValue;
     }
 
     private static string ExecuteSearch(QueryEngine engine, string[] args)
@@ -228,41 +257,33 @@ internal sealed class DaemonServer : IDisposable
         if (string.IsNullOrWhiteSpace(query))
             return "Error: search query required";
 
-        var results = engine.Search(query, maxResults: 20);
-        var sb = new StringBuilder();
-        foreach (var node in results)
-            sb.AppendLine($"{node.Kind}: {node.Id}");
-        return sb.Length > 0 ? sb.ToString().TrimEnd() : "No results found.";
+        var builder = new StringBuilder();
+        foreach (var node in engine.Search(query, maxResults: 20))
+            builder.AppendLine($"{node.Kind}: {node.Id}");
+
+        return builder.Length > 0 ? builder.ToString().TrimEnd() : "No results found.";
     }
 
     private static string ExecuteList(QueryEngine engine, string[] args)
     {
         var scope = args.Length > 0 ? args[0] : "assemblies";
-        var list = new ListEngine(engine.Nodes, engine.Edges);
-        var sb = new StringBuilder();
+        if (!string.Equals(scope, "assemblies", StringComparison.Ordinal))
+            return $"Unknown scope: {scope}. Supported: assemblies";
 
-        if (scope == "assemblies")
-        {
-            var assemblies = list.ListAssemblies();
-            sb.AppendLine($"{"Assembly",-40} {"Types",6} {"Methods",8} {"Total",6}");
-            sb.AppendLine(new string('-', 62));
-            foreach (var a in assemblies)
-                sb.AppendLine($"{a.Name,-40} {a.TypeCount,6} {a.MethodCount,8} {a.TotalNodeCount,6}");
-        }
-        else
-        {
-            sb.AppendLine($"Unknown scope: {scope}. Supported: assemblies");
-        }
+        var listEngine = new ListEngine(engine.Nodes, engine.Edges);
+        var builder = new StringBuilder();
+        builder.AppendLine($"{"Assembly",-40} {"Types",6} {"Methods",8} {"Total",6}");
+        builder.AppendLine(new string('-', 62));
 
-        return sb.ToString().TrimEnd();
+        foreach (var assembly in listEngine.ListAssemblies())
+            builder.AppendLine($"{assembly.Name,-40} {assembly.TypeCount,6} {assembly.MethodCount,8} {assembly.TotalNodeCount,6}");
+
+        return builder.ToString().TrimEnd();
     }
 
     private static string ExecuteStats(QueryEngine engine)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine($"Nodes: {engine.Nodes.Count}");
-        sb.AppendLine($"Edges: {engine.Edges.Count}");
-        return sb.ToString().TrimEnd();
+        return $"Nodes: {engine.Nodes.Count}{Environment.NewLine}Edges: {engine.Edges.Count}";
     }
 
     private async Task<QueryEngine> GetOrLoadEngineAsync()
@@ -289,8 +310,10 @@ internal sealed class DaemonServer : IDisposable
             ["jsonrpc"] = "2.0",
             ["result"] = result
         };
+
         if (id is not null)
             response["id"] = id.DeepClone();
+
         return response;
     }
 
@@ -305,8 +328,10 @@ internal sealed class DaemonServer : IDisposable
                 ["message"] = message
             }
         };
+
         if (id is not null)
             response["id"] = id.DeepClone();
+
         return response;
     }
 

@@ -30,15 +30,11 @@ public class CodeGraphIndexer
         string solutionPath,
         CancellationToken cancellationToken = default)
     {
-        solutionPath = Path.GetFullPath(solutionPath);
-        if (!File.Exists(solutionPath))
-            throw new FileNotFoundException($"Solution file not found: {solutionPath}", solutionPath);
-
-        var solutionRoot = Path.GetDirectoryName(solutionPath)!;
-
-        var projects = await LoadAndFilterProjectsAsync(solutionPath, cancellationToken);
+        var fullSolutionPath = GetExistingSolutionPath(solutionPath);
+        var solutionRoot = Path.GetDirectoryName(fullSolutionPath)!;
+        var projects = await LoadAndFilterProjectsAsync(fullSolutionPath, cancellationToken).ConfigureAwait(false);
         var (nodes, edges) = RunPasses(projects, solutionRoot);
-        var metadata = BuildMetadata(solutionPath, solutionRoot, nodes, edges, projects);
+        var metadata = BuildMetadata(fullSolutionPath, solutionRoot, nodes, edges, projects);
 
         return new IndexResult(nodes.AsReadOnly(), edges.AsReadOnly(), metadata);
     }
@@ -51,19 +47,31 @@ public class CodeGraphIndexer
         string outputDir,
         CancellationToken cancellationToken = default)
     {
-        var result = await IndexAsync(solutionPath, cancellationToken);
+        var result = await IndexAsync(solutionPath, cancellationToken).ConfigureAwait(false);
+        await WriteOutputsAsync(outputDir, result).ConfigureAwait(false);
+        return result;
+    }
 
-        outputDir = Path.GetFullPath(outputDir);
-        Directory.CreateDirectory(outputDir);
+    private static string GetExistingSolutionPath(string solutionPath)
+    {
+        var fullSolutionPath = Path.GetFullPath(solutionPath);
+        if (!File.Exists(fullSolutionPath))
+            throw new FileNotFoundException($"Solution file not found: {fullSolutionPath}", fullSolutionPath);
 
-        var writer = new GraphWriter();
-        await writer.WriteAsync(outputDir, result.Nodes, result.Edges, result.Metadata);
+        return fullSolutionPath;
+    }
+
+    private static async Task WriteOutputsAsync(string outputDir, IndexResult result)
+    {
+        var fullOutputDir = Path.GetFullPath(outputDir);
+        Directory.CreateDirectory(fullOutputDir);
+
+        var graphWriter = new GraphWriter();
+        await graphWriter.WriteAsync(fullOutputDir, result.Nodes, result.Edges, result.Metadata).ConfigureAwait(false);
 
         var sqliteWriter = new SqliteGraphWriter();
-        var dbPath = Path.Combine(outputDir, "graph.db");
-        await sqliteWriter.WriteAsync(dbPath, result.Nodes, result.Edges, result.Metadata);
-
-        return result;
+        var databasePath = Path.Combine(fullOutputDir, "graph.db");
+        await sqliteWriter.WriteAsync(databasePath, result.Nodes, result.Edges, result.Metadata).ConfigureAwait(false);
     }
 
     private async Task<List<ProjectCompilation>> LoadAndFilterProjectsAsync(
@@ -76,28 +84,39 @@ public class CodeGraphIndexer
             skipRestore: _options.SkipBuild || _options.SkipRestore,
             configuration: _options.Configuration,
             preprocessorSymbols: _options.PreprocessorSymbols,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
-        var filtered = compilations.AsEnumerable();
+        return ApplyProjectFilters(compilations).ToList();
+    }
+
+    private IEnumerable<ProjectCompilation> ApplyProjectFilters(IEnumerable<ProjectCompilation> projects)
+    {
+        var filteredProjects = projects;
 
         if (!string.IsNullOrEmpty(_options.ProjectFilter))
         {
-            filtered = filtered.Where(p => WildcardMatch(p.ProjectName, _options.ProjectFilter!));
+            filteredProjects = filteredProjects.Where(project =>
+                WildcardMatch(project.ProjectName, _options.ProjectFilter!));
         }
-        else if (_options.IncludeProjects is { Length: > 0 } includes
-                 && !(includes.Length == 1 && includes[0] == "*"))
+        else if (ShouldApplyIncludeFilter())
         {
-            filtered = filtered.Where(p =>
-                includes.Any(pat => WildcardMatch(p.ProjectName, pat)));
+            filteredProjects = filteredProjects.Where(project =>
+                _options.IncludeProjects!.Any(pattern => WildcardMatch(project.ProjectName, pattern)));
         }
 
-        if (_options.ExcludeProjects is { Length: > 0 } excludes)
+        if (_options.ExcludeProjects is { Length: > 0 } excludedProjects)
         {
-            filtered = filtered.Where(p =>
-                !excludes.Any(pat => WildcardMatch(p.ProjectName, pat)));
+            filteredProjects = filteredProjects.Where(project =>
+                !excludedProjects.Any(pattern => WildcardMatch(project.ProjectName, pattern)));
         }
 
-        return filtered.ToList();
+        return filteredProjects;
+    }
+
+    private bool ShouldApplyIncludeFilter()
+    {
+        return _options.IncludeProjects is { Length: > 0 } includedProjects
+               && !(includedProjects.Length == 1 && includedProjects[0] == "*");
     }
 
     private (List<GraphNode> Nodes, List<GraphEdge> Edges) RunPasses(
@@ -105,11 +124,7 @@ public class CodeGraphIndexer
         string solutionRoot)
     {
         var projectResults = new ConcurrentBag<(List<GraphNode> Nodes, List<GraphEdge> Edges)>();
-        var passOptions = new PassPipelineOptions(
-            EnableRoutesPass: _options.EnableRoutesPass,
-            EnableConfigurationPass: _options.EnableConfigurationPass,
-            EnableMiddlewarePass: _options.EnableMiddlewarePass,
-            EnableDbContextPass: _options.EnableDbContextPass);
+        var passOptions = CreatePassOptions();
 
         Parallel.ForEach(projects, project =>
         {
@@ -123,8 +138,24 @@ public class CodeGraphIndexer
             }
         });
 
+        return MergeProjectResults(projectResults);
+    }
+
+    private PassPipelineOptions CreatePassOptions()
+    {
+        return new PassPipelineOptions(
+            EnableRoutesPass: _options.EnableRoutesPass,
+            EnableConfigurationPass: _options.EnableConfigurationPass,
+            EnableMiddlewarePass: _options.EnableMiddlewarePass,
+            EnableDbContextPass: _options.EnableDbContextPass);
+    }
+
+    private static (List<GraphNode> Nodes, List<GraphEdge> Edges) MergeProjectResults(
+        IEnumerable<(List<GraphNode> Nodes, List<GraphEdge> Edges)> projectResults)
+    {
         var allNodes = new List<GraphNode>();
         var allEdges = new List<GraphEdge>();
+
         foreach (var (nodes, edges) in projectResults)
         {
             allNodes.AddRange(nodes);
@@ -141,26 +172,29 @@ public class CodeGraphIndexer
         List<GraphEdge> edges,
         List<ProjectCompilation> projects)
     {
-        var commitHash = RunGit("rev-parse HEAD", solutionRoot);
-        var branch = RunGit("rev-parse --abbrev-ref HEAD", solutionRoot);
         var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0";
 
         return new GraphMetadata
         {
-            CommitHash = commitHash,
-            Branch = branch,
+            CommitHash = RunGit("rev-parse HEAD", solutionRoot),
+            Branch = RunGit("rev-parse --abbrev-ref HEAD", solutionRoot),
             GeneratedAt = DateTimeOffset.UtcNow,
             IndexerVersion = version,
             Solution = Path.GetFileName(solutionPath),
             SolutionName = Path.GetFileNameWithoutExtension(solutionPath),
-            ProjectsIndexed = projects.Select(p => p.ProjectName).ToArray(),
-            Stats = new Dictionary<string, int>
-            {
-                ["node_count"] = nodes.Count,
-                ["edge_count"] = edges.Count,
-                ["type_count"] = nodes.Count(n => n.Kind == NodeKind.Type),
-                ["method_count"] = nodes.Count(n => n.Kind is NodeKind.Method or NodeKind.Constructor)
-            }
+            ProjectsIndexed = projects.Select(project => project.ProjectName).ToArray(),
+            Stats = BuildStats(nodes, edges)
+        };
+    }
+
+    private static Dictionary<string, int> BuildStats(List<GraphNode> nodes, List<GraphEdge> edges)
+    {
+        return new Dictionary<string, int>
+        {
+            ["node_count"] = nodes.Count,
+            ["edge_count"] = edges.Count,
+            ["type_count"] = nodes.Count(node => node.Kind == NodeKind.Type),
+            ["method_count"] = nodes.Count(node => node.Kind is NodeKind.Method or NodeKind.Constructor)
         };
     }
 
@@ -168,7 +202,7 @@ public class CodeGraphIndexer
     {
         try
         {
-            var psi = new ProcessStartInfo
+            using var process = Process.Start(new ProcessStartInfo
             {
                 FileName = "git",
                 Arguments = arguments,
@@ -177,10 +211,10 @@ public class CodeGraphIndexer
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
-            };
+            });
 
-            using var process = Process.Start(psi);
-            if (process is null) return string.Empty;
+            if (process is null)
+                return string.Empty;
 
             var output = process.StandardOutput.ReadToEnd().Trim();
             process.WaitForExit();
@@ -194,7 +228,12 @@ public class CodeGraphIndexer
 
     private static bool WildcardMatch(string input, string pattern)
     {
-        var regexPattern = "^" + Regex.Escape(pattern).Replace("\\*", ".*").Replace("\\?", ".") + "$";
+        var regexPattern = "^"
+            + Regex.Escape(pattern)
+                .Replace("\\*", ".*", StringComparison.Ordinal)
+                .Replace("\\?", ".", StringComparison.Ordinal)
+            + "$";
+
         return Regex.IsMatch(input, regexPattern, RegexOptions.IgnoreCase);
     }
 }

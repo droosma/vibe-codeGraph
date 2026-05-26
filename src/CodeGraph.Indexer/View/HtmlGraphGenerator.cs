@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using CodeGraph.Core.IO;
 using CodeGraph.Core.Models;
@@ -18,119 +17,136 @@ public class HtmlGraphGenerator
 
     public async Task<string> GenerateAsync()
     {
-        var (metadata, nodes, edges) = await GraphReader.ReadAsync(_graphDir);
-
+        var (metadata, nodes, edges) = await GraphReader.ReadAsync(_graphDir).ConfigureAwait(false);
         var (sampledNodes, sampledEdges) = Sample(nodes, edges);
         return BuildHtml(metadata, sampledNodes, sampledEdges);
     }
 
     internal (Dictionary<string, GraphNode> Nodes, List<GraphEdge> Edges) Sample(
-        Dictionary<string, GraphNode> nodes, List<GraphEdge> edges)
+        Dictionary<string, GraphNode> nodes,
+        List<GraphEdge> edges)
     {
         if (nodes.Count <= _maxNodes)
             return (nodes, edges);
 
-        // Smart sampling: keep all Type/Namespace nodes, sample methods by connectivity
-        var retained = new Dictionary<string, GraphNode>();
-
-        // Always keep Type and Namespace nodes
-        foreach (var kvp in nodes)
-        {
-            if (kvp.Value.Kind is NodeKind.Type or NodeKind.Namespace)
-                retained[kvp.Key] = kvp.Value;
-        }
-
-        if (retained.Count >= _maxNodes)
-        {
-            // Even type nodes exceed cap, just take first N
-            retained = nodes.Take(_maxNodes).ToDictionary(k => k.Key, k => k.Value);
-        }
-        else
-        {
-            // Compute degree for remaining nodes
-            var degree = new Dictionary<string, int>();
-            foreach (var edge in edges)
-            {
-                if (!retained.ContainsKey(edge.FromId))
-                    degree[edge.FromId] = degree.GetValueOrDefault(edge.FromId) + 1;
-                if (!retained.ContainsKey(edge.ToId))
-                    degree[edge.ToId] = degree.GetValueOrDefault(edge.ToId) + 1;
-            }
-
-            // Add remaining nodes sorted by connectivity until cap
-            var remaining = nodes
-                .Where(kvp => !retained.ContainsKey(kvp.Key))
-                .OrderByDescending(kvp => degree.GetValueOrDefault(kvp.Key))
-                .Take(_maxNodes - retained.Count);
-
-            foreach (var kvp in remaining)
-                retained[kvp.Key] = kvp.Value;
-        }
-
-        // Keep only edges between retained nodes
+        var retainedNodes = GetRetainedNodes(nodes, edges);
         var retainedEdges = edges
-            .Where(e => retained.ContainsKey(e.FromId) && retained.ContainsKey(e.ToId))
+            .Where(edge => retainedNodes.ContainsKey(edge.FromId) && retainedNodes.ContainsKey(edge.ToId))
             .ToList();
 
-        return (retained, retainedEdges);
+        return (retainedNodes, retainedEdges);
     }
 
-    private static string BuildHtml(GraphMetadata metadata, Dictionary<string, GraphNode> nodes, List<GraphEdge> edges)
+    private Dictionary<string, GraphNode> GetRetainedNodes(
+        Dictionary<string, GraphNode> nodes,
+        List<GraphEdge> edges)
     {
-        var graphData = BuildGraphJson(nodes, edges);
+        var retainedNodes = nodes
+            .Where(static pair => pair.Value.Kind is NodeKind.Type or NodeKind.Namespace)
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+
+        if (retainedNodes.Count >= _maxNodes)
+            return nodes.Take(_maxNodes).ToDictionary(pair => pair.Key, pair => pair.Value);
+
+        var degrees = CalculateDegrees(edges, retainedNodes);
+        var remainingNodes = nodes
+            .Where(pair => !retainedNodes.ContainsKey(pair.Key))
+            .OrderByDescending(pair => degrees.GetValueOrDefault(pair.Key))
+            .Take(_maxNodes - retainedNodes.Count);
+
+        foreach (var (id, node) in remainingNodes)
+            retainedNodes[id] = node;
+
+        return retainedNodes;
+    }
+
+    private static Dictionary<string, int> CalculateDegrees(
+        IEnumerable<GraphEdge> edges,
+        IReadOnlyDictionary<string, GraphNode> retainedNodes)
+    {
+        var degrees = new Dictionary<string, int>();
+
+        foreach (var edge in edges)
+        {
+            if (!retainedNodes.ContainsKey(edge.FromId))
+                degrees[edge.FromId] = degrees.GetValueOrDefault(edge.FromId) + 1;
+
+            if (!retainedNodes.ContainsKey(edge.ToId))
+                degrees[edge.ToId] = degrees.GetValueOrDefault(edge.ToId) + 1;
+        }
+
+        return degrees;
+    }
+
+    private static string BuildHtml(
+        GraphMetadata metadata,
+        Dictionary<string, GraphNode> nodes,
+        List<GraphEdge> edges)
+    {
         var solutionName = string.IsNullOrEmpty(metadata.SolutionName)
             ? metadata.Solution
             : metadata.SolutionName;
 
-        var sb = new StringBuilder();
-        sb.AppendLine("<!DOCTYPE html>");
-        sb.AppendLine("<html lang=\"en\">");
-        sb.AppendLine("<head>");
-        sb.AppendLine("<meta charset=\"UTF-8\">");
-        sb.AppendLine("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">");
-        sb.AppendLine($"<title>CodeGraph — {EscapeHtml(solutionName)}</title>");
-        sb.AppendLine("<style>");
-        sb.AppendLine(GetCss());
-        sb.AppendLine("</style>");
-        sb.AppendLine("</head>");
-        sb.AppendLine("<body>");
-        sb.AppendLine(GetBodyHtml(solutionName, nodes.Count, edges.Count));
-        sb.AppendLine("<script src=\"https://unpkg.com/3d-force-graph@1\"></script>");
-        sb.AppendLine("<script src=\"https://unpkg.com/three-spritetext@1\"></script>");
-        sb.AppendLine("<script>");
-        sb.AppendLine($"const graphData = {graphData};");
-        sb.AppendLine(GetJs());
-        sb.AppendLine("</script>");
-        sb.AppendLine("</body>");
-        sb.AppendLine("</html>");
-        return sb.ToString();
+        return $"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CodeGraph — {EscapeHtml(solutionName)}</title>
+<style>
+{GetCss()}
+</style>
+</head>
+<body>
+{GetBodyHtml(solutionName, nodes.Count, edges.Count)}
+<script src="https://unpkg.com/3d-force-graph@1"></script>
+<script src="https://unpkg.com/three-spritetext@1"></script>
+<script>
+const graphData = {BuildGraphJson(nodes, edges)};
+{GetJs()}
+</script>
+</body>
+</html>
+""";
     }
 
     private static string BuildGraphJson(Dictionary<string, GraphNode> nodes, List<GraphEdge> edges)
     {
-        var nodeArray = nodes.Values.Select(n => new
+        var graphData = new
         {
-            id = n.Id,
-            name = n.Name,
-            kind = n.Kind.ToString(),
-            assembly = n.AssemblyName,
-            accessibility = n.Accessibility.ToString(),
-            signature = n.Signature,
-            filePath = n.FilePath,
-            startLine = n.StartLine,
-            ns = n.ContainingNamespaceId ?? ""
-        });
+            nodes = nodes.Values.Select(CreateNodeData),
+            links = edges.Select(CreateLinkData)
+        };
 
-        var edgeArray = edges.Select(e => new
+        return JsonSerializer.Serialize(graphData, new JsonSerializerOptions { WriteIndented = false });
+    }
+
+    private static object CreateNodeData(GraphNode node)
+    {
+        return new
         {
-            source = e.FromId,
-            target = e.ToId,
-            type = e.Type.ToString(),
-            isExternal = e.IsExternal
-        });
+            id = node.Id,
+            name = node.Name,
+            kind = node.Kind.ToString(),
+            assembly = node.AssemblyName,
+            accessibility = node.Accessibility.ToString(),
+            signature = node.Signature,
+            filePath = node.FilePath,
+            startLine = node.StartLine,
+            ns = node.ContainingNamespaceId ?? string.Empty
+        };
+    }
 
-        var data = new { nodes = nodeArray, links = edgeArray };
-        return JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = false });
+    private static object CreateLinkData(GraphEdge edge)
+    {
+        return new
+        {
+            source = edge.FromId,
+            target = edge.ToId,
+            type = edge.Type.ToString(),
+            isExternal = edge.IsExternal
+        };
     }
 
     private static string GetCss() => """
@@ -328,9 +344,9 @@ public class HtmlGraphGenerator
     private static string EscapeHtml(string text)
     {
         return text
-            .Replace("&", "&amp;")
-            .Replace("<", "&lt;")
-            .Replace(">", "&gt;")
-            .Replace("\"", "&quot;");
+            .Replace("&", "&amp;", StringComparison.Ordinal)
+            .Replace("<", "&lt;", StringComparison.Ordinal)
+            .Replace(">", "&gt;", StringComparison.Ordinal)
+            .Replace("\"", "&quot;", StringComparison.Ordinal);
     }
 }

@@ -12,18 +12,19 @@ public class SemanticPass
         string solutionRoot,
         HashSet<string> knownNodeIds)
     {
-        var externalNodes = new Dictionary<string, GraphNode>();
+        _ = solutionRoot;
+
+        var externalNodes = new ExternalNodeCollector(knownNodeIds);
         var edges = new List<GraphEdge>();
-        var seenEdges = new HashSet<(string, string, EdgeType)>();
+        var seenEdges = new HashSet<(string FromId, string ToId, EdgeType Type)>();
 
         foreach (var tree in compilation.SyntaxTrees)
         {
             var model = compilation.GetSemanticModel(tree);
-            var root = tree.GetRoot();
-            var walker = new SemanticWalker(model, compilation, knownNodeIds, externalNodes, edges, seenEdges);
+            var walker = new SemanticWalker(model, compilation, externalNodes, edges, seenEdges);
             try
             {
-                walker.Visit(root);
+                walker.Visit(tree.GetRoot());
             }
             catch (Exception ex)
             {
@@ -31,29 +32,26 @@ public class SemanticPass
             }
         }
 
-        return (externalNodes.Values.ToList(), edges);
+        return (externalNodes.ToList(), edges);
     }
 
     private sealed class SemanticWalker : CSharpSyntaxWalker
     {
         private readonly SemanticModel _model;
         private readonly CSharpCompilation _compilation;
-        private readonly HashSet<string> _knownIds;
-        private readonly Dictionary<string, GraphNode> _externalNodes;
+        private readonly ExternalNodeCollector _externalNodes;
         private readonly List<GraphEdge> _edges;
-        private readonly HashSet<(string, string, EdgeType)> _seenEdges;
+        private readonly HashSet<(string FromId, string ToId, EdgeType Type)> _seenEdges;
 
         public SemanticWalker(
             SemanticModel model,
             CSharpCompilation compilation,
-            HashSet<string> knownIds,
-            Dictionary<string, GraphNode> externalNodes,
+            ExternalNodeCollector externalNodes,
             List<GraphEdge> edges,
-            HashSet<(string, string, EdgeType)> seenEdges)
+            HashSet<(string FromId, string ToId, EdgeType Type)> seenEdges)
         {
             _model = model;
             _compilation = compilation;
-            _knownIds = knownIds;
             _externalNodes = externalNodes;
             _edges = edges;
             _seenEdges = seenEdges;
@@ -61,276 +59,275 @@ public class SemanticPass
 
         public override void VisitInvocationExpression(InvocationExpressionSyntax node)
         {
-            try
-            {
-                var symbolInfo = _model.GetSymbolInfo(node);
-                if (symbolInfo.Symbol is IMethodSymbol method)
-                {
-                    var callerId = GetContainingMemberId(node);
-                    if (callerId is not null)
-                    {
-                        var targetId = SyntaxPass.GetSymbolId(method);
-                        EnsureNode(method, targetId);
-                        AddEdge(callerId, targetId, EdgeType.Calls, method);
-                    }
-                }
-            }
-            catch { /* Missing references can cause Roslyn internal errors */ }
+            TryRun(() => ProcessInvocation(node));
             base.VisitInvocationExpression(node);
         }
 
         public override void VisitObjectCreationExpression(ObjectCreationExpressionSyntax node)
         {
-            try
-            {
-                var symbolInfo = _model.GetSymbolInfo(node);
-                if (symbolInfo.Symbol is IMethodSymbol ctor)
-                {
-                    var callerId = GetContainingMemberId(node);
-                    if (callerId is not null)
-                    {
-                        var targetId = SyntaxPass.GetSymbolId(ctor);
-                        EnsureNode(ctor, targetId);
-                        AddEdge(callerId, targetId, EdgeType.Calls, ctor);
-                    }
-                }
-            }
-            catch { /* Missing references can cause Roslyn internal errors */ }
+            TryRun(() => ProcessObjectCreation(node));
             base.VisitObjectCreationExpression(node);
         }
 
-        public override void VisitClassDeclaration(ClassDeclarationSyntax node) { VisitTypeDeclaration(node); base.VisitClassDeclaration(node); }
-        public override void VisitStructDeclaration(StructDeclarationSyntax node) { VisitTypeDeclaration(node); base.VisitStructDeclaration(node); }
-        public override void VisitRecordDeclaration(RecordDeclarationSyntax node) { VisitTypeDeclaration(node); base.VisitRecordDeclaration(node); }
-
-        private void VisitTypeDeclaration(TypeDeclarationSyntax node)
+        public override void VisitClassDeclaration(ClassDeclarationSyntax node)
         {
-            try
-            {
-                var symbol = _model.GetDeclaredSymbol(node);
-                if (symbol is null) return;
+            TryRun(() => ProcessTypeDeclaration(node));
+            base.VisitClassDeclaration(node);
+        }
 
-                var typeId = SyntaxPass.GetSymbolId(symbol);
+        public override void VisitStructDeclaration(StructDeclarationSyntax node)
+        {
+            TryRun(() => ProcessTypeDeclaration(node));
+            base.VisitStructDeclaration(node);
+        }
 
-                // Base type (inheritance)
-                if (symbol.BaseType is not null &&
-                    symbol.BaseType.SpecialType != SpecialType.System_Object &&
-                    symbol.BaseType.SpecialType != SpecialType.System_ValueType)
-                {
-                    var baseId = SyntaxPass.GetSymbolId(symbol.BaseType);
-                    EnsureNode(symbol.BaseType, baseId);
-                    AddEdge(typeId, baseId, EdgeType.Inherits, symbol.BaseType);
-                }
-
-                // Interfaces
-                foreach (var iface in symbol.Interfaces)
-                {
-                    var ifaceId = SyntaxPass.GetSymbolId(iface);
-                    EnsureNode(iface, ifaceId);
-                    AddEdge(typeId, ifaceId, EdgeType.Implements, iface);
-                }
-            }
-            catch { /* Missing references can cause Roslyn internal errors */ }
+        public override void VisitRecordDeclaration(RecordDeclarationSyntax node)
+        {
+            TryRun(() => ProcessTypeDeclaration(node));
+            base.VisitRecordDeclaration(node);
         }
 
         public override void VisitMethodDeclaration(MethodDeclarationSyntax node)
         {
-            VisitMemberForDependencies(node);
-            VisitMethodForOverrides(node);
+            TryRun(() => ProcessMemberDependencies(node));
+            TryRun(() => ProcessOverride(node));
             base.VisitMethodDeclaration(node);
         }
 
         public override void VisitConstructorDeclaration(ConstructorDeclarationSyntax node)
         {
-            VisitMemberForDependencies(node);
+            TryRun(() => ProcessMemberDependencies(node));
             base.VisitConstructorDeclaration(node);
         }
 
         public override void VisitPropertyDeclaration(PropertyDeclarationSyntax node)
         {
-            try
-            {
-                var symbol = _model.GetDeclaredSymbol(node) as IPropertySymbol;
-                if (symbol is null) return;
-
-                var memberId = SyntaxPass.GetSymbolId(symbol);
-                EmitTypeDependency(memberId, symbol.Type);
-            }
-            catch { /* Missing references can cause Roslyn internal errors */ }
+            TryRun(() => ProcessProperty(node));
         }
 
         public override void VisitFieldDeclaration(FieldDeclarationSyntax node)
         {
-            try
-            {
-                foreach (var variable in node.Declaration.Variables)
-                {
-                    var symbol = _model.GetDeclaredSymbol(variable) as IFieldSymbol;
-                    if (symbol is null) continue;
-
-                    var memberId = SyntaxPass.GetSymbolId(symbol);
-                    EmitTypeDependency(memberId, symbol.Type);
-                }
-            }
-            catch { /* Missing references can cause Roslyn internal errors */ }
+            TryRun(() => ProcessFields(node));
         }
 
         public override void VisitMemberAccessExpression(MemberAccessExpressionSyntax node)
         {
-            try
-            {
-                // Skip if parent is an invocation (those are handled as Calls edges)
-                if (node.Parent is InvocationExpressionSyntax)
-                {
-                    base.VisitMemberAccessExpression(node);
-                    return;
-                }
-
-                var symbolInfo = _model.GetSymbolInfo(node);
-                var symbol = symbolInfo.Symbol;
-                if (symbol is null || symbol is IMethodSymbol)
-                {
-                    base.VisitMemberAccessExpression(node);
-                    return;
-                }
-
-                var referrerId = GetContainingMemberId(node);
-                if (referrerId is not null)
-                {
-                    var targetId = SyntaxPass.GetSymbolId(symbol);
-                    if (targetId != referrerId)
-                    {
-                        EnsureNode(symbol, targetId);
-                        AddEdge(referrerId, targetId, EdgeType.References, symbol);
-                    }
-                }
-            }
-            catch { /* Missing references can cause Roslyn internal errors */ }
+            TryRun(() => ProcessMemberAccess(node));
             base.VisitMemberAccessExpression(node);
         }
 
-        private void VisitMemberForDependencies(SyntaxNode node)
+        private static void TryRun(Action action)
         {
             try
             {
-                var symbol = _model.GetDeclaredSymbol(node);
-                if (symbol is not IMethodSymbol method) return;
-
-                var memberId = SyntaxPass.GetSymbolId(method);
-
-                if (method.MethodKind != MethodKind.Constructor)
-                {
-                    EmitTypeDependency(memberId, method.ReturnType);
-                }
-
-                foreach (var param in method.Parameters)
-                {
-                    EmitTypeDependency(memberId, param.Type);
-                }
+                action();
             }
-            catch { /* Missing references can cause Roslyn internal errors */ }
+            catch
+            {
+                // Missing references can cause Roslyn internal errors.
+            }
         }
 
-        private void VisitMethodForOverrides(MethodDeclarationSyntax node)
+        private void ProcessInvocation(InvocationExpressionSyntax node)
         {
-            try
+            if (_model.GetSymbolInfo(node).Symbol is not IMethodSymbol method)
             {
-                var symbol = _model.GetDeclaredSymbol(node) as IMethodSymbol;
-                if (symbol is null || !symbol.IsOverride || symbol.OverriddenMethod is null) return;
-
-                var memberId = SyntaxPass.GetSymbolId(symbol);
-                var baseId = SyntaxPass.GetSymbolId(symbol.OverriddenMethod);
-                EnsureNode(symbol.OverriddenMethod, baseId);
-                AddEdge(memberId, baseId, EdgeType.Overrides, symbol.OverriddenMethod);
+                return;
             }
-            catch { /* Missing references can cause Roslyn internal errors */ }
+
+            var callerId = PassUtilities.GetContainingMemberId(_model, node);
+            if (callerId is null)
+            {
+                return;
+            }
+
+            var targetId = SyntaxPass.GetSymbolId(method);
+            EnsureExternalNode(method, targetId);
+            AddEdge(callerId, targetId, EdgeType.Calls, method);
+        }
+
+        private void ProcessObjectCreation(ObjectCreationExpressionSyntax node)
+        {
+            if (_model.GetSymbolInfo(node).Symbol is not IMethodSymbol constructor)
+            {
+                return;
+            }
+
+            var callerId = PassUtilities.GetContainingMemberId(_model, node);
+            if (callerId is null)
+            {
+                return;
+            }
+
+            var targetId = SyntaxPass.GetSymbolId(constructor);
+            EnsureExternalNode(constructor, targetId);
+            AddEdge(callerId, targetId, EdgeType.Calls, constructor);
+        }
+
+        private void ProcessTypeDeclaration(TypeDeclarationSyntax node)
+        {
+            if (_model.GetDeclaredSymbol(node) is not INamedTypeSymbol symbol)
+            {
+                return;
+            }
+
+            var typeId = SyntaxPass.GetSymbolId(symbol);
+            if (symbol.BaseType is not null &&
+                symbol.BaseType.SpecialType is not SpecialType.System_Object and not SpecialType.System_ValueType)
+            {
+                var baseId = SyntaxPass.GetSymbolId(symbol.BaseType);
+                EnsureExternalNode(symbol.BaseType, baseId);
+                AddEdge(typeId, baseId, EdgeType.Inherits, symbol.BaseType);
+            }
+
+            foreach (var interfaceType in symbol.Interfaces)
+            {
+                var interfaceId = SyntaxPass.GetSymbolId(interfaceType);
+                EnsureExternalNode(interfaceType, interfaceId);
+                AddEdge(typeId, interfaceId, EdgeType.Implements, interfaceType);
+            }
+        }
+
+        private void ProcessMemberDependencies(SyntaxNode node)
+        {
+            if (_model.GetDeclaredSymbol(node) is not IMethodSymbol method)
+            {
+                return;
+            }
+
+            var memberId = SyntaxPass.GetSymbolId(method);
+            if (method.MethodKind != MethodKind.Constructor)
+            {
+                EmitTypeDependency(memberId, method.ReturnType);
+            }
+
+            foreach (var parameter in method.Parameters)
+            {
+                EmitTypeDependency(memberId, parameter.Type);
+            }
+        }
+
+        private void ProcessOverride(MethodDeclarationSyntax node)
+        {
+            if (_model.GetDeclaredSymbol(node) is not IMethodSymbol { IsOverride: true, OverriddenMethod: not null } symbol)
+            {
+                return;
+            }
+
+            var memberId = SyntaxPass.GetSymbolId(symbol);
+            var baseId = SyntaxPass.GetSymbolId(symbol.OverriddenMethod);
+            EnsureExternalNode(symbol.OverriddenMethod, baseId);
+            AddEdge(memberId, baseId, EdgeType.Overrides, symbol.OverriddenMethod);
+        }
+
+        private void ProcessProperty(PropertyDeclarationSyntax node)
+        {
+            if (_model.GetDeclaredSymbol(node) is not IPropertySymbol symbol)
+            {
+                return;
+            }
+
+            EmitTypeDependency(SyntaxPass.GetSymbolId(symbol), symbol.Type);
+        }
+
+        private void ProcessFields(FieldDeclarationSyntax node)
+        {
+            foreach (var variable in node.Declaration.Variables)
+            {
+                if (_model.GetDeclaredSymbol(variable) is IFieldSymbol symbol)
+                {
+                    EmitTypeDependency(SyntaxPass.GetSymbolId(symbol), symbol.Type);
+                }
+            }
+        }
+
+        private void ProcessMemberAccess(MemberAccessExpressionSyntax node)
+        {
+            if (node.Parent is InvocationExpressionSyntax)
+            {
+                return;
+            }
+
+            var symbol = _model.GetSymbolInfo(node).Symbol;
+            if (symbol is null || symbol is IMethodSymbol)
+            {
+                return;
+            }
+
+            var referrerId = PassUtilities.GetContainingMemberId(_model, node);
+            if (referrerId is null)
+            {
+                return;
+            }
+
+            var targetId = SyntaxPass.GetSymbolId(symbol);
+            if (targetId == referrerId)
+            {
+                return;
+            }
+
+            EnsureExternalNode(symbol, targetId);
+            AddEdge(referrerId, targetId, EdgeType.References, symbol);
         }
 
         private void EmitTypeDependency(string fromId, ITypeSymbol type)
         {
-            // Unwrap nullable, array, generic
-            type = UnwrapType(type);
+            var unwrappedType = UnwrapType(type);
+            if (unwrappedType.SpecialType != SpecialType.None ||
+                unwrappedType.TypeKind is TypeKind.TypeParameter or TypeKind.Error)
+            {
+                return;
+            }
 
-            if (type.SpecialType != SpecialType.None) return;
-            if (type.TypeKind == TypeKind.TypeParameter) return;
-            if (type.TypeKind == TypeKind.Error) return;
+            var targetId = SyntaxPass.GetSymbolId(unwrappedType);
+            if (targetId == fromId)
+            {
+                return;
+            }
 
-            var targetId = SyntaxPass.GetSymbolId(type);
-            if (targetId == fromId) return;
-
-            EnsureNode(type, targetId);
-            AddEdge(fromId, targetId, EdgeType.DependsOn, type);
+            EnsureExternalNode(unwrappedType, targetId);
+            AddEdge(fromId, targetId, EdgeType.DependsOn, unwrappedType);
         }
 
         private static ITypeSymbol UnwrapType(ITypeSymbol type)
         {
-            // Unwrap nullable value types
             if (type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } nullable)
-                return nullable.TypeArguments[0];
-
-            // Unwrap arrays
-            if (type is IArrayTypeSymbol array)
-                return UnwrapType(array.ElementType);
-
-            return type;
-        }
-
-        private string? GetContainingMemberId(SyntaxNode node)
-        {
-            var current = node.Parent;
-            while (current is not null)
             {
-                if (current is MethodDeclarationSyntax or ConstructorDeclarationSyntax
-                    or PropertyDeclarationSyntax or EventDeclarationSyntax)
-                {
-                    var symbol = _model.GetDeclaredSymbol(current);
-                    return symbol is not null ? SyntaxPass.GetSymbolId(symbol) : null;
-                }
-                current = current.Parent;
+                return nullable.TypeArguments[0];
             }
-            return null;
+
+            return type is IArrayTypeSymbol array
+                ? UnwrapType(array.ElementType)
+                : type;
         }
 
         private bool IsExternal(ISymbol symbol)
         {
-            if (symbol.ContainingAssembly is null) return true;
-            return !SymbolEqualityComparer.Default.Equals(symbol.ContainingAssembly, _compilation.Assembly);
+            return symbol.ContainingAssembly is null
+                || !SymbolEqualityComparer.Default.Equals(symbol.ContainingAssembly, _compilation.Assembly);
         }
 
-        private void EnsureNode(ISymbol symbol, string id)
+        private void EnsureExternalNode(ISymbol symbol, string id)
         {
-            if (_knownIds.Contains(id) || _externalNodes.ContainsKey(id)) return;
-            if (!IsExternal(symbol)) return;
-
-            var kind = symbol switch
+            if (_externalNodes.Contains(id) || !IsExternal(symbol))
             {
-                IMethodSymbol => NodeKind.Method,
-                IPropertySymbol => NodeKind.Property,
-                IFieldSymbol => NodeKind.Field,
-                IEventSymbol => NodeKind.Event,
-                INamedTypeSymbol => NodeKind.Type,
-                _ => NodeKind.Type
+                return;
+            }
+
+            var metadata = new Dictionary<string, string>
+            {
+                ["assembly"] = symbol.ContainingAssembly?.Name ?? "Unknown"
             };
 
-            var assemblyName = symbol.ContainingAssembly?.Name ?? "Unknown";
-
-            _externalNodes[id] = new GraphNode
-            {
-                Id = id,
-                Name = symbol.Name,
-                Kind = kind,
-                FilePath = string.Empty,
-                StartLine = 0,
-                EndLine = 0,
-                Signature = symbol.ToDisplayString(),
-                Accessibility = SyntaxPass.MapAccessibility(symbol.DeclaredAccessibility),
-                Metadata = new Dictionary<string, string> { ["assembly"] = assemblyName }
-            };
+            _externalNodes.Add(id, () => PassUtilities.CreateExternalSymbolNode(symbol, id, metadata));
         }
 
         private void AddEdge(string fromId, string toId, EdgeType type, ISymbol targetSymbol)
         {
-            if (!_seenEdges.Add((fromId, toId, type))) return;
+            if (!_seenEdges.Add((fromId, toId, type)))
+            {
+                return;
+            }
 
             _edges.Add(new GraphEdge
             {

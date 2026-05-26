@@ -12,400 +12,344 @@ public class DbContextPass
         string solutionRoot,
         HashSet<string> knownNodeIds)
     {
+        _ = solutionRoot;
+
         var edges = new List<GraphEdge>();
-        var externalNodes = new List<GraphNode>();
-        var seenExternalIds = new HashSet<string>();
+        var externalNodes = new ExternalNodeCollector(knownNodeIds);
 
         foreach (var tree in compilation.SyntaxTrees)
         {
             var semanticModel = compilation.GetSemanticModel(tree);
-            var relativePath = GetRelativePath(tree.FilePath, solutionRoot);
-            var walker = new DbContextWalker(semanticModel, relativePath, knownNodeIds, seenExternalIds, edges, externalNodes);
-            walker.Visit(tree.GetRoot());
+            AnalyzeTree(tree.GetRoot(), semanticModel, edges, externalNodes);
         }
 
-        return (edges, externalNodes);
+        return (edges, externalNodes.ToList());
     }
 
-    private sealed class DbContextWalker : CSharpSyntaxWalker
+    private static void AnalyzeTree(
+        SyntaxNode root,
+        SemanticModel model,
+        List<GraphEdge> edges,
+        ExternalNodeCollector externalNodes)
     {
-        private readonly SemanticModel _model;
-        private readonly string _relativePath;
-        private readonly HashSet<string> _knownNodeIds;
-        private readonly HashSet<string> _seenExternalIds;
-        private readonly List<GraphEdge> _edges;
-        private readonly List<GraphNode> _externalNodes;
-
-        public DbContextWalker(
-            SemanticModel model,
-            string relativePath,
-            HashSet<string> knownNodeIds,
-            HashSet<string> seenExternalIds,
-            List<GraphEdge> edges,
-            List<GraphNode> externalNodes)
+        foreach (var classDeclaration in root.DescendantNodes().OfType<ClassDeclarationSyntax>())
         {
-            _model = model;
-            _relativePath = relativePath;
-            _knownNodeIds = knownNodeIds;
-            _seenExternalIds = seenExternalIds;
-            _edges = edges;
-            _externalNodes = externalNodes;
+            AnalyzeClass(classDeclaration, model, edges, externalNodes);
+        }
+    }
+
+    private static void AnalyzeClass(
+        ClassDeclarationSyntax classDeclaration,
+        SemanticModel model,
+        List<GraphEdge> edges,
+        ExternalNodeCollector externalNodes)
+    {
+        var symbol = model.GetDeclaredSymbol(classDeclaration);
+        if (symbol is null)
+        {
+            return;
         }
 
-        public override void VisitClassDeclaration(ClassDeclarationSyntax node)
+        if (IsDbContextSubclass(symbol))
         {
-            var symbol = _model.GetDeclaredSymbol(node);
-            if (symbol is not null && IsDbContextSubclass(symbol))
-            {
-                ProcessDbContextClass(node, symbol);
-            }
-
-            if (symbol is not null && ImplementsEntityTypeConfiguration(symbol, out var configuredEntityType))
-            {
-                var entityId = SyntaxPass.GetSymbolId(configuredEntityType!);
-                var configId = SyntaxPass.GetSymbolId(symbol);
-                _edges.Add(new GraphEdge
-                {
-                    FromId = entityId,
-                    ToId = configId,
-                    Type = EdgeType.ConfiguredBy,
-                    Confidence = EdgeConfidence.Verified,
-                    Metadata = new Dictionary<string, string>
-                    {
-                        ["configurationClass"] = symbol.ToDisplayString()
-                    }
-                });
-                EnsureExternalNode(configuredEntityType!, entityId);
-                EnsureExternalNode(symbol, configId);
-            }
-
-            base.VisitClassDeclaration(node);
+            ProcessDbContextClass(classDeclaration, model, edges, externalNodes);
         }
 
-        private void ProcessDbContextClass(ClassDeclarationSyntax classNode, INamedTypeSymbol contextSymbol)
+        if (ImplementsEntityTypeConfiguration(symbol, out var configuredEntityType))
         {
-            // Discover DbSet<T> properties
-            var entityTypes = new Dictionary<string, INamedTypeSymbol>();
+            EmitConfiguredByEdge(configuredEntityType, symbol, edges, externalNodes);
+        }
+    }
 
-            foreach (var member in classNode.Members)
+    private static void EmitConfiguredByEdge(
+        INamedTypeSymbol entityType,
+        INamedTypeSymbol configurationType,
+        List<GraphEdge> edges,
+        ExternalNodeCollector externalNodes)
+    {
+        var entityId = SyntaxPass.GetSymbolId(entityType);
+        var configId = SyntaxPass.GetSymbolId(configurationType);
+
+        edges.Add(new GraphEdge
+        {
+            FromId = entityId,
+            ToId = configId,
+            Type = EdgeType.ConfiguredBy,
+            Confidence = EdgeConfidence.Verified,
+            Metadata = new Dictionary<string, string>
             {
-                if (member is PropertyDeclarationSyntax prop)
-                {
-                    TryExtractDbSetEntity(prop, entityTypes);
-                }
+                ["configurationClass"] = configurationType.ToDisplayString()
             }
+        });
 
-            // For entities without explicit ToTable, emit convention-based mapping (class name as table)
-            var entitiesWithExplicitTable = new HashSet<string>();
+        externalNodes.AddSymbol(entityType, entityId);
+        externalNodes.AddSymbol(configurationType, configId);
+    }
 
-            // Process OnModelCreating for fluent configurations
-            foreach (var member in classNode.Members)
+    private static void ProcessDbContextClass(
+        ClassDeclarationSyntax classDeclaration,
+        SemanticModel model,
+        List<GraphEdge> edges,
+        ExternalNodeCollector externalNodes)
+    {
+        var entityTypes = new Dictionary<string, INamedTypeSymbol>(StringComparer.Ordinal);
+        foreach (var property in classDeclaration.Members.OfType<PropertyDeclarationSyntax>())
+        {
+            TryExtractDbSetEntity(property, model, entityTypes);
+        }
+
+        var entitiesWithExplicitTable = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var method in classDeclaration.Members.OfType<MethodDeclarationSyntax>())
+        {
+            if (method.Identifier.Text == "OnModelCreating")
             {
-                if (member is MethodDeclarationSyntax method &&
-                    method.Identifier.Text == "OnModelCreating")
-                {
-                    ProcessOnModelCreating(method, entityTypes, entitiesWithExplicitTable);
-                }
-            }
-
-            // Emit convention table mappings for entities without explicit ToTable
-            foreach (var kvp in entityTypes)
-            {
-                if (!entitiesWithExplicitTable.Contains(kvp.Key))
-                {
-                    var entityId = SyntaxPass.GetSymbolId(kvp.Value);
-                    var tableName = kvp.Value.Name;
-                    var tableNodeId = $"[Table:{tableName}]";
-
-                    _edges.Add(new GraphEdge
-                    {
-                        FromId = entityId,
-                        ToId = tableNodeId,
-                        Type = EdgeType.MapsToTable,
-                        Confidence = EdgeConfidence.Inferred,
-                        Metadata = new Dictionary<string, string>
-                        {
-                            ["tableName"] = tableName
-                        }
-                    });
-                    EnsureExternalNode(kvp.Value, entityId);
-                }
+                ProcessOnModelCreating(method, model, entityTypes, entitiesWithExplicitTable, edges, externalNodes);
             }
         }
 
-        private void TryExtractDbSetEntity(PropertyDeclarationSyntax prop, Dictionary<string, INamedTypeSymbol> entityTypes)
+        foreach (var (entityId, entityType) in entityTypes)
         {
-            var propSymbol = _model.GetDeclaredSymbol(prop);
-            if (propSymbol?.Type is not INamedTypeSymbol propType)
-                return;
-
-            if (!IsDbSetType(propType))
-                return;
-
-            if (propType.TypeArguments.Length == 1 &&
-                propType.TypeArguments[0] is INamedTypeSymbol entityType)
+            if (!entitiesWithExplicitTable.Contains(entityId))
             {
-                var entityId = SyntaxPass.GetSymbolId(entityType);
-                entityTypes.TryAdd(entityId, entityType);
+                EmitConventionTableMapping(entityType, edges, externalNodes);
             }
         }
+    }
 
-        private void ProcessOnModelCreating(
-            MethodDeclarationSyntax method,
-            Dictionary<string, INamedTypeSymbol> entityTypes,
-            HashSet<string> entitiesWithExplicitTable)
+    private static void TryExtractDbSetEntity(
+        PropertyDeclarationSyntax property,
+        SemanticModel model,
+        Dictionary<string, INamedTypeSymbol> entityTypes)
+    {
+        if (model.GetDeclaredSymbol(property) is not IPropertySymbol { Type: INamedTypeSymbol propertyType })
         {
-            var invocations = method.DescendantNodes().OfType<InvocationExpressionSyntax>();
-            foreach (var invocation in invocations)
-            {
-                TryProcessToTable(invocation, entityTypes, entitiesWithExplicitTable);
-                TryProcessNavigation(invocation, entityTypes);
-            }
+            return;
         }
 
-        private void TryProcessToTable(
-            InvocationExpressionSyntax invocation,
-            Dictionary<string, INamedTypeSymbol> entityTypes,
-            HashSet<string> entitiesWithExplicitTable)
+        if (!IsDbSetType(propertyType) ||
+            propertyType.TypeArguments.Length != 1 ||
+            propertyType.TypeArguments[0] is not INamedTypeSymbol entityType)
         {
-            if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
-                return;
-
-            if (memberAccess.Name.Identifier.Text != "ToTable")
-                return;
-
-            if (invocation.ArgumentList.Arguments.Count < 1)
-                return;
-
-            var tableNameArg = invocation.ArgumentList.Arguments[0].Expression;
-            if (tableNameArg is not LiteralExpressionSyntax literal)
-                return;
-
-            var tableName = literal.Token.ValueText;
-
-            // Resolve the entity type from the chain: modelBuilder.Entity<T>().ToTable("X")
-            var entityType = ResolveEntityTypeFromChain(memberAccess.Expression);
-            if (entityType is null)
-                return;
-
-            var entityId = SyntaxPass.GetSymbolId(entityType);
-            var tableNodeId = $"[Table:{tableName}]";
-
-            entitiesWithExplicitTable.Add(entityId);
-
-            _edges.Add(new GraphEdge
-            {
-                FromId = entityId,
-                ToId = tableNodeId,
-                Type = EdgeType.MapsToTable,
-                Confidence = EdgeConfidence.Verified,
-                Metadata = new Dictionary<string, string>
-                {
-                    ["tableName"] = tableName
-                }
-            });
-
-            EnsureExternalNode(entityType, entityId);
+            return;
         }
 
-        private void TryProcessNavigation(
-            InvocationExpressionSyntax invocation,
-            Dictionary<string, INamedTypeSymbol> entityTypes)
+        entityTypes.TryAdd(SyntaxPass.GetSymbolId(entityType), entityType);
+    }
+
+    private static void ProcessOnModelCreating(
+        MethodDeclarationSyntax method,
+        SemanticModel model,
+        Dictionary<string, INamedTypeSymbol> entityTypes,
+        HashSet<string> entitiesWithExplicitTable,
+        List<GraphEdge> edges,
+        ExternalNodeCollector externalNodes)
+    {
+        foreach (var invocation in method.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
-            if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
-                return;
+            TryProcessToTable(invocation, model, entityTypes, entitiesWithExplicitTable, edges, externalNodes);
+            TryProcessNavigation(invocation, model, edges, externalNodes);
+        }
+    }
 
-            var methodName = memberAccess.Name.Identifier.Text;
+    private static void TryProcessToTable(
+        InvocationExpressionSyntax invocation,
+        SemanticModel model,
+        Dictionary<string, INamedTypeSymbol> entityTypes,
+        HashSet<string> entitiesWithExplicitTable,
+        List<GraphEdge> edges,
+        ExternalNodeCollector externalNodes)
+    {
+        if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess ||
+            memberAccess.Name.Identifier.Text != "ToTable" ||
+            invocation.ArgumentList.Arguments.Count == 0 ||
+            invocation.ArgumentList.Arguments[0].Expression is not LiteralExpressionSyntax literal)
+        {
+            return;
+        }
 
-            if (methodName != "HasOne" && methodName != "HasMany")
-                return;
+        var entityType = ResolveEntityTypeFromChain(memberAccess.Expression, model);
+        if (entityType is null)
+        {
+            return;
+        }
 
-            // Resolve the method symbol to get type arguments
-            var methodSymbol = _model.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
-            if (methodSymbol is null)
-                return;
+        var entityId = SyntaxPass.GetSymbolId(entityType);
+        entitiesWithExplicitTable.Add(entityId);
 
-            // Get the source entity type from the chain
-            var sourceEntity = ResolveEntityTypeFromChain(memberAccess.Expression);
-            if (sourceEntity is null)
-                return;
-
-            // Get the target entity type from the method's type argument
-            INamedTypeSymbol? targetEntity = null;
-            if (methodSymbol.TypeArguments.Length >= 1 &&
-                methodSymbol.TypeArguments[0] is INamedTypeSymbol targetType)
+        edges.Add(new GraphEdge
+        {
+            FromId = entityId,
+            ToId = $"[Table:{literal.Token.ValueText}]",
+            Type = EdgeType.MapsToTable,
+            Confidence = EdgeConfidence.Verified,
+            Metadata = new Dictionary<string, string>
             {
-                targetEntity = targetType;
+                ["tableName"] = literal.Token.ValueText
             }
+        });
 
-            if (targetEntity is null)
-                return;
+        externalNodes.AddSymbol(entityType, entityId);
+        entityTypes.TryAdd(entityId, entityType);
+    }
 
-            // Determine relationship type and navigation property
-            var relationship = methodName == "HasMany" ? "one-to-many" : "many-to-one";
+    private static void TryProcessNavigation(
+        InvocationExpressionSyntax invocation,
+        SemanticModel model,
+        List<GraphEdge> edges,
+        ExternalNodeCollector externalNodes)
+    {
+        if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
+        {
+            return;
+        }
 
-            // Try to extract navigation property name from the lambda argument
-            string? propertyName = null;
-            if (invocation.ArgumentList.Arguments.Count > 0)
-            {
-                propertyName = ExtractPropertyNameFromLambda(invocation.ArgumentList.Arguments[0].Expression);
-            }
+        var methodName = memberAccess.Name.Identifier.Text;
+        if (methodName is not "HasOne" and not "HasMany")
+        {
+            return;
+        }
 
-            var fromId = SyntaxPass.GetSymbolId(sourceEntity);
-            var toId = SyntaxPass.GetSymbolId(targetEntity);
+        var methodSymbol = model.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
+        var sourceEntity = ResolveEntityTypeFromChain(memberAccess.Expression, model);
+        var targetEntity = methodSymbol?.TypeArguments.FirstOrDefault() as INamedTypeSymbol;
+        if (sourceEntity is null || targetEntity is null)
+        {
+            return;
+        }
 
-            var metadata = new Dictionary<string, string>
-            {
-                ["relationship"] = relationship
-            };
+        var metadata = new Dictionary<string, string>
+        {
+            ["relationship"] = methodName == "HasMany" ? "one-to-many" : "many-to-one"
+        };
 
+        if (invocation.ArgumentList.Arguments.Count > 0)
+        {
+            var propertyName = ExtractPropertyNameFromLambda(invocation.ArgumentList.Arguments[0].Expression);
             if (propertyName is not null)
             {
                 metadata["property"] = propertyName;
             }
-
-            _edges.Add(new GraphEdge
-            {
-                FromId = fromId,
-                ToId = toId,
-                Type = EdgeType.NavigatesTo,
-                Confidence = EdgeConfidence.Verified,
-                Metadata = metadata
-            });
-
-            EnsureExternalNode(sourceEntity, fromId);
-            EnsureExternalNode(targetEntity, toId);
         }
 
-        private INamedTypeSymbol? ResolveEntityTypeFromChain(ExpressionSyntax expression)
+        var sourceId = SyntaxPass.GetSymbolId(sourceEntity);
+        var targetId = SyntaxPass.GetSymbolId(targetEntity);
+        edges.Add(new GraphEdge
         {
-            // Walk back to find modelBuilder.Entity<T>() in the call chain
-            if (expression is InvocationExpressionSyntax chainInvocation)
-            {
-                if (chainInvocation.Expression is MemberAccessExpressionSyntax chainMember)
-                {
-                    if (chainMember.Name is GenericNameSyntax genericName &&
-                        genericName.Identifier.Text == "Entity" &&
-                        genericName.TypeArgumentList.Arguments.Count == 1)
-                    {
-                        var typeArg = genericName.TypeArgumentList.Arguments[0];
-                        var typeInfo = _model.GetSymbolInfo(typeArg);
-                        return typeInfo.Symbol as INamedTypeSymbol;
-                    }
+            FromId = sourceId,
+            ToId = targetId,
+            Type = EdgeType.NavigatesTo,
+            Confidence = EdgeConfidence.Verified,
+            Metadata = metadata
+        });
 
-                    // Keep walking up the chain
-                    return ResolveEntityTypeFromChain(chainInvocation);
-                }
-
-                // Check if the invocation itself has the method info
-                var invocationSymbol = _model.GetSymbolInfo(chainInvocation).Symbol as IMethodSymbol;
-                if (invocationSymbol is not null)
-                {
-                    // Check containing type for EntityTypeBuilder<T>
-                    if (invocationSymbol.ContainingType is { IsGenericType: true } containingType &&
-                        containingType.Name == "EntityTypeBuilder" &&
-                        containingType.TypeArguments.Length == 1 &&
-                        containingType.TypeArguments[0] is INamedTypeSymbol entityType)
-                    {
-                        return entityType;
-                    }
-                }
-            }
-
-            return null;
-        }
-
-        private static string? ExtractPropertyNameFromLambda(ExpressionSyntax expression)
-        {
-            if (expression is SimpleLambdaExpressionSyntax lambda)
-            {
-                if (lambda.Body is MemberAccessExpressionSyntax memberAccess)
-                {
-                    return memberAccess.Name.Identifier.Text;
-                }
-            }
-            else if (expression is ParenthesizedLambdaExpressionSyntax parenLambda)
-            {
-                if (parenLambda.Body is MemberAccessExpressionSyntax memberAccess)
-                {
-                    return memberAccess.Name.Identifier.Text;
-                }
-            }
-
-            return null;
-        }
-
-        private static bool IsDbContextSubclass(INamedTypeSymbol symbol)
-        {
-            var baseType = symbol.BaseType;
-            while (baseType is not null)
-            {
-                if (baseType.Name == "DbContext" &&
-                    baseType.ContainingNamespace?.ToDisplayString() == "Microsoft.EntityFrameworkCore")
-                {
-                    return true;
-                }
-                baseType = baseType.BaseType;
-            }
-            return false;
-        }
-
-        private static bool IsDbSetType(INamedTypeSymbol type)
-        {
-            return type is { IsGenericType: true, Name: "DbSet" } &&
-                   type.ContainingNamespace?.ToDisplayString() == "Microsoft.EntityFrameworkCore";
-        }
-
-        private static bool ImplementsEntityTypeConfiguration(INamedTypeSymbol symbol, out INamedTypeSymbol? entityType)
-        {
-            entityType = null;
-            foreach (var iface in symbol.AllInterfaces)
-            {
-                if (iface is { IsGenericType: true, Name: "IEntityTypeConfiguration" } &&
-                    iface.ContainingNamespace?.ToDisplayString() == "Microsoft.EntityFrameworkCore" &&
-                    iface.TypeArguments.Length == 1 &&
-                    iface.TypeArguments[0] is INamedTypeSymbol et)
-                {
-                    entityType = et;
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        private void EnsureExternalNode(INamedTypeSymbol symbol, string id)
-        {
-            if (_knownNodeIds.Contains(id))
-                return;
-            if (!_seenExternalIds.Add(id))
-                return;
-
-            _externalNodes.Add(new GraphNode
-            {
-                Id = id,
-                Name = symbol.Name,
-                Kind = NodeKind.Type,
-                FilePath = string.Empty,
-                Signature = symbol.ToDisplayString(),
-                Accessibility = SyntaxPass.MapAccessibility(symbol.DeclaredAccessibility),
-                ContainingNamespaceId = symbol.ContainingNamespace is { IsGlobalNamespace: false }
-                    ? SyntaxPass.GetSymbolId(symbol.ContainingNamespace)
-                    : null
-            });
-        }
+        externalNodes.AddSymbol(sourceEntity, sourceId);
+        externalNodes.AddSymbol(targetEntity, targetId);
     }
 
-    private static string GetRelativePath(string absolutePath, string solutionRoot)
+    private static void EmitConventionTableMapping(
+        INamedTypeSymbol entityType,
+        List<GraphEdge> edges,
+        ExternalNodeCollector externalNodes)
     {
-        if (string.IsNullOrEmpty(absolutePath) || string.IsNullOrEmpty(solutionRoot))
-            return absolutePath ?? string.Empty;
-        try
+        var entityId = SyntaxPass.GetSymbolId(entityType);
+        edges.Add(new GraphEdge
         {
-            return Path.GetRelativePath(solutionRoot, absolutePath);
-        }
-        catch
+            FromId = entityId,
+            ToId = $"[Table:{entityType.Name}]",
+            Type = EdgeType.MapsToTable,
+            Confidence = EdgeConfidence.Inferred,
+            Metadata = new Dictionary<string, string>
+            {
+                ["tableName"] = entityType.Name
+            }
+        });
+
+        externalNodes.AddSymbol(entityType, entityId);
+    }
+
+    private static INamedTypeSymbol? ResolveEntityTypeFromChain(ExpressionSyntax expression, SemanticModel model)
+    {
+        SyntaxNode? current = expression;
+        while (current is not null)
         {
-            return absolutePath;
+            if (current is InvocationExpressionSyntax invocation)
+            {
+                if (invocation.Expression is MemberAccessExpressionSyntax { Name: GenericNameSyntax genericName } memberAccess)
+                {
+                    if (genericName.Identifier.Text == "Entity" && genericName.TypeArgumentList.Arguments.Count == 1)
+                    {
+                        return PassUtilities.ResolveNamedType(model, genericName.TypeArgumentList.Arguments[0]);
+                    }
+
+                    current = memberAccess.Expression;
+                    continue;
+                }
+
+                var invocationSymbol = model.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
+                if (invocationSymbol?.ContainingType is { IsGenericType: true, Name: "EntityTypeBuilder" } containingType &&
+                    containingType.TypeArguments.Length == 1 &&
+                    containingType.TypeArguments[0] is INamedTypeSymbol entityType)
+                {
+                    return entityType;
+                }
+            }
+
+            current = current is MemberAccessExpressionSyntax memberExpression
+                ? memberExpression.Expression
+                : null;
         }
+
+        return null;
+    }
+
+    private static string? ExtractPropertyNameFromLambda(ExpressionSyntax expression)
+    {
+        return expression switch
+        {
+            SimpleLambdaExpressionSyntax { Body: MemberAccessExpressionSyntax memberAccess } => memberAccess.Name.Identifier.Text,
+            ParenthesizedLambdaExpressionSyntax { Body: MemberAccessExpressionSyntax memberAccess } => memberAccess.Name.Identifier.Text,
+            _ => null
+        };
+    }
+
+    private static bool IsDbContextSubclass(INamedTypeSymbol symbol)
+    {
+        var baseType = symbol.BaseType;
+        while (baseType is not null)
+        {
+            if (baseType.Name == "DbContext" &&
+                baseType.ContainingNamespace?.ToDisplayString() == "Microsoft.EntityFrameworkCore")
+            {
+                return true;
+            }
+
+            baseType = baseType.BaseType;
+        }
+
+        return false;
+    }
+
+    private static bool IsDbSetType(INamedTypeSymbol type)
+    {
+        return type is { IsGenericType: true, Name: "DbSet" }
+            && type.ContainingNamespace?.ToDisplayString() == "Microsoft.EntityFrameworkCore";
+    }
+
+    private static bool ImplementsEntityTypeConfiguration(INamedTypeSymbol symbol, out INamedTypeSymbol entityType)
+    {
+        foreach (var iface in symbol.AllInterfaces)
+        {
+            if (iface is { IsGenericType: true, Name: "IEntityTypeConfiguration" } &&
+                iface.ContainingNamespace?.ToDisplayString() == "Microsoft.EntityFrameworkCore" &&
+                iface.TypeArguments.Length == 1 &&
+                iface.TypeArguments[0] is INamedTypeSymbol configuredEntityType)
+            {
+                entityType = configuredEntityType;
+                return true;
+            }
+        }
+
+        entityType = null!;
+        return false;
     }
 }

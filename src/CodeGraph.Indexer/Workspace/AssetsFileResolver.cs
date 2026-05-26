@@ -12,7 +12,7 @@ public static class AssetsFileResolver
     public static IReadOnlyList<ResolvedPackage> Resolve(string projectDirectory, string targetFramework)
     {
         var key = (projectDirectory, targetFramework);
-        return s_cache.GetOrAdd(key, static k => ResolveCore(k.Directory, k.Framework));
+        return s_cache.GetOrAdd(key, static item => ResolveCore(item.Directory, item.Framework));
     }
 
     internal static void ClearCache() => s_cache.Clear();
@@ -26,19 +26,9 @@ public static class AssetsFileResolver
             return Array.Empty<ResolvedPackage>();
         }
 
-        var json = File.ReadAllText(assetsPath);
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-
-        // Get package folders
-        var packageFolders = new List<string>();
-        if (root.TryGetProperty("packageFolders", out var foldersEl))
-        {
-            foreach (var folder in foldersEl.EnumerateObject())
-            {
-                packageFolders.Add(folder.Name);
-            }
-        }
+        using var document = JsonDocument.Parse(File.ReadAllText(assetsPath));
+        var root = document.RootElement;
+        var packageFolders = GetPackageFolders(root);
 
         if (packageFolders.Count == 0)
         {
@@ -46,83 +36,116 @@ public static class AssetsFileResolver
             return Array.Empty<ResolvedPackage>();
         }
 
-        // Find the matching target
-        if (!root.TryGetProperty("targets", out var targetsEl))
+        if (!root.TryGetProperty("targets", out var targetsElement))
             return Array.Empty<ResolvedPackage>();
 
-        // Try exact match first, then prefix match
-        JsonElement? targetEl = null;
-        foreach (var target in targetsEl.EnumerateObject())
+        var targetElement = FindTarget(targetsElement, targetFramework);
+        return targetElement is null
+            ? Array.Empty<ResolvedPackage>()
+            : ResolvePackages(targetElement.Value, packageFolders);
+    }
+
+    private static List<string> GetPackageFolders(JsonElement root)
+    {
+        if (!root.TryGetProperty("packageFolders", out var foldersElement))
+            return new List<string>();
+
+        return foldersElement.EnumerateObject()
+            .Select(folder => folder.Name)
+            .ToList();
+    }
+
+    private static JsonElement? FindTarget(JsonElement targetsElement, string targetFramework)
+    {
+        foreach (var target in targetsElement.EnumerateObject())
         {
             if (target.Name.Equals(targetFramework, StringComparison.OrdinalIgnoreCase)
                 || target.Name.StartsWith(targetFramework, StringComparison.OrdinalIgnoreCase))
             {
-                targetEl = target.Value;
-                break;
+                return target.Value;
             }
         }
 
-        if (targetEl == null)
-        {
-            // Fall back to first target
-            foreach (var target in targetsEl.EnumerateObject())
-            {
-                targetEl = target.Value;
-                break;
-            }
-        }
+        foreach (var target in targetsElement.EnumerateObject())
+            return target.Value;
 
-        if (targetEl == null)
-            return Array.Empty<ResolvedPackage>();
+        return null;
+    }
 
+    private static IReadOnlyList<ResolvedPackage> ResolvePackages(
+        JsonElement targetElement,
+        IReadOnlyList<string> packageFolders)
+    {
         var results = new List<ResolvedPackage>();
 
-        foreach (var package in targetEl.Value.EnumerateObject())
+        foreach (var package in targetElement.EnumerateObject())
         {
-            // package.Name is like "Microsoft.CodeAnalysis.CSharp/5.3.0"
-            var parts = package.Name.Split('/', 2);
-            if (parts.Length != 2) continue;
-
-            var packageId = parts[0];
-            var version = parts[1];
-
-            if (!package.Value.TryGetProperty("compile", out var compileEl))
+            if (!TryParsePackageName(package.Name, out var packageId, out var version))
                 continue;
 
-            foreach (var dll in compileEl.EnumerateObject())
+            if (!package.Value.TryGetProperty("compile", out var compileElement))
+                continue;
+
+            foreach (var compileEntry in compileElement.EnumerateObject())
             {
-                var dllRelative = dll.Name;
-                if (!dllRelative.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                // Skip the placeholder "_._"
-                if (dllRelative.EndsWith("_._", StringComparison.Ordinal))
+                var dllRelativePath = compileEntry.Name;
+                if (!IsCompileDll(dllRelativePath))
                     continue;
 
-                // Try each package folder to find the actual DLL
-                string? resolvedPath = null;
-                foreach (var folder in packageFolders)
-                {
-                    var candidate = Path.Combine(folder, packageId.ToLowerInvariant(),
-                        version, dllRelative.Replace('/', Path.DirectorySeparatorChar));
-                    if (File.Exists(candidate))
-                    {
-                        resolvedPath = candidate;
-                        break;
-                    }
-                }
-
-                if (resolvedPath != null)
-                {
-                    results.Add(new ResolvedPackage(packageId, version, resolvedPath));
-                }
-                else
+                var resolvedPath = TryResolveDllPath(packageFolders, packageId, version, dllRelativePath);
+                if (resolvedPath is null)
                 {
                     Console.Error.WriteLine(
-                        $"Warning: DLL not found in package cache: {packageId}/{version} -> {dllRelative}");
+                        $"Warning: DLL not found in package cache: {packageId}/{version} -> {dllRelativePath}");
+                    continue;
                 }
+
+                results.Add(new ResolvedPackage(packageId, version, resolvedPath));
             }
         }
 
         return results;
+    }
+
+    private static bool TryParsePackageName(string packageName, out string packageId, out string version)
+    {
+        var parts = packageName.Split('/', 2);
+        if (parts.Length == 2)
+        {
+            packageId = parts[0];
+            version = parts[1];
+            return true;
+        }
+
+        packageId = string.Empty;
+        version = string.Empty;
+        return false;
+    }
+
+    private static bool IsCompileDll(string relativePath)
+    {
+        return relativePath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+            && !relativePath.EndsWith("_._", StringComparison.Ordinal);
+    }
+
+    private static string? TryResolveDllPath(
+        IReadOnlyList<string> packageFolders,
+        string packageId,
+        string version,
+        string dllRelativePath)
+    {
+        foreach (var packageFolder in packageFolders)
+        {
+            var candidate = Path.Combine(
+                packageFolder,
+                packageId.ToLowerInvariant(),
+                version,
+                dllRelativePath.Replace('/', Path.DirectorySeparatorChar));
+
+            if (File.Exists(candidate))
+                return candidate;
+        }
+
+        return null;
     }
 }

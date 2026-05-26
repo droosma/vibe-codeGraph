@@ -14,58 +14,10 @@ public static class CompilationFactory
         string[]? preprocessorSymbols = null,
         MetadataReferenceCache? referenceCache = null)
     {
-        var parseOptions = new CSharpParseOptions(
-            languageVersion: ParseLangVersion(langVersion),
-            preprocessorSymbols: preprocessorSymbols);
-
-        var syntaxTrees = new List<SyntaxTree>();
-        foreach (var file in sourceFiles)
-        {
-            if (!File.Exists(file))
-            {
-                Console.Error.WriteLine($"Warning: Source file not found, skipping: {file}");
-                continue;
-            }
-
-            var text = File.ReadAllText(file);
-            var tree = CSharpSyntaxTree.ParseText(
-                text,
-                parseOptions,
-                path: file);
-            syntaxTrees.Add(tree);
-        }
-
-        var references = new List<MetadataReference>();
-        foreach (var dllPath in referenceDllPaths)
-        {
-            if (!File.Exists(dllPath))
-            {
-                Console.Error.WriteLine($"Warning: Reference DLL not found, skipping: {dllPath}");
-                continue;
-            }
-
-            try
-            {
-                if (referenceCache != null)
-                {
-                    references.Add(referenceCache.GetOrCreate(dllPath));
-                }
-                else
-                {
-                    references.Add(MetadataReference.CreateFromFile(dllPath));
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"Warning: Could not load reference {dllPath}: {ex.Message}");
-            }
-        }
-
-        var compilationOptions = new CSharpCompilationOptions(
-            OutputKind.DynamicallyLinkedLibrary,
-            nullableContextOptions: nullableEnabled
-                ? NullableContextOptions.Enable
-                : NullableContextOptions.Disable);
+        var parseOptions = CreateParseOptions(langVersion, preprocessorSymbols);
+        var syntaxTrees = LoadSyntaxTrees(sourceFiles, parseOptions);
+        var references = LoadMetadataReferences(referenceDllPaths, referenceCache);
+        var compilationOptions = CreateCompilationOptions(nullableEnabled);
 
         return CSharpCompilation.Create(
             assemblyName,
@@ -82,24 +34,81 @@ public static class CompilationFactory
         bool nullableEnabled = true,
         string[]? preprocessorSymbols = null)
     {
-        var parseOptions = new CSharpParseOptions(
-            languageVersion: ParseLangVersion(langVersion),
-            preprocessorSymbols: preprocessorSymbols);
-
-        var syntaxTrees = sources.Select(s =>
-            CSharpSyntaxTree.ParseText(s.SourceText, parseOptions, path: s.FileName));
-
-        var compilationOptions = new CSharpCompilationOptions(
-            OutputKind.DynamicallyLinkedLibrary,
-            nullableContextOptions: nullableEnabled
-                ? NullableContextOptions.Enable
-                : NullableContextOptions.Disable);
+        var parseOptions = CreateParseOptions(langVersion, preprocessorSymbols);
+        var syntaxTrees = sources
+            .Select(source => CSharpSyntaxTree.ParseText(source.SourceText, parseOptions, path: source.FileName));
 
         return CSharpCompilation.Create(
             assemblyName,
             syntaxTrees,
             references,
-            compilationOptions);
+            CreateCompilationOptions(nullableEnabled));
+    }
+
+    private static CSharpParseOptions CreateParseOptions(string? langVersion, string[]? preprocessorSymbols)
+    {
+        return new CSharpParseOptions(
+            languageVersion: ParseLangVersion(langVersion),
+            preprocessorSymbols: preprocessorSymbols);
+    }
+
+    private static CSharpCompilationOptions CreateCompilationOptions(bool nullableEnabled)
+    {
+        return new CSharpCompilationOptions(
+            OutputKind.DynamicallyLinkedLibrary,
+            nullableContextOptions: nullableEnabled
+                ? NullableContextOptions.Enable
+                : NullableContextOptions.Disable);
+    }
+
+    private static List<SyntaxTree> LoadSyntaxTrees(
+        IEnumerable<string> sourceFiles,
+        CSharpParseOptions parseOptions)
+    {
+        var syntaxTrees = new List<SyntaxTree>();
+
+        foreach (var sourceFile in sourceFiles)
+        {
+            if (!File.Exists(sourceFile))
+            {
+                Console.Error.WriteLine($"Warning: Source file not found, skipping: {sourceFile}");
+                continue;
+            }
+
+            var sourceText = File.ReadAllText(sourceFile);
+            syntaxTrees.Add(CSharpSyntaxTree.ParseText(sourceText, parseOptions, path: sourceFile));
+        }
+
+        return syntaxTrees;
+    }
+
+    private static List<MetadataReference> LoadMetadataReferences(
+        IEnumerable<string> referenceDllPaths,
+        MetadataReferenceCache? referenceCache)
+    {
+        var references = new List<MetadataReference>();
+
+        foreach (var dllPath in referenceDllPaths)
+        {
+            if (!File.Exists(dllPath))
+            {
+                Console.Error.WriteLine($"Warning: Reference DLL not found, skipping: {dllPath}");
+                continue;
+            }
+
+            try
+            {
+                references.Add(referenceCache is null
+                    ? MetadataReference.CreateFromFile(dllPath)
+                    : referenceCache.GetOrCreate(dllPath));
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Warning: Could not load reference {dllPath}: {ex.Message}");
+            }
+        }
+
+        return references;
     }
 
     private static LanguageVersion ParseLangVersion(string? langVersion)
@@ -116,11 +125,12 @@ public static class CompilationFactory
         if (langVersion.Equals("default", StringComparison.OrdinalIgnoreCase))
             return LanguageVersion.Default;
 
-        // Try parsing numeric versions like "12.0", "11"
-        var cleaned = langVersion.Replace(".0", "");
-        if (Enum.TryParse<LanguageVersion>($"CSharp{cleaned.Replace(".", "")}", true, out var parsed))
-            return parsed;
-
-        return LanguageVersion.Default;
+        var cleanedVersion = langVersion.Replace(".0", "", StringComparison.Ordinal);
+        return Enum.TryParse<LanguageVersion>(
+            $"CSharp{cleanedVersion.Replace(".", "", StringComparison.Ordinal)}",
+            ignoreCase: true,
+            out var parsed)
+            ? parsed
+            : LanguageVersion.Default;
     }
 }

@@ -18,217 +18,208 @@ internal enum WriteAction
 /// </summary>
 internal static class AgentSkillWriter
 {
-    /// <summary>
-    /// Writes skill files for the specified agent kinds. Returns a list of actions taken.
-    /// </summary>
     public static async Task<List<WriteResult>> WriteAsync(
-        string repoRoot, IEnumerable<AgentKind> agents, bool force)
+        string repoRoot,
+        IEnumerable<AgentKind> agents,
+        bool force)
     {
+        var selectedAgents = agents.Distinct().ToList();
         var results = new List<WriteResult>();
 
-        foreach (var agent in agents.Distinct())
-        {
-            switch (agent)
-            {
-                case AgentKind.Claude:
-                    results.AddRange(await WriteClaudeFilesAsync(repoRoot, force));
-                    break;
-                case AgentKind.Copilot:
-                    results.Add(await AppendCopilotInstructionsAsync(repoRoot, force));
-                    break;
-                case AgentKind.OpenCode:
-                    results.Add(await AppendOpenCodeAgentsAsync(repoRoot, force));
-                    break;
-                case AgentKind.Cursor:
-                    results.Add(await WriteCursorRuleAsync(repoRoot, force));
-                    break;
-            }
-        }
+        foreach (var agent in selectedAgents)
+            results.AddRange(await WriteAgentFilesAsync(repoRoot, agent, force).ConfigureAwait(false));
 
-        // Always write generic instructions
-        results.Add(await WriteGenericInstructionsAsync(repoRoot, force));
+        results.Add(await WriteGenericInstructionsAsync(repoRoot, force).ConfigureAwait(false));
+        results.AddRange(await WriteAgentDefinitionsAsync(repoRoot, force).ConfigureAwait(false));
 
-        // Always write agent definitions (generic fallback)
-        results.AddRange(await WriteAgentDefinitionsAsync(repoRoot, force));
-
-        // Write Claude-specific agent definitions when Claude is selected
-        if (agents.Distinct().Contains(AgentKind.Claude))
-            results.AddRange(await WriteClaudeAgentDefinitionsAsync(repoRoot, force));
+        if (selectedAgents.Contains(AgentKind.Claude))
+            results.AddRange(await WriteClaudeAgentDefinitionsAsync(repoRoot, force).ConfigureAwait(false));
 
         return results;
     }
 
-    /// <summary>
-    /// Ensures .codegraph/ is listed in .gitignore. Returns the write result.
-    /// </summary>
     public static async Task<WriteResult> EnsureGitignoreEntryAsync(string repoRoot)
     {
         const string entry = ".codegraph/";
         var gitignorePath = Path.Combine(repoRoot, ".gitignore");
 
-        if (File.Exists(gitignorePath))
+        if (!File.Exists(gitignorePath))
         {
-            var content = await ReadAllTextAsync(gitignorePath);
-            if (content.Contains(entry))
-                return new WriteResult(".gitignore", WriteAction.AlreadyPresent);
-
-            var newline = content.Length > 0 && !content.EndsWith("\n") ? "\n" : "";
-            await AppendAllTextAsync(gitignorePath, $"{newline}{entry}\n");
-            return new WriteResult(".gitignore", WriteAction.Appended);
+            await WriteAllTextAsync(gitignorePath, $"{entry}\n").ConfigureAwait(false);
+            return new WriteResult(".gitignore", WriteAction.Created);
         }
 
-        await WriteAllTextAsync(gitignorePath, $"{entry}\n");
-        return new WriteResult(".gitignore", WriteAction.Created);
+        var content = await ReadAllTextAsync(gitignorePath).ConfigureAwait(false);
+        if (content.Contains(entry, StringComparison.Ordinal))
+            return new WriteResult(".gitignore", WriteAction.AlreadyPresent);
+
+        await AppendAllTextAsync(gitignorePath, BuildAppendContent(content, $"{entry}\n")).ConfigureAwait(false);
+        return new WriteResult(".gitignore", WriteAction.Appended);
     }
 
-    private static async Task<List<WriteResult>> WriteClaudeFilesAsync(string repoRoot, bool force)
+    private static Task<List<WriteResult>> WriteAgentFilesAsync(string repoRoot, AgentKind agent, bool force)
     {
-        var results = new List<WriteResult>();
-
-        // SKILL.md
-        var skillDir = Path.Combine(repoRoot, ".claude", "skills", "codegraph");
-        var skillPath = Path.Combine(skillDir, "SKILL.md");
-        results.Add(await WriteFileAsync(skillPath, AgentTemplates.ClaudeSkillMd, ".claude/skills/codegraph/SKILL.md", force));
-
-        // query-wrapper.sh
-        var scriptsDir = Path.Combine(skillDir, "scripts");
-        var wrapperPath = Path.Combine(scriptsDir, "query-wrapper.sh");
-        results.Add(await WriteFileAsync(wrapperPath, AgentTemplates.ClaudeQueryWrapperSh, ".claude/skills/codegraph/scripts/query-wrapper.sh", force));
-
-        return results;
-    }
-
-    private static async Task<WriteResult> AppendCopilotInstructionsAsync(string repoRoot, bool force)
-    {
-        var dir = Path.Combine(repoRoot, ".github");
-        var path = Path.Combine(dir, "copilot-instructions.md");
-
-        if (File.Exists(path))
+        return agent switch
         {
-            var content = await ReadAllTextAsync(path);
-            if (content.Contains(AgentTemplates.AppendMarker))
-                return new WriteResult(".github/copilot-instructions.md", WriteAction.AlreadyPresent);
+            AgentKind.Claude => WriteClaudeFilesAsync(repoRoot, force),
+            AgentKind.Copilot => WriteSingleResultAsync(AppendCopilotInstructionsAsync(repoRoot)),
+            AgentKind.OpenCode => WriteSingleResultAsync(AppendOpenCodeAgentsAsync(repoRoot)),
+            AgentKind.Cursor => WriteSingleResultAsync(WriteCursorRuleAsync(repoRoot, force)),
+            _ => Task.FromResult(new List<WriteResult>())
+        };
+    }
 
-            if (!force)
-            {
-                var newline = content.Length > 0 && !content.EndsWith("\n") ? "\n" : "";
-                await AppendAllTextAsync(path, newline + AgentTemplates.CopilotInstructionsSection);
-                return new WriteResult(".github/copilot-instructions.md", WriteAction.Appended);
-            }
-        }
-
-        Directory.CreateDirectory(dir);
-        if (!File.Exists(path))
+    private static async Task<List<WriteResult>> WriteSingleResultAsync(Task<WriteResult> resultTask)
+    {
+        return new List<WriteResult>
         {
-            await WriteAllTextAsync(path, AgentTemplates.CopilotInstructionsSection.TrimStart());
-            return new WriteResult(".github/copilot-instructions.md", WriteAction.Created);
-        }
-
-        // force + exists but no marker — append
-        var existing = await ReadAllTextAsync(path);
-        var nl = existing.Length > 0 && !existing.EndsWith("\n") ? "\n" : "";
-        await AppendAllTextAsync(path, nl + AgentTemplates.CopilotInstructionsSection);
-        return new WriteResult(".github/copilot-instructions.md", WriteAction.Appended);
+            await resultTask.ConfigureAwait(false)
+        };
     }
 
-    private static async Task<WriteResult> AppendOpenCodeAgentsAsync(string repoRoot, bool force)
+    private static Task<List<WriteResult>> WriteClaudeFilesAsync(string repoRoot, bool force)
     {
-        var path = Path.Combine(repoRoot, "AGENTS.md");
-
-        if (File.Exists(path))
-        {
-            var content = await ReadAllTextAsync(path);
-            if (content.Contains(AgentTemplates.AppendMarker))
-                return new WriteResult("AGENTS.md", WriteAction.AlreadyPresent);
-
-            var newline = content.Length > 0 && !content.EndsWith("\n") ? "\n" : "";
-            await AppendAllTextAsync(path, newline + AgentTemplates.OpenCodeAgentsSection);
-            return new WriteResult("AGENTS.md", WriteAction.Appended);
-        }
-
-        await WriteAllTextAsync(path, AgentTemplates.OpenCodeAgentsSection.TrimStart());
-        return new WriteResult("AGENTS.md", WriteAction.Created);
+        return WriteTemplateFilesAsync(repoRoot, AgentTemplates.ClaudeSkillFiles, force);
     }
 
-    private static async Task<WriteResult> WriteCursorRuleAsync(string repoRoot, bool force)
+    private static Task<WriteResult> AppendCopilotInstructionsAsync(string repoRoot)
     {
-        var dir = Path.Combine(repoRoot, ".cursor", "rules");
-        var path = Path.Combine(dir, "codegraph.md");
-        return await WriteFileAsync(path, AgentTemplates.CursorRuleMd, ".cursor/rules/codegraph.md", force);
-    }
-
-    private static async Task<WriteResult> WriteGenericInstructionsAsync(string repoRoot, bool force)
-    {
-        var dir = Path.Combine(repoRoot, ".codegraph");
-        var path = Path.Combine(dir, "INSTRUCTIONS.md");
-        return await WriteFileAsync(path, AgentTemplates.GenericInstructionsMd, ".codegraph/INSTRUCTIONS.md", force);
-    }
-
-    private static async Task<List<WriteResult>> WriteAgentDefinitionsAsync(string repoRoot, bool force)
-    {
-        return await WriteAgentDefinitionSetAsync(
+        return AppendSectionAsync(
             repoRoot,
-            Path.Combine(".codegraph", "agents"),
-            ".codegraph/agents",
+            ".github/copilot-instructions.md",
+            AgentTemplates.CopilotInstructionsSection);
+    }
+
+    private static Task<WriteResult> AppendOpenCodeAgentsAsync(string repoRoot)
+    {
+        return AppendSectionAsync(
+            repoRoot,
+            "AGENTS.md",
+            AgentTemplates.OpenCodeAgentsSection);
+    }
+
+    private static Task<WriteResult> WriteCursorRuleAsync(string repoRoot, bool force)
+    {
+        return WriteTemplateAsync(
+            repoRoot,
+            ".cursor/rules/codegraph.md",
+            AgentTemplates.CursorRuleMd,
             force);
     }
 
-    private static async Task<List<WriteResult>> WriteClaudeAgentDefinitionsAsync(string repoRoot, bool force)
+    private static Task<WriteResult> WriteGenericInstructionsAsync(string repoRoot, bool force)
     {
-        return await WriteAgentDefinitionSetAsync(
+        return WriteTemplateAsync(
             repoRoot,
-            Path.Combine(".claude", "agents"),
-            ".claude/agents",
+            ".codegraph/INSTRUCTIONS.md",
+            AgentTemplates.GenericInstructionsMd,
             force);
+    }
+
+    private static Task<List<WriteResult>> WriteAgentDefinitionsAsync(string repoRoot, bool force)
+    {
+        return WriteAgentDefinitionSetAsync(repoRoot, ".codegraph/agents", force);
+    }
+
+    private static Task<List<WriteResult>> WriteClaudeAgentDefinitionsAsync(string repoRoot, bool force)
+    {
+        return WriteAgentDefinitionSetAsync(repoRoot, ".claude/agents", force);
     }
 
     private static async Task<List<WriteResult>> WriteAgentDefinitionSetAsync(
         string repoRoot,
         string relativeDirectory,
-        string relativePathPrefix,
         bool force)
     {
         var results = new List<WriteResult>();
-        var definitionRoot = Path.Combine(repoRoot, relativeDirectory);
 
-        var definitions = new[]
+        foreach (var (fileName, content) in AgentTemplates.AgentDefinitionFiles)
         {
-            (FileName: "codegraph-architecture.md", Content: AgentTemplates.ArchitectureAgentMd),
-            (FileName: "codegraph-impact.md", Content: AgentTemplates.ImpactAgentMd),
-            (FileName: "codegraph-review.md", Content: AgentTemplates.CodeReviewAgentMd)
-        };
-
-        foreach (var definition in definitions)
-        {
-            var fullPath = Path.Combine(definitionRoot, definition.FileName);
-            var relativePath = $"{relativePathPrefix}/{definition.FileName}";
-            results.Add(await WriteFileAsync(fullPath, definition.Content, relativePath, force));
+            var relativePath = $"{relativeDirectory}/{fileName}";
+            results.Add(await WriteTemplateAsync(repoRoot, relativePath, content, force).ConfigureAwait(false));
         }
 
         return results;
     }
 
-    private static async Task<WriteResult> WriteFileAsync(
-        string fullPath, string content, string relativePath, bool force)
+    private static async Task<List<WriteResult>> WriteTemplateFilesAsync(
+        string repoRoot,
+        IReadOnlyList<(string RelativePath, string Content)> templates,
+        bool force)
     {
+        var results = new List<WriteResult>(templates.Count);
+
+        foreach (var (relativePath, content) in templates)
+            results.Add(await WriteTemplateAsync(repoRoot, relativePath, content, force).ConfigureAwait(false));
+
+        return results;
+    }
+
+    private static async Task<WriteResult> AppendSectionAsync(
+        string repoRoot,
+        string relativePath,
+        string sectionContent)
+    {
+        var fullPath = ToFullPath(repoRoot, relativePath);
+        EnsureDirectoryExists(fullPath);
+
+        if (!File.Exists(fullPath))
+        {
+            await WriteAllTextAsync(fullPath, sectionContent.TrimStart()).ConfigureAwait(false);
+            return new WriteResult(relativePath, WriteAction.Created);
+        }
+
+        var existingContent = await ReadAllTextAsync(fullPath).ConfigureAwait(false);
+        if (existingContent.Contains(AgentTemplates.AppendMarker, StringComparison.Ordinal))
+            return new WriteResult(relativePath, WriteAction.AlreadyPresent);
+
+        await AppendAllTextAsync(fullPath, BuildAppendContent(existingContent, sectionContent)).ConfigureAwait(false);
+        return new WriteResult(relativePath, WriteAction.Appended);
+    }
+
+    private static async Task<WriteResult> WriteTemplateAsync(
+        string repoRoot,
+        string relativePath,
+        string content,
+        bool force)
+    {
+        var fullPath = ToFullPath(repoRoot, relativePath);
         if (File.Exists(fullPath) && !force)
             return new WriteResult(relativePath, WriteAction.Skipped);
 
-        var dir = Path.GetDirectoryName(fullPath);
-        if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
-
-        await WriteAllTextAsync(fullPath, content);
+        EnsureDirectoryExists(fullPath);
+        await WriteAllTextAsync(fullPath, content).ConfigureAwait(false);
         return new WriteResult(relativePath, WriteAction.Created);
     }
 
-    // Polyfills for netstandard2.0 / net8.0 compatibility
+    private static string BuildAppendContent(string existingContent, string appendedContent)
+    {
+        var newline = existingContent.Length > 0 && !existingContent.EndsWith("\n", StringComparison.Ordinal)
+            ? "\n"
+            : string.Empty;
+
+        return newline + appendedContent;
+    }
+
+    private static string ToFullPath(string repoRoot, string relativePath)
+    {
+        var segments = relativePath.Split('/');
+        return Path.Combine(new[] { repoRoot }.Concat(segments).ToArray());
+    }
+
+    private static void EnsureDirectoryExists(string fullPath)
+    {
+        var directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
+    }
+
     private static async Task<string> ReadAllTextAsync(string path)
     {
 #if NETSTANDARD2_0
         return File.ReadAllText(path);
 #else
-        return await File.ReadAllTextAsync(path);
+        return await File.ReadAllTextAsync(path).ConfigureAwait(false);
 #endif
     }
 
@@ -238,7 +229,7 @@ internal static class AgentSkillWriter
         File.WriteAllText(path, content);
         await Task.CompletedTask;
 #else
-        await File.WriteAllTextAsync(path, content);
+        await File.WriteAllTextAsync(path, content).ConfigureAwait(false);
 #endif
     }
 
@@ -248,7 +239,7 @@ internal static class AgentSkillWriter
         File.AppendAllText(path, content);
         await Task.CompletedTask;
 #else
-        await File.AppendAllTextAsync(path, content);
+        await File.AppendAllTextAsync(path, content).ConfigureAwait(false);
 #endif
     }
 }

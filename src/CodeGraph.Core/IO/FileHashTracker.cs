@@ -10,6 +10,24 @@ namespace CodeGraph.Core.IO;
 /// </summary>
 public class FileHashTracker
 {
+    private const string UpsertFileHashesSql = """
+        INSERT INTO file_hashes (file_path, hash, last_indexed)
+        VALUES ($path, $hash, $ts)
+        ON CONFLICT(file_path) DO UPDATE SET
+            hash = excluded.hash,
+            last_indexed = excluded.last_indexed;
+        """;
+    private const string SelectFileHashesSql = "SELECT file_path, hash FROM file_hashes;";
+    private const string CreateFileHashesTableSql = """
+        CREATE TABLE IF NOT EXISTS file_hashes (
+            file_path TEXT PRIMARY KEY,
+            hash TEXT NOT NULL,
+            last_indexed TEXT NOT NULL
+        );
+        """;
+    private const string CheckFileHashesTableExistsSql =
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='file_hashes';";
+
     private readonly string _hashDbPath;
 
     public FileHashTracker(string graphDir)
@@ -44,38 +62,11 @@ public class FileHashTracker
     /// </summary>
     public async Task SaveHashesAsync(IReadOnlyDictionary<string, string> fileHashes)
     {
-        var connectionString = BuildConnectionString(SqliteOpenMode.ReadWriteCreate);
-
-        using var connection = new SqliteConnection(connectionString);
-        await connection.OpenAsync().ConfigureAwait(false);
-
+        using var connection = await OpenConnectionAsync(SqliteOpenMode.ReadWriteCreate).ConfigureAwait(false);
         await EnsureSchemaAsync(connection).ConfigureAwait(false);
 
         using var transaction = connection.BeginTransaction();
-
-        using var upsertCmd = connection.CreateCommand();
-        upsertCmd.CommandText = """
-            INSERT INTO file_hashes (file_path, hash, last_indexed)
-            VALUES ($path, $hash, $ts)
-            ON CONFLICT(file_path) DO UPDATE SET
-                hash = excluded.hash,
-                last_indexed = excluded.last_indexed;
-            """;
-
-        var pathParam = upsertCmd.Parameters.Add("$path", SqliteType.Text);
-        var hashParam = upsertCmd.Parameters.Add("$hash", SqliteType.Text);
-        var tsParam = upsertCmd.Parameters.Add("$ts", SqliteType.Text);
-
-        var now = DateTimeOffset.UtcNow.ToString("o");
-
-        foreach (var kvp in fileHashes)
-        {
-            pathParam.Value = NormalizePath(kvp.Key);
-            hashParam.Value = kvp.Value;
-            tsParam.Value = now;
-            await upsertCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-        }
-
+        await UpsertHashesAsync(connection, fileHashes).ConfigureAwait(false);
         transaction.Commit();
     }
 
@@ -88,25 +79,11 @@ public class FileHashTracker
         if (!File.Exists(_hashDbPath))
             return new Dictionary<string, string>();
 
-        var connectionString = BuildConnectionString(SqliteOpenMode.ReadOnly);
-
-        using var connection = new SqliteConnection(connectionString);
-        await connection.OpenAsync().ConfigureAwait(false);
-
+        using var connection = await OpenConnectionAsync(SqliteOpenMode.ReadOnly).ConfigureAwait(false);
         if (!await TableExistsAsync(connection).ConfigureAwait(false))
             return new Dictionary<string, string>();
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT file_path, hash FROM file_hashes;";
-
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
-        while (await reader.ReadAsync().ConfigureAwait(false))
-        {
-            result[reader.GetString(0)] = reader.GetString(1);
-        }
-
-        return result;
+        return await ReadHashesAsync(connection).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -118,40 +95,12 @@ public class FileHashTracker
     public async Task<FileChangeSet> DetectChangesAsync(IEnumerable<string> currentFiles)
     {
         var storedHashes = await LoadHashesAsync().ConfigureAwait(false);
-
         var added = new List<string>();
         var modified = new List<string>();
-
         var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var file in currentFiles)
-        {
-            var normalized = NormalizePath(file);
-            seenPaths.Add(normalized);
-
-            if (!storedHashes.TryGetValue(normalized, out var storedHash))
-            {
-                added.Add(file);
-            }
-            else
-            {
-                var currentHash = ComputeHash(file);
-                if (!string.Equals(currentHash, storedHash, StringComparison.OrdinalIgnoreCase))
-                {
-                    modified.Add(file);
-                }
-            }
-        }
-
-        var removed = new List<string>();
-        foreach (var kvp in storedHashes)
-        {
-            if (!seenPaths.Contains(kvp.Key))
-            {
-                removed.Add(kvp.Key);
-            }
-        }
-
+        CategorizeCurrentFiles(currentFiles, storedHashes, seenPaths, added, modified);
+        var removed = FindRemovedFiles(storedHashes, seenPaths);
         return new FileChangeSet(added, modified, removed);
     }
 
@@ -165,25 +114,102 @@ public class FileHashTracker
         }.ToString();
     }
 
+    private async Task<SqliteConnection> OpenConnectionAsync(SqliteOpenMode mode)
+    {
+        var connection = new SqliteConnection(BuildConnectionString(mode));
+        await connection.OpenAsync().ConfigureAwait(false);
+        return connection;
+    }
+
+    private static async Task UpsertHashesAsync(SqliteConnection connection, IReadOnlyDictionary<string, string> fileHashes)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = UpsertFileHashesSql;
+        command.Parameters.Add("$path", SqliteType.Text);
+        command.Parameters.Add("$hash", SqliteType.Text);
+        command.Parameters.Add("$ts", SqliteType.Text);
+
+        var indexedAt = DateTimeOffset.UtcNow.ToString("o");
+        foreach (var fileHash in fileHashes)
+        {
+            SetParameterValue(command, "$path", NormalizePath(fileHash.Key));
+            SetParameterValue(command, "$hash", fileHash.Value);
+            SetParameterValue(command, "$ts", indexedAt);
+            await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<IReadOnlyDictionary<string, string>> ReadHashesAsync(SqliteConnection connection)
+    {
+        var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        using var command = connection.CreateCommand();
+        command.CommandText = SelectFileHashesSql;
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+        while (await reader.ReadAsync().ConfigureAwait(false))
+            hashes[reader.GetString(0)] = reader.GetString(1);
+
+        return hashes;
+    }
+
+    private static void CategorizeCurrentFiles(
+        IEnumerable<string> currentFiles,
+        IReadOnlyDictionary<string, string> storedHashes,
+        ISet<string> seenPaths,
+        ICollection<string> added,
+        ICollection<string> modified)
+    {
+        foreach (var currentFile in currentFiles)
+        {
+            var normalizedPath = NormalizePath(currentFile);
+            seenPaths.Add(normalizedPath);
+
+            if (!storedHashes.TryGetValue(normalizedPath, out var storedHash))
+            {
+                added.Add(currentFile);
+                continue;
+            }
+
+            var currentHash = ComputeHash(currentFile);
+            if (!string.Equals(currentHash, storedHash, StringComparison.OrdinalIgnoreCase))
+                modified.Add(currentFile);
+        }
+    }
+
+    private static List<string> FindRemovedFiles(
+        IReadOnlyDictionary<string, string> storedHashes,
+        ISet<string> seenPaths)
+    {
+        var removed = new List<string>();
+
+        foreach (var storedHash in storedHashes)
+        {
+            if (!seenPaths.Contains(storedHash.Key))
+                removed.Add(storedHash.Key);
+        }
+
+        return removed;
+    }
+
     private static async Task EnsureSchemaAsync(SqliteConnection connection)
     {
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = """
-            CREATE TABLE IF NOT EXISTS file_hashes (
-                file_path TEXT PRIMARY KEY,
-                hash TEXT NOT NULL,
-                last_indexed TEXT NOT NULL
-            );
-            """;
-        await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        using var command = connection.CreateCommand();
+        command.CommandText = CreateFileHashesTableSql;
+        await command.ExecuteNonQueryAsync().ConfigureAwait(false);
     }
 
     private static async Task<bool> TableExistsAsync(SqliteConnection connection)
     {
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='file_hashes';";
-        var result = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+        using var command = connection.CreateCommand();
+        command.CommandText = CheckFileHashesTableExistsSql;
+        var result = await command.ExecuteScalarAsync().ConfigureAwait(false);
         return Convert.ToInt64(result) > 0;
+    }
+
+    private static void SetParameterValue(SqliteCommand command, string parameterName, object? value)
+    {
+        command.Parameters[parameterName].Value = value ?? DBNull.Value;
     }
 
     private static string NormalizePath(string path)
