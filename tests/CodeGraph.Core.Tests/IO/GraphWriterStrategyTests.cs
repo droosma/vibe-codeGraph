@@ -200,9 +200,13 @@ public class GraphWriterStrategyTests : IDisposable
     [Fact]
     public async Task WriteAsync_SanitizesInvalidFileNameChars()
     {
+        var hardcodedOnlyInvalidChar = new[] { '<', '>', ':', '"', '|', '?', '*' }
+            .FirstOrDefault(c => !Path.GetInvalidFileNameChars().Contains(c));
+        var invalidChar = hardcodedOnlyInvalidChar == default ? '<' : hardcodedOnlyInvalidChar;
+
         var nodes = new List<GraphNode>
         {
-            new() { Id = "Bad<Name>.Class1", Name = "Class1", Kind = NodeKind.Type },
+            new() { Id = $"Bad{invalidChar}Name.Class1", Name = "Class1", Kind = NodeKind.Type },
         };
         var edges = new List<GraphEdge>();
 
@@ -215,8 +219,7 @@ public class GraphWriterStrategyTests : IDisposable
             .ToList();
 
         Assert.Single(files);
-        Assert.DoesNotContain("<", files[0]);
-        Assert.DoesNotContain(">", files[0]);
+        Assert.DoesNotContain(invalidChar.ToString(), files[0]);
     }
 
     [Fact]
@@ -308,6 +311,36 @@ public class GraphWriterStrategyTests : IDisposable
         await writer.WriteAsync(_outputDir, nodes, Array.Empty<GraphEdge>(), MakeMetadata());
 
         Assert.True(File.Exists(Path.Combine(_outputDir, "SingleSegment.json")));
+    }
+
+    [Fact]
+    public async Task WriteAsync_LeadingDotId_ByProject_UsesWholeId()
+    {
+        var nodes = new List<GraphNode>
+        {
+            new() { Id = ".Leading", Name = "Leading", Kind = NodeKind.Type }
+        };
+
+        var writer = new GraphWriter(SplitFileStrategy.ByProject);
+        await writer.WriteAsync(_outputDir, nodes, Array.Empty<GraphEdge>(), MakeMetadata());
+
+        Assert.True(File.Exists(Path.Combine(_outputDir, ".Leading.json")));
+        Assert.False(File.Exists(Path.Combine(_outputDir, "_default.json")));
+    }
+
+    [Fact]
+    public async Task WriteAsync_LeadingDotId_ByNamespace_UsesWholeId()
+    {
+        var nodes = new List<GraphNode>
+        {
+            new() { Id = ".Leading", Name = "Leading", Kind = NodeKind.Type }
+        };
+
+        var writer = new GraphWriter(SplitFileStrategy.ByNamespace);
+        await writer.WriteAsync(_outputDir, nodes, Array.Empty<GraphEdge>(), MakeMetadata());
+
+        Assert.True(File.Exists(Path.Combine(_outputDir, ".Leading.json")));
+        Assert.False(File.Exists(Path.Combine(_outputDir, "_default.json")));
     }
 
     [Fact]
@@ -428,5 +461,77 @@ public class GraphWriterStrategyTests : IDisposable
         var cdJson = await File.ReadAllTextAsync(Path.Combine(_outputDir, "C.D.json"));
         var cd = JsonSerializer.Deserialize<ProjectGraph>(cdJson, GraphSerializationOptions.Default)!;
         Assert.Empty(cd.Edges);
+    }
+
+    [Fact]
+    public async Task WriteAsync_EdgeFromUnknownSourceWithoutProjects_CreatesDefaultProjectFile()
+    {
+        var edges = new List<GraphEdge>
+        {
+            new()
+            {
+                FromId = "Orphan.Source",
+                ToId = "Orphan.Target",
+                Type = EdgeType.Calls,
+                Metadata = new Dictionary<string, string> { ["kind"] = "orphan" }
+            }
+        };
+
+        var writer = new GraphWriter(SplitFileStrategy.ByProject);
+        await writer.WriteAsync(_outputDir, Array.Empty<GraphNode>(), edges, MakeMetadata());
+
+        var defaultPath = Path.Combine(_outputDir, "_default.json");
+        Assert.True(File.Exists(defaultPath));
+
+        var projectGraph = JsonSerializer.Deserialize<ProjectGraph>(
+            await File.ReadAllTextAsync(defaultPath),
+            GraphSerializationOptions.Default);
+
+        Assert.NotNull(projectGraph);
+        Assert.Equal("_default", projectGraph.ProjectOrNamespace);
+        Assert.Empty(projectGraph.Nodes);
+        var edge = Assert.Single(projectGraph.Edges);
+        Assert.Equal("Orphan.Source", edge.FromId);
+        Assert.Equal("orphan", edge.Metadata["kind"]);
+    }
+
+    [Fact]
+    public async Task WriteAsync_ByAssembly_EmptyFilePathWithoutAssemblyMetadata_UsesAssemblyNameGroup()
+    {
+        var nodes = new List<GraphNode>
+        {
+            new()
+            {
+                Id = "Library.Service",
+                Name = "Service",
+                Kind = NodeKind.Type,
+                FilePath = string.Empty,
+                AssemblyName = "Library"
+            }
+        };
+
+        var writer = new GraphWriter(SplitFileStrategy.ByAssembly);
+        await writer.WriteAsync(_outputDir, nodes, Array.Empty<GraphEdge>(), MakeMetadata());
+
+        Assert.True(File.Exists(Path.Combine(_outputDir, "Library.json")));
+        Assert.False(File.Exists(Path.Combine(_outputDir, "_external.json")));
+    }
+
+    [Fact]
+    public async Task WriteAsync_SanitizesReservedFileNameCharacters()
+    {
+        var nodes = new List<GraphNode>
+        {
+            new() { Id = "Bad:Name?*.Class1", Name = "Class1", Kind = NodeKind.Type }
+        };
+
+        var writer = new GraphWriter(SplitFileStrategy.ByProject);
+        await writer.WriteAsync(_outputDir, nodes, Array.Empty<GraphEdge>(), MakeMetadata());
+
+        var file = Assert.Single(Directory.GetFiles(_outputDir, "*.json").Where(path => Path.GetFileName(path) != "meta.json"));
+        var fileName = Path.GetFileName(file);
+        Assert.DoesNotContain(":", fileName);
+        Assert.DoesNotContain("?", fileName);
+        Assert.DoesNotContain("*", fileName);
     }
 }

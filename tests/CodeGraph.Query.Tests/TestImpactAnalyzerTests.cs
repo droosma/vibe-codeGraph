@@ -207,4 +207,69 @@ public class TestImpactAnalyzerTests
 
         Assert.Contains("No affected tests found for MyApp.OrderService.PlaceOrder.", output);
     }
+
+    [Fact]
+    public void Analyze_DirectTestWithoutContainingType_UsesMethodNameInSuggestedCommand()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Target"] = MethodNode("Target", "Target", "src/Target.cs"),
+            ["Tests.ShouldRun"] = MethodNode("Tests.ShouldRun", "ShouldRun", "Tests/ShouldRun.cs")
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "Target", ToId = "Tests.ShouldRun", Type = EdgeType.CoveredBy }
+        };
+        var analyzer = new TestImpactAnalyzer(nodes, edges);
+
+        var result = analyzer.Analyze("Target");
+
+        var direct = Assert.Single(result.DirectTests);
+        Assert.Equal("Tests.ShouldRun", direct.TestNode.Id);
+        Assert.Equal("dotnet test --filter \"FullyQualifiedName~ShouldRun\"", result.SuggestedTestCommand);
+    }
+
+    [Fact]
+    public void Analyze_SecondLevelUncoveredCaller_RetainsDepth()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Target"] = MethodNode("Target", "Target", "src/Target.cs"),
+            ["Caller"] = MethodNode("Caller", "Caller", "src/Caller.cs"),
+            ["Gateway"] = MethodNode("Gateway", "Gateway", "src/Gateway.cs")
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "Caller", ToId = "Target", Type = EdgeType.Calls },
+            new() { FromId = "Gateway", ToId = "Caller", Type = EdgeType.Calls }
+        };
+        var analyzer = new TestImpactAnalyzer(nodes, edges);
+
+        var result = analyzer.Analyze("Target", maxDepth: 2);
+
+        Assert.Collection(result.UncoveredCallers,
+            caller => Assert.Equal(("Caller", 1), (caller.Caller.Id, caller.Depth)),
+            caller => Assert.Equal(("Gateway", 2), (caller.Caller.Id, caller.Depth)));
+    }
+
+    [Fact]
+    public void Analyze_MissingCallerNode_IsSkippedFromUncoveredCallers()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Target"] = MethodNode("Target", "Target", "src/Target.cs")
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "Missing.Caller", ToId = "Target", Type = EdgeType.Calls }
+        };
+        var analyzer = new TestImpactAnalyzer(nodes, edges);
+
+        var result = analyzer.Analyze("Target");
+
+        Assert.Empty(result.DirectTests);
+        Assert.Empty(result.IndirectTests);
+        Assert.Empty(result.UncoveredCallers);
+        Assert.Equal(string.Empty, result.SuggestedTestCommand);
+    }
 }

@@ -162,4 +162,46 @@ public class DomainClusterAnalyzerTests
         Assert.Empty(finance.CrossDomainConnections);
         Assert.Empty(finance.KeyTypes);
     }
+
+    [Fact]
+    public void Detect_LongAssemblyNames_AreShortenedToLastTwoSegments()
+    {
+        var nodes = CreateNodes(
+            ("A", "FinanceType", NodeKind.Type, "Company.Product.Modules.Finance"),
+            ("B", "PlanningType", NodeKind.Type, "Company.Product.Modules.Planning"));
+
+        var clusters = DomainClusterAnalyzer.Detect(nodes, new List<GraphEdge>());
+
+        Assert.Contains("Modules.Finance", clusters.Single(c => c.Name == "Finance").Assemblies);
+        Assert.Contains("Modules.Planning", clusters.Single(c => c.Name == "Planning").Assemblies);
+    }
+
+    [Fact]
+    public void Detect_CrossDomainConnections_AreLimitedToTopThreeByEdgeCount()
+    {
+        var nodes = CreateNodes(
+            ("FinanceType", "FinanceType", NodeKind.Type, "Company.Modules.Finance"),
+            ("PlanningType", "PlanningType", NodeKind.Type, "Company.Modules.Planning"),
+            ("SalesType", "SalesType", NodeKind.Type, "Company.Modules.Sales"),
+            ("HrType", "HrType", NodeKind.Type, "Company.Modules.HR"),
+            ("OpsType", "OpsType", NodeKind.Type, "Company.Modules.Operations"));
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "FinanceType", ToId = "PlanningType", Type = EdgeType.Calls },
+            new() { FromId = "FinanceType", ToId = "PlanningType", Type = EdgeType.DependsOn },
+            new() { FromId = "FinanceType", ToId = "PlanningType", Type = EdgeType.References },
+            new() { FromId = "FinanceType", ToId = "SalesType", Type = EdgeType.Calls },
+            new() { FromId = "FinanceType", ToId = "SalesType", Type = EdgeType.DependsOn },
+            new() { FromId = "FinanceType", ToId = "HrType", Type = EdgeType.Calls },
+            new() { FromId = "FinanceType", ToId = "OpsType", Type = EdgeType.Calls }
+        };
+
+        var clusters = DomainClusterAnalyzer.Detect(nodes, edges);
+
+        var finance = clusters.Single(c => c.Name == "Finance");
+        Assert.Equal(3, finance.CrossDomainConnections.Count);
+        Assert.Equal(("Planning", 3), (finance.CrossDomainConnections[0].TargetDomain, finance.CrossDomainConnections[0].EdgeCount));
+        Assert.Equal(("Sales", 2), (finance.CrossDomainConnections[1].TargetDomain, finance.CrossDomainConnections[1].EdgeCount));
+        Assert.Equal(("HR", 1), (finance.CrossDomainConnections[2].TargetDomain, finance.CrossDomainConnections[2].EdgeCount));
+    }
 }

@@ -385,6 +385,152 @@ public class PackageAnalyzerTests
         Assert.Equal("Unknown", result[0].ProjectName);
     }
 
+    [Fact]
+    public void AnalyzeByProject_FilterWithoutMatches_ReturnsEmpty()
+    {
+        var (nodes, edges) = BuildPackageGraph();
+        var analyzer = new PackageAnalyzer(nodes, edges);
+
+        var result = analyzer.AnalyzeByProject("MissingProject");
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void AnalyzeByProject_IgnoresBlankPackageSourceAndBlankPackageId()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["App.Service"] = MakeNode("App.Service", "App")
+        };
+        var edges = new List<GraphEdge>
+        {
+            MakeExternalEdge("App.Service", "Ext.Type1", string.Empty),
+            MakeExternalEdge("App.Service", "Ext.Type2", "   "),
+            MakeExternalEdge("App.Service", "Ext.Type3", "   /1.0.0"),
+            MakeExternalEdge("App.Service", "Ext.Type4", "Valid.Package/2.0.0")
+        };
+        var analyzer = new PackageAnalyzer(nodes, edges);
+
+        var usage = Assert.Single(analyzer.AnalyzeByProject());
+
+        Assert.Equal("Valid.Package", usage.PackageId);
+        Assert.Equal("2.0.0", usage.Version);
+    }
+
+    [Fact]
+    public void AnalyzeByProject_NodeWithBlankAssemblyAndName_FallsBackToNodeIdParts()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Fallback.Project.Handler"] = new GraphNode
+            {
+                Id = "Fallback.Project.Handler",
+                Name = string.Empty,
+                Kind = NodeKind.Type,
+                AssemblyName = string.Empty,
+                Accessibility = Accessibility.Public
+            }
+        };
+        var edges = new List<GraphEdge>
+        {
+            MakeExternalEdge("Fallback.Project.Handler", "Pkg.External.Type", "Pkg/1.0.0")
+        };
+        var analyzer = new PackageAnalyzer(nodes, edges);
+        var engine = new PackageQueryEngine(nodes, edges);
+
+        var usage = Assert.Single(analyzer.AnalyzeByProject());
+        var dependent = Assert.Single(engine.FindWhoUses("Pkg"));
+
+        Assert.Equal("Fallback", usage.ProjectName);
+        Assert.Equal("Fallback.Project.Handler", dependent.ConsumerName);
+        Assert.Equal(NodeKind.Type, dependent.ConsumerKind);
+    }
+
+    [Fact]
+    public void FindWhoUses_WhitespacePackageName_ReturnsEmpty()
+    {
+        var (nodes, edges) = BuildPackageGraph();
+        var engine = new PackageQueryEngine(nodes, edges);
+
+        var result = engine.FindWhoUses("   ");
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void FindWhoUses_ProjectFilter_ReturnsOnlyMatchingProject()
+    {
+        var (nodes, edges) = BuildPackageGraph();
+        var engine = new PackageQueryEngine(nodes, edges);
+
+        var result = engine.FindWhoUses("Newtonsoft.Json", "ProjectB");
+
+        var dependent = Assert.Single(result);
+        Assert.Equal("ProjectB", dependent.ProjectName);
+        Assert.Equal("ProjectB.Handler", dependent.ConsumerId);
+    }
+
+    [Fact]
+    public void FindWhoUses_MissingNodeWithoutMethodSignature_InfersTypeConsumerNameAndKind()
+    {
+        var engine = new PackageQueryEngine(
+            new Dictionary<string, GraphNode>(),
+            new List<GraphEdge>
+            {
+                MakeExternalEdge("Unknown.Project.TypeName", "Pkg.External.Type", "Pkg/1.0.0")
+            });
+
+        var dependent = Assert.Single(engine.FindWhoUses("Pkg"));
+
+        Assert.Equal("Unknown", dependent.ProjectName);
+        Assert.Equal("TypeName", dependent.ConsumerName);
+        Assert.Equal(NodeKind.Type, dependent.ConsumerKind);
+    }
+
+    [Fact]
+    public void FindConflicts_DuplicateReferencesInSameProject_KeepsFirstVersion()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["App.Service"] = MakeNode("App.Service", "App"),
+            ["Other.Service"] = MakeNode("Other.Service", "Other")
+        };
+        var edges = new List<GraphEdge>
+        {
+            MakeExternalEdge("App.Service", "Pkg.TypeA", "Pkg/1.0.0"),
+            MakeExternalEdge("App.Service", "Pkg.TypeB", "Pkg/9.9.9"),
+            MakeExternalEdge("Other.Service", "Pkg.TypeC", "Pkg/2.0.0")
+        };
+        var analyzer = new PackageAnalyzer(nodes, edges);
+
+        var conflict = Assert.Single(analyzer.FindConflicts());
+
+        Assert.Equal("Pkg", conflict.PackageId);
+        Assert.Equal("1.0.0", conflict.VersionsByProject["App"]);
+        Assert.Equal("2.0.0", conflict.VersionsByProject["Other"]);
+    }
+
+    [Fact]
+    public void FindConflicts_VersionsDifferOnlyByCase_AreNotConflicts()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["ProjA.Service"] = MakeNode("ProjA.Service", "ProjA"),
+            ["ProjB.Service"] = MakeNode("ProjB.Service", "ProjB")
+        };
+        var edges = new List<GraphEdge>
+        {
+            MakeExternalEdge("ProjA.Service", "Pkg.Type", "Pkg/1.0.0-BETA"),
+            MakeExternalEdge("ProjB.Service", "Pkg.Type", "Pkg/1.0.0-beta")
+        };
+        var analyzer = new PackageAnalyzer(nodes, edges);
+
+        var conflicts = analyzer.FindConflicts();
+
+        Assert.Empty(conflicts);
+    }
+
     #endregion
 
     #region PackageFormatter

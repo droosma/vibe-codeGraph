@@ -129,4 +129,63 @@ public class ImpactAnalyzerTests
         Assert.NotNull(result.Target);
         Assert.Equal("App.Repository", result.Target!.Id);
     }
+
+    [Fact]
+    public void Analyze_MaxDepthZero_ReturnsTargetWithoutLayers()
+    {
+        var (nodes, edges) = BuildDependencyGraph();
+        var analyzer = new ImpactAnalyzer(nodes, edges);
+
+        var result = analyzer.Analyze("App.Repository", maxDepth: 0);
+
+        Assert.NotNull(result.Target);
+        Assert.Empty(result.Layers);
+        Assert.Equal(0, result.TotalAffected);
+    }
+
+    [Fact]
+    public void Analyze_LayersPreserveExactEdgesPerDepth()
+    {
+        var (nodes, edges) = BuildDependencyGraph();
+        var analyzer = new ImpactAnalyzer(nodes, edges);
+
+        var result = analyzer.Analyze("App.Repository", maxDepth: 3);
+
+        Assert.Collection(result.Layers,
+            layer =>
+            {
+                Assert.Equal(1, layer.Depth);
+                var edge = Assert.Single(layer.Edges);
+                Assert.Equal(("App.Service", "App.Repository", EdgeType.Calls), (edge.FromId, edge.ToId, edge.Type));
+            },
+            layer =>
+            {
+                Assert.Equal(2, layer.Depth);
+                Assert.Equal(2, layer.Edges.Count);
+                Assert.Contains(layer.Edges, edge => edge.FromId == "App.Controller" && edge.ToId == "App.Service" && edge.Type == EdgeType.Calls);
+                Assert.Contains(layer.Edges, edge => edge.FromId == "App.Tests.ServiceTest" && edge.ToId == "App.Service" && edge.Type == EdgeType.Covers);
+            });
+    }
+
+    [Fact]
+    public void Analyze_UnknownCallerNode_PreservesLayerEdgeButOmitsMissingNode()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Target"] = new GraphNode { Id = "Target", Name = "Target", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "Missing.Caller", ToId = "Target", Type = EdgeType.Calls }
+        };
+        var analyzer = new ImpactAnalyzer(nodes, edges);
+
+        var result = analyzer.Analyze("Target", maxDepth: 1);
+
+        var layer = Assert.Single(result.Layers);
+        Assert.Empty(layer.Nodes);
+        var edge = Assert.Single(layer.Edges);
+        Assert.Equal(("Missing.Caller", "Target"), (edge.FromId, edge.ToId));
+        Assert.Equal(0, result.TotalAffected);
+    }
 }

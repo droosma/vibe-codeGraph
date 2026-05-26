@@ -5,311 +5,208 @@ namespace CodeGraph.Query.Tests.Search;
 
 public class SemanticSearchEngineTests
 {
-    private static Dictionary<string, GraphNode> BuildTestNodes()
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("[]{}()-_/\\")]
+    [InlineData(".,;:<>")]
+    public void Search_EmptyOrSeparatorOnlyQuery_ReturnsEmpty(string query)
     {
-        return new Dictionary<string, GraphNode>
-        {
-            ["MyApp.Services.OrderService"] = new()
-            {
-                Id = "MyApp.Services.OrderService",
-                Name = "OrderService",
-                Kind = NodeKind.Type,
-                ContainingNamespaceId = "MyApp.Services",
-                FilePath = "src/Services/OrderService.cs",
-                DocComment = "<summary>Handles order placement and tracking</summary>",
-                AssemblyName = "MyApp"
-            },
-            ["MyApp.Services.IOrderService"] = new()
-            {
-                Id = "MyApp.Services.IOrderService",
-                Name = "IOrderService",
-                Kind = NodeKind.Type,
-                ContainingNamespaceId = "MyApp.Services",
-                FilePath = "src/Services/IOrderService.cs",
-                AssemblyName = "MyApp"
-            },
-            ["MyApp.Services.OrderService.PlaceOrder"] = new()
-            {
-                Id = "MyApp.Services.OrderService.PlaceOrder",
-                Name = "PlaceOrder",
-                Kind = NodeKind.Method,
-                ContainingNamespaceId = "MyApp.Services",
-                ContainingTypeId = "MyApp.Services.OrderService",
-                FilePath = "src/Services/OrderService.cs",
-                AssemblyName = "MyApp"
-            },
-            ["MyApp.Data.OrderRepository"] = new()
-            {
-                Id = "MyApp.Data.OrderRepository",
-                Name = "OrderRepository",
-                Kind = NodeKind.Type,
-                ContainingNamespaceId = "MyApp.Data",
-                FilePath = "src/Data/OrderRepository.cs",
-                DocComment = "<summary>Database access for orders</summary>",
-                AssemblyName = "MyApp"
-            },
-            ["MyApp.Auth.JwtTokenHandler"] = new()
-            {
-                Id = "MyApp.Auth.JwtTokenHandler",
-                Name = "JwtTokenHandler",
-                Kind = NodeKind.Type,
-                ContainingNamespaceId = "MyApp.Auth",
-                FilePath = "src/Auth/JwtTokenHandler.cs",
-                DocComment = "<summary>Handles JWT authentication and token validation</summary>",
-                AssemblyName = "MyApp"
-            },
-            ["MyApp.Auth.JwtTokenHandler.Validate"] = new()
-            {
-                Id = "MyApp.Auth.JwtTokenHandler.Validate",
-                Name = "Validate",
-                Kind = NodeKind.Method,
-                ContainingNamespaceId = "MyApp.Auth",
-                ContainingTypeId = "MyApp.Auth.JwtTokenHandler",
-                FilePath = "src/Auth/JwtTokenHandler.cs",
-                AssemblyName = "MyApp"
-            },
-            ["MyApp.Config.AppSettings"] = new()
-            {
-                Id = "MyApp.Config.AppSettings",
-                Name = "AppSettings",
-                Kind = NodeKind.Type,
-                ContainingNamespaceId = "MyApp.Config",
-                FilePath = "src/Config/AppSettings.cs",
-                DocComment = "<summary>Application configuration settings</summary>",
-                AssemblyName = "MyApp"
-            },
-            ["MyApp.Models.Order._status"] = new()
-            {
-                Id = "MyApp.Models.Order._status",
-                Name = "_status",
-                Kind = NodeKind.Field,
-                ContainingNamespaceId = "MyApp.Models",
-                ContainingTypeId = "MyApp.Models.Order",
-                FilePath = "src/Models/Order.cs",
-                AssemblyName = "MyApp"
-            },
-            ["MyApp.Models.Order.Status"] = new()
-            {
-                Id = "MyApp.Models.Order.Status",
-                Name = "Status",
-                Kind = NodeKind.Property,
-                ContainingNamespaceId = "MyApp.Models",
-                ContainingTypeId = "MyApp.Models.Order",
-                FilePath = "src/Models/Order.cs",
-                AssemblyName = "MyApp"
-            },
-            ["MyApp.Caching.RedisCache"] = new()
-            {
-                Id = "MyApp.Caching.RedisCache",
-                Name = "RedisCache",
-                Kind = NodeKind.Type,
-                ContainingNamespaceId = "MyApp.Caching",
-                FilePath = "src/Caching/RedisCache.cs",
-                DocComment = "<summary>Distributed caching using Redis</summary>",
-                AssemblyName = "MyApp"
-            },
-        };
+        var engine = CreateEngine(CreateNode("Alpha", "Alpha", NodeKind.Type));
+
+        var results = engine.Search(query);
+
+        Assert.Empty(results);
     }
 
     [Fact]
-    public void Search_ExactNameMatch_RanksHighest()
+    public void Search_ExactNameMatch_ReturnsExpectedScoreAndReasons()
     {
-        var engine = new SemanticSearchEngine(BuildTestNodes());
+        var engine = CreateEngine(CreateNode("Status", "Status", NodeKind.Property));
 
-        var results = engine.Search("OrderService");
+        var result = Assert.Single(engine.Search("Status"));
 
-        Assert.NotEmpty(results);
-        Assert.Equal("OrderService", results[0].Node.Name);
-        Assert.True(results[0].Score > results.Skip(1).Max(r => r.Score),
-            "Exact match should have the highest score");
+        Assert.Equal(15.470, result.Score, 3);
+        Assert.Equal(new[] { "exact name match", "token 'status' in name" }, result.MatchReasons);
     }
 
     [Fact]
-    public void Search_SynonymMatch_FindsRelatedSymbols()
+    public void Search_DocCommentMatch_ReturnsExpectedScoreAndReasons()
     {
-        var engine = new SemanticSearchEngine(BuildTestNodes());
+        var engine = CreateEngine(CreateNode(
+            "Tracker",
+            "Tracker",
+            NodeKind.Type,
+            docComment: "<summary>Handles tracking.</summary>"));
 
-        // "auth" should find JwtTokenHandler via synonym (jwt → auth group)
-        var results = engine.Search("auth");
+        var result = Assert.Single(engine.Search("tracking"));
 
-        Assert.Contains(results, r => r.Node.Name == "JwtTokenHandler");
-        Assert.Contains(results, r =>
-            r.MatchReasons.Any(reason => reason.Contains("synonym", StringComparison.OrdinalIgnoreCase)));
+        Assert.Equal(4.465, result.Score, 3);
+        Assert.Equal(new[] { "token 'tracking' in doc comment", "type/method boost" }, result.MatchReasons);
     }
 
     [Fact]
-    public void Search_DocCommentMatching_Works()
+    public void Search_SynonymMatch_ReturnsExpectedScoreAndReason()
     {
-        var engine = new SemanticSearchEngine(BuildTestNodes());
+        var engine = CreateEngine(CreateNode("JwtStore", "JwtStore", NodeKind.Property));
 
-        // "tracking" appears only in OrderService's doc comment
+        var result = Assert.Single(engine.Search("auth"));
+
+        Assert.Equal(2.460, result.Score, 3);
+        Assert.Equal(new[] { "synonym 'jwt' of 'auth'" }, result.MatchReasons);
+    }
+
+    [Fact]
+    public void Search_NamespacePathMatch_ReturnsExpectedScoreAndReason()
+    {
+        var engine = CreateEngine(CreateNode(
+            "Alpha",
+            "Alpha",
+            NodeKind.Property,
+            containingNamespaceId: "MyApp.Controllers",
+            filePath: @"src\Controllers\Alpha.cs"));
+
+        var result = Assert.Single(engine.Search("controllers"));
+
+        Assert.Equal(1.475, result.Score, 3);
+        Assert.Equal(new[] { "token 'controllers' in namespace/path" }, result.MatchReasons);
+    }
+
+    [Fact]
+    public void Search_MethodBoost_RanksMethodAbovePropertyWhenBaseMatchIsEqual()
+    {
+        var engine = CreateEngine(
+            CreateNode("Service.Run", "Run", NodeKind.Method),
+            CreateNode("Config.Run", "Run", NodeKind.Property));
+
+        var results = engine.Search("Run");
+
+        Assert.Collection(
+            results,
+            first =>
+            {
+                Assert.Equal(NodeKind.Method, first.Node.Kind);
+                Assert.Equal(16.485, first.Score, 3);
+                Assert.Equal(new[] { "exact name match", "token 'run' in name", "type/method boost" }, first.MatchReasons);
+            },
+            second =>
+            {
+                Assert.Equal(NodeKind.Property, second.Node.Kind);
+                Assert.Equal(15.485, second.Score, 3);
+                Assert.Equal(new[] { "exact name match", "token 'run' in name" }, second.MatchReasons);
+            });
+    }
+
+    [Fact]
+    public void Search_KindFilter_ReturnsOnlyRequestedKind()
+    {
+        var engine = CreateEngine(
+            CreateNode("Worker.Run", "Run", NodeKind.Method),
+            CreateNode("Worker", "Run", NodeKind.Type),
+            CreateNode("Worker.RunProperty", "Run", NodeKind.Property));
+
+        var results = engine.Search("Run", kindFilter: NodeKind.Method);
+
+        var result = Assert.Single(results);
+        Assert.Equal(NodeKind.Method, result.Node.Kind);
+    }
+
+    [Fact]
+    public void Search_TopLimit_ReturnsHighestScoredResults()
+    {
+        var engine = CreateEngine(
+            CreateNode("One", "One", NodeKind.Property, containingNamespaceId: "Shared"),
+            CreateNode("Four", "Four", NodeKind.Property, containingNamespaceId: "Shared"),
+            CreateNode("Seven", "Seven", NodeKind.Property, containingNamespaceId: "Shared"));
+
+        var results = engine.Search("shared", top: 2);
+
+        Assert.Collection(
+            results,
+            first => Assert.Equal("One", first.Node.Name),
+            second => Assert.Equal("Four", second.Node.Name));
+    }
+
+    [Fact]
+    public void Search_LongNamesWithEqualScores_SortByShorterNameFirst()
+    {
+        var shorterName = new string('A', 101);
+        var longerName = new string('B', 150);
+        var engine = CreateEngine(
+            CreateNode("Shared.Short", shorterName, NodeKind.Property, containingNamespaceId: "Shared"),
+            CreateNode("Shared.Long", longerName, NodeKind.Property, containingNamespaceId: "Shared"));
+
+        var results = engine.Search("shared");
+
+        Assert.Collection(
+            results,
+            first => Assert.Equal(shorterName, first.Node.Name),
+            second => Assert.Equal(longerName, second.Node.Name));
+    }
+
+    [Fact]
+    public void Search_EqualScoreAndLength_SortsAlphabetically()
+    {
+        var alphaName = new string('A', 100);
+        var bravoName = new string('B', 100);
+        var engine = CreateEngine(
+            CreateNode("Shared.Bravo", bravoName, NodeKind.Property, containingNamespaceId: "Shared"),
+            CreateNode("Shared.Alpha", alphaName, NodeKind.Property, containingNamespaceId: "Shared"));
+
+        var results = engine.Search("shared");
+
+        Assert.Collection(
+            results,
+            first => Assert.Equal(alphaName, first.Node.Name),
+            second => Assert.Equal(bravoName, second.Node.Name));
+    }
+
+    [Fact]
+    public void Search_XmlOnlyDocComment_DoesNotProduceSearchableTokens()
+    {
+        var engine = CreateEngine(CreateNode(
+            "XmlOnly",
+            "XmlOnly",
+            NodeKind.Type,
+            docComment: "<summary><see cref=\"Tracking\"/></summary>"));
+
         var results = engine.Search("tracking");
 
-        Assert.Contains(results, r => r.Node.Name == "OrderService");
-        Assert.Contains(results, r =>
-            r.MatchReasons.Any(reason => reason.Contains("doc comment", StringComparison.OrdinalIgnoreCase)));
+        Assert.Empty(results);
     }
 
     [Fact]
-    public void Search_KindFilter_FiltersCorrectly()
+    public void Search_UnknownQuery_ReturnsEmpty()
     {
-        var engine = new SemanticSearchEngine(BuildTestNodes());
+        var engine = CreateEngine(CreateNode("Alpha", "Alpha", NodeKind.Type));
 
-        var results = engine.Search("Order", kindFilter: NodeKind.Method);
+        var results = engine.Search("xyznonexistent123");
 
-        Assert.NotEmpty(results);
-        Assert.All(results, r => Assert.Equal(NodeKind.Method, r.Node.Kind));
-        Assert.Contains(results, r => r.Node.Name == "PlaceOrder");
+        Assert.Empty(results);
     }
 
-    [Fact]
-    public void Search_KindFilterType_ExcludesMethods()
+    private static SemanticSearchEngine CreateEngine(params GraphNode[] nodes)
     {
-        var engine = new SemanticSearchEngine(BuildTestNodes());
-
-        var results = engine.Search("Order", kindFilter: NodeKind.Type);
-
-        Assert.All(results, r => Assert.Equal(NodeKind.Type, r.Node.Kind));
-        Assert.DoesNotContain(results, r => r.Node.Name == "PlaceOrder");
+        return new SemanticSearchEngine(nodes.ToDictionary(node => node.Id, StringComparer.Ordinal));
     }
 
-    [Fact]
-    public void Search_TopN_LimitsResults()
+    private static GraphNode CreateNode(
+        string id,
+        string name,
+        NodeKind kind,
+        string? containingNamespaceId = null,
+        string? filePath = null,
+        string? docComment = null)
     {
-        var engine = new SemanticSearchEngine(BuildTestNodes());
-
-        var results = engine.Search("MyApp", top: 3);
-
-        Assert.True(results.Count <= 3);
-    }
-
-    [Fact]
-    public void Search_DeterministicOrdering()
-    {
-        var engine = new SemanticSearchEngine(BuildTestNodes());
-
-        var results1 = engine.Search("Order");
-        var results2 = engine.Search("Order");
-
-        Assert.Equal(results1.Count, results2.Count);
-        for (int i = 0; i < results1.Count; i++)
+        return new GraphNode
         {
-            Assert.Equal(results1[i].Node.Id, results2[i].Node.Id);
-            Assert.Equal(results1[i].Score, results2[i].Score);
-        }
-    }
-
-    [Fact]
-    public void Search_EmptyQuery_ReturnsEmpty()
-    {
-        var engine = new SemanticSearchEngine(BuildTestNodes());
-
-        var results = engine.Search("");
-
-        Assert.Empty(results);
-    }
-
-    [Fact]
-    public void Search_WhitespaceQuery_ReturnsEmpty()
-    {
-        var engine = new SemanticSearchEngine(BuildTestNodes());
-
-        var results = engine.Search("   ");
-
-        Assert.Empty(results);
-    }
-
-    [Fact]
-    public void Search_NoMatch_ReturnsEmpty()
-    {
-        var engine = new SemanticSearchEngine(BuildTestNodes());
-
-        var results = engine.Search("XYZNonexistent123");
-
-        Assert.Empty(results);
-    }
-
-    [Fact]
-    public void Search_TypesAndMethodsBoosted_OverFieldsAndProperties()
-    {
-        var engine = new SemanticSearchEngine(BuildTestNodes());
-
-        // "status" should match both the field _status and property Status.
-        // The type/method boost should not apply to fields/properties.
-        var results = engine.Search("status");
-        var field = results.FirstOrDefault(r => r.Node.Kind == NodeKind.Field);
-        var prop = results.FirstOrDefault(r => r.Node.Kind == NodeKind.Property);
-
-        // Both should be found
-        Assert.NotNull(field);
-        Assert.NotNull(prop);
-
-        // Neither should have type/method boost
-        Assert.DoesNotContain(field.MatchReasons, r => r.Contains("type/method boost"));
-        Assert.DoesNotContain(prop.MatchReasons, r => r.Contains("type/method boost"));
-    }
-
-    [Fact]
-    public void Search_SynonymDb_FindsRepository()
-    {
-        var engine = new SemanticSearchEngine(BuildTestNodes());
-
-        // "db" should find OrderRepository via synonym expansion
-        var results = engine.Search("db");
-
-        Assert.Contains(results, r => r.Node.Name == "OrderRepository");
-    }
-
-    [Fact]
-    public void Search_CacheSearch_FindsRedis()
-    {
-        var engine = new SemanticSearchEngine(BuildTestNodes());
-
-        var results = engine.Search("cache");
-
-        Assert.Contains(results, r => r.Node.Name == "RedisCache");
-    }
-
-    [Fact]
-    public void Search_ConfigSearch_FindsAppSettings()
-    {
-        var engine = new SemanticSearchEngine(BuildTestNodes());
-
-        var results = engine.Search("config");
-
-        Assert.Contains(results, r => r.Node.Name == "AppSettings");
-    }
-
-    [Fact]
-    public void SearchResult_ContainsMatchReasons()
-    {
-        var engine = new SemanticSearchEngine(BuildTestNodes());
-
-        var results = engine.Search("OrderService");
-
-        var top = results[0];
-        Assert.NotEmpty(top.MatchReasons);
-        Assert.Contains(top.MatchReasons, r => r.Contains("exact name match"));
-    }
-
-    [Fact]
-    public void Search_ScoresArePositive()
-    {
-        var engine = new SemanticSearchEngine(BuildTestNodes());
-
-        var results = engine.Search("Order");
-
-        Assert.All(results, r => Assert.True(r.Score > 0, $"Score for {r.Node.Name} should be positive"));
-    }
-
-    [Fact]
-    public void Search_PascalCaseQueryMatchesTokens()
-    {
-        var engine = new SemanticSearchEngine(BuildTestNodes());
-
-        // "PlaceOrder" query should find the PlaceOrder method and OrderService
-        var results = engine.Search("PlaceOrder");
-
-        Assert.Contains(results, r => r.Node.Name == "PlaceOrder");
+            Id = id,
+            Name = name,
+            Kind = kind,
+            ContainingNamespaceId = containingNamespaceId,
+            FilePath = filePath ?? string.Empty,
+            DocComment = docComment,
+            AssemblyName = "TestAssembly"
+        };
     }
 }

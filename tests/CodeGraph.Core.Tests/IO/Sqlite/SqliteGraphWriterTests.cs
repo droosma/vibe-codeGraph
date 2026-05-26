@@ -1,5 +1,7 @@
+using System.Text.Json;
 using CodeGraph.Core.IO.Sqlite;
 using CodeGraph.Core.Models;
+using Microsoft.Data.Sqlite;
 
 namespace CodeGraph.Core.Tests.IO.Sqlite;
 
@@ -345,6 +347,22 @@ public class SqliteGraphWriterTests : IDisposable
     }
 
     [Fact]
+    public async Task AppendAsync_CreatesMissingNestedDatabaseDirectory()
+    {
+        var writer = new SqliteGraphWriter();
+        var nestedDbPath = Path.Combine(_dbDir, "nested", "graphs", "graph.db");
+
+        await writer.AppendAsync(
+            nestedDbPath,
+            new[] { new GraphNode { Id = "SolA.ClassA", Name = "ClassA", Kind = NodeKind.Type } },
+            Array.Empty<GraphEdge>(),
+            "SolutionA");
+
+        Assert.True(Directory.Exists(Path.GetDirectoryName(nestedDbPath)!));
+        Assert.True(File.Exists(nestedDbPath));
+    }
+
+    [Fact]
     public async Task AppendAsync_TwoSolutions_BothPresentInDb()
     {
         var writer = new SqliteGraphWriter();
@@ -464,6 +482,68 @@ public class SqliteGraphWriterTests : IDisposable
     }
 
     [Fact]
+    public async Task AppendAsync_ReIndexSolutionWithNoExistingNodes_AddsNewNodes()
+    {
+        var writer = new SqliteGraphWriter();
+
+        await writer.AppendAsync(_dbPath, Array.Empty<GraphNode>(), Array.Empty<GraphEdge>(), "EmptySolution");
+        await writer.AppendAsync(
+            _dbPath,
+            new[] { new GraphNode { Id = "EmptySolution.Node", Name = "Node", Kind = NodeKind.Type } },
+            Array.Empty<GraphEdge>(),
+            "EmptySolution");
+
+        var (_, readNodes, _) = await SqliteGraphReader.ReadAsync(_dbPath);
+
+        var node = Assert.Single(readNodes).Value;
+        Assert.Equal("EmptySolution.Node", node.Id);
+        Assert.Equal("EmptySolution", node.Metadata["source_solution"]);
+    }
+
+    [Fact]
+    public async Task AppendAsync_NullSolutionsMetadata_FallsBackToEmptyList()
+    {
+        var writer = new SqliteGraphWriter();
+        await writer.WriteAsync(_dbPath, Array.Empty<GraphNode>(), Array.Empty<GraphEdge>(), MakeMetadata());
+
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false
+        }.ToString();
+
+        await using (var connection = new SqliteConnection(connectionString))
+        {
+            await connection.OpenAsync();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO metadata (key, value) VALUES ('solutions', 'null')
+                ON CONFLICT(key) DO UPDATE SET value = 'null'
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        await writer.AppendAsync(
+            _dbPath,
+            new[] { new GraphNode { Id = "Alpha.Node", Name = "Node", Kind = NodeKind.Type } },
+            Array.Empty<GraphEdge>(),
+            "Alpha");
+
+        await using (var connection = new SqliteConnection(connectionString))
+        {
+            await connection.OpenAsync();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT value FROM metadata WHERE key = 'solutions'";
+            var json = (string)(await command.ExecuteScalarAsync())!;
+            var solutions = JsonSerializer.Deserialize<List<string>>(json);
+
+            var solutionName = Assert.Single(solutions!);
+            Assert.Equal("Alpha", solutionName);
+        }
+    }
+
+    [Fact]
     public async Task AppendAsync_EdgesFromSameSolution_RemovedOnReIndex()
     {
         var writer = new SqliteGraphWriter();
@@ -565,6 +645,45 @@ public class SqliteGraphWriterTests : IDisposable
         Assert.NotEqual(e.PackageSource, e.SourceLink);
         Assert.NotEqual(e.PackageSource, e.Resolution);
         Assert.NotEqual(e.SourceLink, e.Resolution);
+    }
+
+    [Fact]
+    public async Task WriteAsync_EdgeWithEmptyMetadata_DoesNotWriteEdgeMetadataRows()
+    {
+        var writer = new SqliteGraphWriter();
+        var nodes = new[]
+        {
+            new GraphNode { Id = "Src", Name = "Src", Kind = NodeKind.Type },
+            new GraphNode { Id = "Tgt", Name = "Tgt", Kind = NodeKind.Type }
+        };
+        var edge = new GraphEdge
+        {
+            FromId = "Src",
+            ToId = "Tgt",
+            Type = EdgeType.Calls,
+            Metadata = new Dictionary<string, string>()
+        };
+
+        await writer.WriteAsync(_dbPath, nodes, new[] { edge }, MakeMetadata());
+
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false
+        }.ToString();
+
+        await using (var connection = new SqliteConnection(connectionString))
+        {
+            await connection.OpenAsync();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM edge_metadata";
+            var count = Convert.ToInt32(await command.ExecuteScalarAsync());
+            Assert.Equal(0, count);
+        }
+
+        var (_, _, readEdges) = await SqliteGraphReader.ReadAsync(_dbPath);
+        Assert.Empty(Assert.Single(readEdges).Metadata);
     }
 
     [Fact]

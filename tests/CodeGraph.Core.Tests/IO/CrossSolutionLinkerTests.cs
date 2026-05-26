@@ -203,6 +203,48 @@ public class CrossSolutionLinkerTests
     }
 
     [Fact]
+    public void Link_FuzzyMatchSingleSegmentExternalId_UsesWholeTargetName()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Backend.Data.Repository"] = new()
+            {
+                Id = "Backend.Data.Repository",
+                Name = "Repository",
+                Kind = NodeKind.Type,
+                AssemblyName = "Backend"
+            },
+            ["Frontend.HomeController"] = new()
+            {
+                Id = "Frontend.HomeController",
+                Name = "HomeController",
+                Kind = NodeKind.Type,
+                AssemblyName = "Frontend"
+            }
+        };
+
+        var edges = new List<GraphEdge>
+        {
+            new()
+            {
+                FromId = "Frontend.HomeController",
+                ToId = "Repository",
+                Type = EdgeType.References,
+                IsExternal = true
+            }
+        };
+
+        var (newEdges, resolvedIds) = CrossSolutionLinker.Link(nodes, edges);
+
+        var edge = Assert.Single(newEdges);
+        Assert.Equal("Backend.Data.Repository", edge.ToId);
+        Assert.Equal("Repository", edge.Metadata["original_target"]);
+
+        var resolvedId = Assert.Single(resolvedIds);
+        Assert.Equal("Repository", resolvedId);
+    }
+
+    [Fact]
     public void Link_MultipleExternalEdgesResolved_DeduplicatesResolvedIds()
     {
         var nodes = new Dictionary<string, GraphNode>
@@ -548,5 +590,66 @@ public class CrossSolutionLinkerTests
 
         Assert.Empty(newEdges);
         Assert.Empty(resolvedIds);
+    }
+
+    [Fact]
+    public void Link_ExactMatch_WithDuplicateNameCandidates_PrefersExactTarget()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Backend.Services.Repository"] = new() { Id = "Backend.Services.Repository", Name = "Repository", Kind = NodeKind.Type },
+            ["Shared.Repository"] = new() { Id = "Shared.Repository", Name = "Repository", Kind = NodeKind.Type },
+            ["Frontend.Controller"] = new() { Id = "Frontend.Controller", Name = "Controller", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new()
+            {
+                FromId = "Frontend.Controller",
+                ToId = "Backend.Services.Repository",
+                Type = EdgeType.Calls,
+                IsExternal = true
+            }
+        };
+
+        var (newEdges, resolvedIds) = CrossSolutionLinker.Link(nodes, edges);
+
+        var edge = Assert.Single(newEdges);
+        Assert.Equal("Backend.Services.Repository", edge.ToId);
+        Assert.Equal("cross-solution", edge.Resolution);
+        Assert.False(edge.Metadata.ContainsKey("original_target"));
+        Assert.Single(resolvedIds);
+        Assert.Equal("Backend.Services.Repository", resolvedIds[0]);
+    }
+
+    [Fact]
+    public void Link_FuzzyMatch_PreservesMetadataAndTracksOriginalExternalId()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Backend.Data.Repository"] = new() { Id = "Backend.Data.Repository", Name = "Repository", Kind = NodeKind.Type },
+            ["Frontend.Controller"] = new() { Id = "Frontend.Controller", Name = "Controller", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new()
+            {
+                FromId = "Frontend.Controller",
+                ToId = "External.Data.Repository",
+                Type = EdgeType.References,
+                IsExternal = true,
+                Metadata = new Dictionary<string, string> { ["source"] = "api" }
+            }
+        };
+
+        var (newEdges, resolvedIds) = CrossSolutionLinker.Link(nodes, edges);
+
+        var edge = Assert.Single(newEdges);
+        Assert.Equal("Backend.Data.Repository", edge.ToId);
+        Assert.Equal("api", edge.Metadata["source"]);
+        Assert.Equal("true", edge.Metadata["cross_solution"]);
+        Assert.Equal("External.Data.Repository", edge.Metadata["original_target"]);
+        Assert.Single(resolvedIds);
+        Assert.Equal("External.Data.Repository", resolvedIds[0]);
     }
 }

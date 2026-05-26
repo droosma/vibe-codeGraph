@@ -1,4 +1,7 @@
+using System.Globalization;
+using System.Reflection;
 using CodeGraph.Core.IO;
+using Microsoft.Data.Sqlite;
 
 namespace CodeGraph.Core.Tests.IO;
 
@@ -212,5 +215,151 @@ public class FileHashTrackerTests : IDisposable
     public void ComputeHash_NullFilePath_Throws()
     {
         Assert.Throws<ArgumentException>(() => FileHashTracker.ComputeHash(null!));
+    }
+
+    [Fact]
+    public void Constructor_WhitespaceGraphDir_Throws()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => new FileHashTracker("   "));
+        Assert.Contains("Graph directory must not be null or empty.", ex.Message);
+    }
+
+    [Fact]
+    public void ComputeHash_WhitespaceFilePath_Throws()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => FileHashTracker.ComputeHash(" "));
+        Assert.Contains("File path must not be null or empty.", ex.Message);
+    }
+
+    [Fact]
+    public async Task SaveHashesAsync_BackslashPaths_LoadsNormalizedPaths()
+    {
+        var tracker = new FileHashTracker(_graphDir);
+
+        await tracker.SaveHashesAsync(new Dictionary<string, string>
+        {
+            ["src\\Nested\\File.cs"] = "AABB"
+        });
+
+        var loaded = await tracker.LoadHashesAsync();
+
+        var entry = Assert.Single(loaded);
+        Assert.Equal("src/Nested/File.cs", entry.Key);
+        Assert.Equal("AABB", entry.Value);
+    }
+
+    [Fact]
+    public async Task LoadHashesAsync_DatabaseWithoutFileHashesTable_ReturnsEmptyDictionary()
+    {
+        var dbPath = Path.Combine(_graphDir, "filehashes.db");
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false
+        }.ToString();
+
+        await using (var connection = new SqliteConnection(connectionString))
+        {
+            await connection.OpenAsync();
+            using var command = connection.CreateCommand();
+            command.CommandText = "CREATE TABLE other_table (id INTEGER PRIMARY KEY);";
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var tracker = new FileHashTracker(_graphDir);
+        var loaded = await tracker.LoadHashesAsync();
+
+        Assert.Empty(loaded);
+    }
+
+    [Fact]
+    public async Task DetectChangesAsync_NormalizedPathAndHashCaseMatch_DoesNotReportChange()
+    {
+        var tracker = new FileHashTracker(_graphDir);
+        var filePath = CreateTestFile("src/CaseMatch.cs", "class CaseMatch {} ");
+        var currentHash = FileHashTracker.ComputeHash(filePath);
+
+        await tracker.SaveHashesAsync(new Dictionary<string, string>
+        {
+            [filePath.Replace('/', '\\')] = currentHash.ToLowerInvariant()
+        });
+
+        var changes = await tracker.DetectChangesAsync(new[] { filePath.Replace('\\', '/') });
+
+        Assert.Empty(changes.Added);
+        Assert.Empty(changes.Modified);
+        Assert.Empty(changes.Removed);
+    }
+
+    [Fact]
+    public async Task DetectChangesAsync_EmptyCurrentFiles_ReturnsAllStoredFilesAsRemoved()
+    {
+        var tracker = new FileHashTracker(_graphDir);
+        var file1 = CreateTestFile("src/Keep.cs", "class Keep {} ");
+        var file2 = CreateTestFile("src/Remove.cs", "class Remove {} ");
+
+        await tracker.SaveHashesAsync(new Dictionary<string, string>
+        {
+            [file1] = FileHashTracker.ComputeHash(file1),
+            [file2] = FileHashTracker.ComputeHash(file2)
+        });
+
+        var changes = await tracker.DetectChangesAsync(Array.Empty<string>());
+
+        Assert.Empty(changes.Added);
+        Assert.Empty(changes.Modified);
+        Assert.Equal(2, changes.Removed.Count);
+        Assert.Contains(file1.Replace('\\', '/'), changes.Removed);
+        Assert.Contains(file2.Replace('\\', '/'), changes.Removed);
+    }
+
+    [Fact]
+    public async Task SaveHashesAsync_StoresLastIndexedUsingRoundTripIso8601Format()
+    {
+        var tracker = new FileHashTracker(_graphDir);
+
+        await tracker.SaveHashesAsync(new Dictionary<string, string>
+        {
+            ["src/Foo.cs"] = "AABB"
+        });
+
+        var dbPath = Path.Combine(_graphDir, "filehashes.db");
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false
+        }.ToString();
+
+        await using var connection = new SqliteConnection(connectionString);
+        await connection.OpenAsync();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT last_indexed FROM file_hashes WHERE file_path = 'src/Foo.cs'";
+        var storedTimestamp = (string)(await command.ExecuteScalarAsync())!;
+
+        var parsedTimestamp = DateTimeOffset.ParseExact(
+            storedTimestamp,
+            "o",
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.RoundtripKind);
+
+        Assert.Equal(parsedTimestamp.ToString("o"), storedTimestamp);
+    }
+
+    [Fact]
+    public void SetParameterValue_NullValue_StoresDBNull()
+    {
+        using var command = new SqliteCommand();
+        command.Parameters.Add("$value", SqliteType.Text);
+
+        var method = typeof(FileHashTracker).GetMethod(
+            "SetParameterValue",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(method);
+        method!.Invoke(null, new object?[] { command, "$value", null });
+
+        Assert.IsType<DBNull>(command.Parameters["$value"].Value);
     }
 }

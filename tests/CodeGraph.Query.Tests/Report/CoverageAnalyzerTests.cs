@@ -63,4 +63,37 @@ public class CoverageAnalyzerTests
         Assert.Equal(1, asm1.CoveredTypes);
         Assert.Equal(100.0, asm1.CoveragePercent);
     }
+
+    [Fact]
+    public void Analyze_SortsAssembliesByCoveragePercentAscending()
+    {
+        var nodes = CreateNodes(
+            ("A", "LowCoverage"),
+            ("B", "LowCoverage"),
+            ("C", "HighCoverage"),
+            ("T", "Tests"));
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "T", ToId = "C", Type = EdgeType.Covers }
+        };
+
+        var coverage = CoverageAnalyzer.Analyze(nodes, edges);
+
+        Assert.Equal(new[] { "LowCoverage", "HighCoverage", "Tests" }, coverage.Select(c => c.Assembly));
+    }
+
+    [Fact]
+    public void Analyze_IgnoresNodesWithoutAssemblyNames()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["A"] = new GraphNode { Id = "A", Name = "A", Kind = NodeKind.Type, AssemblyName = "Assembly1" },
+            ["B"] = new GraphNode { Id = "B", Name = "B", Kind = NodeKind.Type, AssemblyName = string.Empty }
+        };
+
+        var coverage = CoverageAnalyzer.Analyze(nodes, new List<GraphEdge>());
+
+        var assembly = Assert.Single(coverage);
+        Assert.Equal("Assembly1", assembly.Assembly);
+    }
 }

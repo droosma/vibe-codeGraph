@@ -24,7 +24,8 @@ public class GraphReaderErrorTests : IDisposable
     public async Task ReadAsync_MissingMetaJson_ThrowsFileNotFound()
     {
         var ex = await Assert.ThrowsAsync<FileNotFoundException>(() => GraphReader.ReadAsync(_testDir));
-        Assert.Contains("meta.json", ex.Message);
+        Assert.Contains("meta.json not found in graph directory.", ex.Message);
+        Assert.Equal(Path.Combine(_testDir, "meta.json"), ex.FileName);
     }
 
     [Fact]
@@ -93,13 +94,42 @@ public class GraphReaderErrorTests : IDisposable
     [Fact]
     public async Task ReadAsync_MetaJsonExcludedFromProjectFiles()
     {
-        var meta = new GraphMetadata { SchemaVersion = GraphSchema.CurrentVersion };
-        await File.WriteAllTextAsync(
-            Path.Combine(_testDir, "meta.json"),
-            JsonSerializer.Serialize(meta, GraphSerializationOptions.Default));
+        var metaJson = JsonSerializer.Serialize(
+            new
+            {
+                schemaVersion = GraphSchema.CurrentVersion,
+                commitHash = "abc",
+                nodes = new Dictionary<string, GraphNode>
+                {
+                    ["Should.Not.Load"] = new() { Id = "Should.Not.Load", Name = "Fake", Kind = NodeKind.Type }
+                },
+                edges = new[]
+                {
+                    new GraphEdge { FromId = "Should.Not.Load", ToId = "Also.Fake", Type = EdgeType.Calls }
+                }
+            },
+            GraphSerializationOptions.Default);
+        await File.WriteAllTextAsync(Path.Combine(_testDir, "meta.json"), metaJson);
 
-        var (_, nodes, _) = await GraphReader.ReadAsync(_testDir);
-        Assert.Empty(nodes);
+        var project = new ProjectGraph
+        {
+            ProjectOrNamespace = "Proj",
+            Nodes = new Dictionary<string, GraphNode>
+            {
+                ["Proj.Real"] = new() { Id = "Proj.Real", Name = "Real", Kind = NodeKind.Type }
+            },
+            Edges = new List<GraphEdge>()
+        };
+        await File.WriteAllTextAsync(
+            Path.Combine(_testDir, "Proj.json"),
+            JsonSerializer.Serialize(project, GraphSerializationOptions.Default));
+
+        var (_, nodes, edges) = await GraphReader.ReadAsync(_testDir);
+
+        Assert.Single(nodes);
+        Assert.True(nodes.ContainsKey("Proj.Real"));
+        Assert.DoesNotContain("Should.Not.Load", nodes.Keys);
+        Assert.Empty(edges);
     }
 
     [Fact]

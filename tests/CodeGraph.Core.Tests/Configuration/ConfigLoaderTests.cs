@@ -171,4 +171,98 @@ public class ConfigLoaderTests : IDisposable
         var ex = Assert.Throws<FileNotFoundException>(() => ConfigLoader.Load(bogusPath));
         Assert.Contains("Configuration file not found", ex.Message);
     }
+
+    [Fact]
+    public void Load_EmptyConfigPath_ThrowsFileNotFound()
+    {
+        var ex = Assert.Throws<FileNotFoundException>(() => ConfigLoader.Load(string.Empty));
+        Assert.Contains("Configuration file not found", ex.Message);
+    }
+
+    [Fact]
+    public void LoadFromFile_AllSectionsPresent_DeserializesEveryConfiguredField()
+    {
+        var configPath = Path.Combine(_testDir, "codegraph.json");
+        var json = """
+        {
+            "solution": "AllValues.sln",
+            "output": "graph-out",
+            "splitBy": "assembly",
+            "index": {
+                "includeProjects": ["App*"],
+                "excludeProjects": ["App.Tests"],
+                "includeExternalPackages": ["Newtonsoft.*"],
+                "excludeExternalPackages": ["System.*", "Microsoft.*"],
+                "maxDepthForExternals": 3,
+                "configuration": "Release",
+                "preprocessorSymbols": ["TRACE", "CUSTOM"]
+            },
+            "ioc": {
+                "enabled": false,
+                "entryPoints": ["Program.Main"],
+                "additionalEntryPoints": ["Startup.ConfigureServices"],
+                "registrationMethodPatterns": ["Register*"],
+                "ignoreMethodPatterns": ["Ignore*"] ,
+                "inferSingleImplementations": false,
+                "scanAssemblyRegistrations": false,
+                "followExtensionMethodDepth": 2
+            },
+            "tests": {
+                "enabled": false,
+                "testAttributePatterns": ["*Spec"],
+                "setupAttributePatterns": ["*Init"],
+                "includeSetupMethods": false
+            },
+            "docs": {
+                "enabled": false,
+                "markdownDirs": ["guides/", "reference/"],
+                "includeXmlDocs": false
+            },
+            "query": {
+                "defaultDepth": 4,
+                "defaultFormat": "json",
+                "defaultMode": "callers",
+                "maxNodes": 99
+            }
+        }
+        """;
+        File.WriteAllText(configPath, json);
+
+        var config = ConfigLoader.Load(configPath);
+
+        Assert.Equal("AllValues.sln", config.Solution);
+        Assert.Equal("graph-out", config.Output);
+        Assert.Equal("assembly", config.SplitBy);
+
+        Assert.Equal(new[] { "App*" }, config.Index.IncludeProjects);
+        Assert.Equal(new[] { "App.Tests" }, config.Index.ExcludeProjects);
+        Assert.Equal(new[] { "Newtonsoft.*" }, config.Index.IncludeExternalPackages);
+        Assert.Equal(new[] { "System.*", "Microsoft.*" }, config.Index.ExcludeExternalPackages);
+        Assert.Equal(3, config.Index.MaxDepthForExternals);
+        Assert.Equal("Release", config.Index.Configuration);
+        Assert.Equal(new[] { "TRACE", "CUSTOM" }, config.Index.PreprocessorSymbols);
+
+        Assert.False(config.Ioc.Enabled);
+        Assert.Equal(new[] { "Program.Main" }, config.Ioc.EntryPoints);
+        Assert.Equal(new[] { "Startup.ConfigureServices" }, config.Ioc.AdditionalEntryPoints);
+        Assert.Equal(new[] { "Register*" }, config.Ioc.RegistrationMethodPatterns);
+        Assert.Equal(new[] { "Ignore*" }, config.Ioc.IgnoreMethodPatterns);
+        Assert.False(config.Ioc.InferSingleImplementations);
+        Assert.False(config.Ioc.ScanAssemblyRegistrations);
+        Assert.Equal(2, config.Ioc.FollowExtensionMethodDepth);
+
+        Assert.False(config.Tests.Enabled);
+        Assert.Equal(new[] { "*Spec" }, config.Tests.TestAttributePatterns);
+        Assert.Equal(new[] { "*Init" }, config.Tests.SetupAttributePatterns);
+        Assert.False(config.Tests.IncludeSetupMethods);
+
+        Assert.False(config.Docs.Enabled);
+        Assert.Equal(new[] { "guides/", "reference/" }, config.Docs.MarkdownDirs);
+        Assert.False(config.Docs.IncludeXmlDocs);
+
+        Assert.Equal(4, config.Query.DefaultDepth);
+        Assert.Equal("json", config.Query.DefaultFormat);
+        Assert.Equal("callers", config.Query.DefaultMode);
+        Assert.Equal(99, config.Query.MaxNodes);
+    }
 }

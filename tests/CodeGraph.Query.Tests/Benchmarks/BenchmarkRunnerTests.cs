@@ -1,6 +1,9 @@
+using System.Reflection;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeGraph.Core.Models;
 using CodeGraph.Query.Benchmarks;
+using CodeGraph.Query.OutputFormatters;
 
 namespace CodeGraph.Query.Tests.Benchmarks;
 
@@ -67,6 +70,51 @@ public class BenchmarkRunnerTests
         };
 
         return (nodes, edges, meta);
+    }
+
+    private static (Dictionary<string, GraphNode> Nodes, List<GraphEdge> Edges, GraphMetadata Meta) BuildImpactGraph()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["App.QueryEngine"] = new() { Id = "App.QueryEngine", Name = "QueryEngine", Kind = NodeKind.Type, AssemblyName = "App", ContainingNamespaceId = "App" },
+            ["App.Service"] = new() { Id = "App.Service", Name = "Service", Kind = NodeKind.Type, AssemblyName = "App", ContainingNamespaceId = "App" },
+            ["App.Controller"] = new() { Id = "App.Controller", Name = "Controller", Kind = NodeKind.Type, AssemblyName = "App", ContainingNamespaceId = "App" },
+            ["App.Gateway"] = new() { Id = "App.Gateway", Name = "Gateway", Kind = NodeKind.Type, AssemblyName = "App", ContainingNamespaceId = "App" }
+        };
+
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "App.Service", ToId = "App.QueryEngine", Type = EdgeType.Calls },
+            new() { FromId = "App.Controller", ToId = "App.Service", Type = EdgeType.Calls },
+            new() { FromId = "App.Gateway", ToId = "App.Controller", Type = EdgeType.Calls }
+        };
+
+        var meta = new GraphMetadata
+        {
+            CommitHash = "impact123",
+            Branch = "main",
+            GeneratedAt = DateTimeOffset.UtcNow,
+            IndexerVersion = "1.0.0",
+            Solution = "Impact.sln",
+            ProjectsIndexed = new[] { "App" }
+        };
+
+        return (nodes, edges, meta);
+    }
+
+    private static int EstimateTokens(string text) => (text.Length + 3) / 4;
+
+    private static string NormalizeLineEndings(string value) => value.ReplaceLineEndings("\n");
+
+    private static BenchmarkResult InvokeCreateBenchmarkResult(
+        string scenarioName,
+        int iterations,
+        List<TimeSpan> timings,
+        (int Nodes, int Edges, int TokenEstimate) finalCounts)
+    {
+        var method = typeof(BenchmarkRunner).GetMethod("CreateBenchmarkResult", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        return (BenchmarkResult)method!.Invoke(null, new object[] { scenarioName, iterations, timings, finalCounts })!;
     }
 
     [Fact]
@@ -372,5 +420,412 @@ public class BenchmarkRunnerTests
             new JsonObject { ["pattern"] = "QueryEngine" });
 
         Assert.Throws<ArgumentOutOfRangeException>(() => runner.RunScenario(scenario, iterations: 0));
+    }
+
+    [Fact]
+    public void RunScenario_Query_UsesPatternDepthAndCompactTokenEstimate()
+    {
+        var (nodes, edges, meta) = BuildTestGraph();
+        var engine = new QueryEngine(nodes, edges, meta);
+        var runner = new BenchmarkRunner(engine);
+        var scenario = new BenchmarkScenario(
+            "query-depth-zero",
+            "Exact query benchmark",
+            "query",
+            new JsonObject { ["pattern"] = "QueryEngine", ["depth"] = 0 });
+        var expectedQuery = engine.Query(new QueryOptions { Pattern = "QueryEngine", Depth = 0, Format = OutputFormat.Compact });
+        var expectedOutput = CompactFormatter.Format(expectedQuery);
+
+        var result = runner.RunScenario(scenario, iterations: 1);
+
+        Assert.Equal(expectedQuery.Nodes.Count, result.ResultNodeCount);
+        Assert.Equal(expectedQuery.Edges.Count, result.ResultEdgeCount);
+        Assert.Equal(EstimateTokens(expectedOutput), result.OutputTokenEstimate);
+    }
+
+    [Fact]
+    public void RunScenario_Search_UsesTopAndSearchFormatting()
+    {
+        var (nodes, edges, meta) = BuildTestGraph();
+        var engine = new QueryEngine(nodes, edges, meta);
+        var runner = new BenchmarkRunner(engine);
+        var scenario = new BenchmarkScenario(
+            "search-top-one",
+            "Exact search benchmark",
+            "search",
+            new JsonObject { ["query"] = "Graph", ["top"] = 1 });
+        var expectedResults = engine.Search("Graph", 1);
+        var expectedOutput = string.Join("\n", expectedResults.Select(node => $"{node.Kind}: {node.Id}"));
+
+        var result = runner.RunScenario(scenario, iterations: 1);
+
+        Assert.Equal(1, result.ResultNodeCount);
+        Assert.Equal(0, result.ResultEdgeCount);
+        Assert.Equal(EstimateTokens(expectedOutput), result.OutputTokenEstimate);
+    }
+
+    [Fact]
+    public void RunScenario_ListAssemblies_UsesAssemblyFormattingForTokenEstimate()
+    {
+        var (nodes, edges, meta) = BuildTestGraph();
+        var engine = new QueryEngine(nodes, edges, meta);
+        var runner = new BenchmarkRunner(engine);
+        var scenario = new BenchmarkScenario(
+            "list-assemblies-exact",
+            "Exact list assemblies benchmark",
+            "list",
+            new JsonObject { ["scope"] = "assemblies" });
+        var listEngine = new ListEngine(nodes, edges);
+        var assemblies = listEngine.ListAssemblies();
+        var expectedOutput = string.Join("\n", assemblies.Select(assembly => $"{assembly.Name}: {assembly.TypeCount} types, {assembly.MethodCount} methods"));
+
+        var result = runner.RunScenario(scenario, iterations: 1);
+
+        Assert.Equal(assemblies.Count, result.ResultNodeCount);
+        Assert.Equal(0, result.ResultEdgeCount);
+        Assert.Equal(EstimateTokens(expectedOutput), result.OutputTokenEstimate);
+    }
+
+    [Fact]
+    public void RunScenario_ListTypes_UsesScopeTopAndTypeFormatting()
+    {
+        var (nodes, edges, meta) = BuildTestGraph();
+        var engine = new QueryEngine(nodes, edges, meta);
+        var runner = new BenchmarkRunner(engine);
+        var scenario = new BenchmarkScenario(
+            "list-types-exact",
+            "Exact list types benchmark",
+            "list",
+            new JsonObject { ["scope"] = "types", ["top"] = 1 });
+        var listEngine = new ListEngine(nodes, edges);
+        var typeResult = listEngine.ListTypes(top: 1);
+        var expectedOutput = string.Join("\n", typeResult.Types.Select(type => $"{type.Name}: in={type.InDegree} out={type.OutDegree}"));
+
+        var result = runner.RunScenario(scenario, iterations: 1);
+
+        Assert.Equal(1, result.ResultNodeCount);
+        Assert.Equal(0, result.ResultEdgeCount);
+        Assert.Equal(EstimateTokens(expectedOutput), result.OutputTokenEstimate);
+    }
+
+    [Fact]
+    public void RunScenario_Impact_UsesSymbolDepthAndAggregatesAllLayers()
+    {
+        var (nodes, edges, meta) = BuildImpactGraph();
+        var engine = new QueryEngine(nodes, edges, meta);
+        var runner = new BenchmarkRunner(engine);
+        var scenario = new BenchmarkScenario(
+            "impact-exact",
+            "Exact impact benchmark",
+            "impact",
+            new JsonObject { ["symbol"] = "QueryEngine", ["depth"] = 2 });
+        var analysis = new ImpactAnalyzer(nodes, edges).Analyze("QueryEngine", 2);
+        var expectedNodeCount = analysis.Layers.Sum(layer => layer.Nodes.Count);
+        var expectedEdgeCount = analysis.Layers.Sum(layer => layer.Edges.Count);
+        var expectedOutput = $"Impact of QueryEngine: {analysis.TotalAffected} affected across {analysis.Layers.Count} layers";
+
+        var result = runner.RunScenario(scenario, iterations: 1);
+
+        Assert.Equal(2, analysis.TotalAffected);
+        Assert.Equal(2, analysis.Layers.Count);
+        Assert.Equal(expectedNodeCount, result.ResultNodeCount);
+        Assert.Equal(expectedEdgeCount, result.ResultEdgeCount);
+        Assert.Equal(EstimateTokens(expectedOutput), result.OutputTokenEstimate);
+    }
+
+    [Fact]
+    public void RunScenario_Batch_IgnoresEmptySymbolsAndAccumulatesCountsAndTokens()
+    {
+        var (nodes, edges, meta) = BuildTestGraph();
+        var engine = new QueryEngine(nodes, edges, meta);
+        var runner = new BenchmarkRunner(engine);
+        var scenario = new BenchmarkScenario(
+            "batch-exact",
+            "Exact batch benchmark",
+            "batch",
+            new JsonObject
+            {
+                ["symbols"] = new JsonArray("QueryEngine", string.Empty, JsonValue.Create<string?>(null), "GraphNode"),
+                ["depth"] = 0
+            });
+        var symbols = new[] { "QueryEngine", "GraphNode" };
+        var expectedNodeCount = 0;
+        var expectedEdgeCount = 0;
+        var expectedTokens = 0;
+
+        foreach (var symbol in symbols)
+        {
+            var query = engine.Query(new QueryOptions { Pattern = symbol, Depth = 0, Format = OutputFormat.Compact });
+            expectedNodeCount += query.Nodes.Count;
+            expectedEdgeCount += query.Edges.Count;
+            expectedTokens += EstimateTokens(CompactFormatter.Format(query));
+        }
+
+        var result = runner.RunScenario(scenario, iterations: 1);
+
+        Assert.Equal(expectedNodeCount, result.ResultNodeCount);
+        Assert.Equal(expectedEdgeCount, result.ResultEdgeCount);
+        Assert.Equal(expectedTokens, result.OutputTokenEstimate);
+    }
+
+    [Fact]
+    public void CreateBenchmarkResult_UsesSortedTimingsAndAverageMean()
+    {
+        var timings = new List<TimeSpan>
+        {
+            TimeSpan.FromTicks(90),
+            TimeSpan.FromTicks(10),
+            TimeSpan.FromTicks(30)
+        };
+
+        var result = InvokeCreateBenchmarkResult("mean-test", 3, timings, (7, 11, 13));
+
+        Assert.Equal(TimeSpan.FromTicks(10), result.Min);
+        Assert.Equal(TimeSpan.FromTicks(90), result.Max);
+        Assert.Equal(TimeSpan.FromTicks(30), result.Median);
+        Assert.Equal(TimeSpan.FromTicks(43), result.Mean);
+        Assert.Equal(7, result.ResultNodeCount);
+        Assert.Equal(11, result.ResultEdgeCount);
+        Assert.Equal(13, result.OutputTokenEstimate);
+    }
+
+    [Fact]
+    public void FormatMarkdown_ReturnsExactMarkdownTable()
+    {
+        var markdown = BenchmarkFormatter.FormatMarkdown(new List<BenchmarkResult>
+        {
+            new(
+                "timing-test",
+                7,
+                TimeSpan.FromMicroseconds(500),
+                TimeSpan.FromSeconds(2),
+                TimeSpan.FromMilliseconds(12.34),
+                TimeSpan.FromMilliseconds(345),
+                10,
+                15,
+                200)
+        });
+
+        var expected = string.Join("\n", new[]
+        {
+            "## Benchmark Results",
+            string.Empty,
+            "| Scenario | Iterations | Min | Max | Median | Mean | Nodes | Edges | Tokens |",
+            "|----------|------------|-----|-----|--------|------|-------|-------|--------|",
+            "| timing-test | 7 | 500.0µs | 2.00s | 12.34ms | 345.00ms | 10 | 15 | 200 |",
+            string.Empty
+        });
+
+        Assert.Equal(expected, NormalizeLineEndings(markdown));
+    }
+
+    [Fact]
+    public void FormatJson_ReturnsExactIndentedJson()
+    {
+        var json = BenchmarkFormatter.FormatJson(new List<BenchmarkResult>
+        {
+            new(
+                "json-test",
+                3,
+                TimeSpan.FromMilliseconds(1.234),
+                TimeSpan.FromMilliseconds(5.678),
+                TimeSpan.FromMilliseconds(2.5),
+                TimeSpan.FromMilliseconds(3.333),
+                8,
+                12,
+                150)
+        });
+
+        var expected = string.Join("\n", new[]
+        {
+            "[",
+            "  {",
+            "    \"scenario\": \"json-test\",",
+            "    \"iterations\": 3,",
+            "    \"min_ms\": 1.234,",
+            "    \"max_ms\": 5.678,",
+            "    \"median_ms\": 2.5,",
+            "    \"mean_ms\": 3.333,",
+            "    \"result_nodes\": 8,",
+            "    \"result_edges\": 12,",
+            "    \"output_tokens\": 150",
+            "  }",
+            "]"
+        });
+
+        Assert.Equal(expected, NormalizeLineEndings(json));
+    }
+
+    [Fact]
+    public void FormatDuration_ExactlyOneMillisecond_UsesMilliseconds()
+    {
+        Assert.Equal("1.00ms", BenchmarkFormatter.FormatDuration(TimeSpan.FromMilliseconds(1)));
+    }
+
+    [Fact]
+    public void FormatDuration_ExactlyOneSecond_UsesSeconds()
+    {
+        Assert.Equal("1.00s", BenchmarkFormatter.FormatDuration(TimeSpan.FromSeconds(1)));
+    }
+
+    [Fact]
+    public void RunScenario_UnknownCommand_ThrowsExactMessage()
+    {
+        var (nodes, edges, meta) = BuildTestGraph();
+        var runner = new BenchmarkRunner(new QueryEngine(nodes, edges, meta));
+        var scenario = new BenchmarkScenario("bad-cmd", "Unknown command", "nonexistent", new JsonObject());
+
+        var exception = Assert.Throws<NotSupportedException>(() => runner.RunScenario(scenario, iterations: 1));
+
+        Assert.Equal("Unknown command 'nonexistent'.", exception.Message);
+    }
+
+    [Fact]
+    public void RunScenario_ZeroIterations_ThrowsWithParameterNameAndMessage()
+    {
+        var (nodes, edges, meta) = BuildTestGraph();
+        var runner = new BenchmarkRunner(new QueryEngine(nodes, edges, meta));
+        var scenario = new BenchmarkScenario("zero-iter", "Zero iterations", "query", new JsonObject { ["pattern"] = "QueryEngine" });
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() => runner.RunScenario(scenario, iterations: 0));
+
+        Assert.Equal("iterations", exception.ParamName);
+        Assert.Contains("Iterations must be at least 1.", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LoadScenarios_ReadsJsonFile()
+    {
+        var jsonPath = Path.Combine(AppContext.BaseDirectory, $"benchmark-scenarios-{Guid.NewGuid():N}.json");
+        File.WriteAllText(jsonPath, """
+        {
+          "scenarios": [
+            {
+              "name": "file-scenario",
+              "description": "Loaded from disk",
+              "command": "query",
+              "args": { "pattern": "QueryEngine", "depth": 1 }
+            }
+          ]
+        }
+        """);
+
+        try
+        {
+            var scenarios = BenchmarkRunner.LoadScenarios(jsonPath);
+
+            var scenario = Assert.Single(scenarios);
+            Assert.Equal("file-scenario", scenario.Name);
+            Assert.Equal("query", scenario.Command);
+        }
+        finally
+        {
+            if (File.Exists(jsonPath))
+                File.Delete(jsonPath);
+        }
+    }
+
+    [Fact]
+    public void ParseScenarios_NullItem_IsIgnored()
+    {
+        const string json = """
+        {
+          "scenarios": [
+            null,
+            {
+              "name": "kept",
+              "command": "search",
+              "args": { "query": "Graph" }
+            }
+          ]
+        }
+        """;
+
+        var scenarios = BenchmarkRunner.ParseScenarios(json);
+
+        var scenario = Assert.Single(scenarios);
+        Assert.Equal("kept", scenario.Name);
+    }
+
+    [Fact]
+    public void ParseScenarios_MissingScenariosArray_ThrowsExactMessage()
+    {
+        var exception = Assert.Throws<JsonException>(() => BenchmarkRunner.ParseScenarios("{}"));
+
+        Assert.Equal("Missing 'scenarios' array.", exception.Message);
+    }
+
+    [Fact]
+    public void ParseScenarios_MissingName_ThrowsExactMessage()
+    {
+        const string json = """
+        {
+          "scenarios": [
+            {
+              "command": "query"
+            }
+          ]
+        }
+        """;
+
+        var exception = Assert.Throws<JsonException>(() => BenchmarkRunner.ParseScenarios(json));
+
+        Assert.Equal("Scenario missing 'name'.", exception.Message);
+    }
+
+    [Fact]
+    public void ParseScenarios_MissingCommand_ThrowsExactMessage()
+    {
+        const string json = """
+        {
+          "scenarios": [
+            {
+              "name": "missing-command"
+            }
+          ]
+        }
+        """;
+
+        var exception = Assert.Throws<JsonException>(() => BenchmarkRunner.ParseScenarios(json));
+
+        Assert.Equal("Scenario 'missing-command' missing 'command'.", exception.Message);
+    }
+
+    [Fact]
+    public void RunScenario_CommandAndListScope_AreCaseInsensitiveAndAssembliesIsDefaultScope()
+    {
+        var (nodes, edges, meta) = BuildTestGraph();
+        var runner = new BenchmarkRunner(new QueryEngine(nodes, edges, meta));
+
+        var result = runner.RunScenario(new BenchmarkScenario("upper-list", "List assemblies", "LIST", new JsonObject()), iterations: 1);
+
+        Assert.Equal("upper-list", result.ScenarioName);
+        Assert.True(result.ResultNodeCount > 0);
+        Assert.Equal(0, result.ResultEdgeCount);
+    }
+
+    [Fact]
+    public void RunScenario_ListUnknownScope_ThrowsExactMessage()
+    {
+        var (nodes, edges, meta) = BuildTestGraph();
+        var runner = new BenchmarkRunner(new QueryEngine(nodes, edges, meta));
+        var scenario = new BenchmarkScenario("bad-scope", "Unknown scope", "list", new JsonObject { ["scope"] = "widgets" });
+
+        var exception = Assert.Throws<NotSupportedException>(() => runner.RunScenario(scenario, iterations: 1));
+
+        Assert.Equal("Unknown list scope 'widgets'.", exception.Message);
+    }
+
+    [Fact]
+    public void RunScenario_BatchWithoutSymbols_ReturnsZeroCounts()
+    {
+        var (nodes, edges, meta) = BuildTestGraph();
+        var runner = new BenchmarkRunner(new QueryEngine(nodes, edges, meta));
+
+        var result = runner.RunScenario(new BenchmarkScenario("empty-batch", "No symbols", "batch", new JsonObject()), iterations: 1);
+
+        Assert.Equal(0, result.ResultNodeCount);
+        Assert.Equal(0, result.ResultEdgeCount);
+        Assert.Equal(0, result.OutputTokenEstimate);
     }
 }

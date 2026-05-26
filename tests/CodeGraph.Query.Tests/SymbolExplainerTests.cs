@@ -152,4 +152,58 @@ public class SymbolExplainerTests
         Assert.Empty(result.Members);
         Assert.Empty(result.Tests);
     }
+
+    [Fact]
+    public void Explain_CaseInsensitiveMatch_ReturnsNode()
+    {
+        var (nodes, edges) = BuildExplainGraph();
+        var explainer = new SymbolExplainer(nodes, edges);
+
+        var result = explainer.Explain("app.orderservice");
+
+        Assert.NotNull(result);
+        Assert.Equal("App.OrderService", result!.Node.Id);
+    }
+
+    [Fact]
+    public void Explain_CoveredByAndCoversEdges_AreDeduplicated()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["App.Service"] = new GraphNode { Id = "App.Service", Name = "Service", Kind = NodeKind.Type },
+            ["Tests.ServiceTests"] = new GraphNode { Id = "Tests.ServiceTests", Name = "ServiceTests", Kind = NodeKind.Type }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "Tests.ServiceTests", ToId = "App.Service", Type = EdgeType.Covers },
+            new() { FromId = "App.Service", ToId = "Tests.ServiceTests", Type = EdgeType.CoveredBy }
+        };
+        var explainer = new SymbolExplainer(nodes, edges);
+
+        var result = explainer.Explain("Service");
+
+        var test = Assert.Single(result!.Tests);
+        Assert.Equal("Tests.ServiceTests", test.Id);
+    }
+
+    [Fact]
+    public void Explain_MembersIgnoreMissingNodes()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["App.Service"] = new GraphNode { Id = "App.Service", Name = "Service", Kind = NodeKind.Type },
+            ["App.Service.Run"] = new GraphNode { Id = "App.Service.Run", Name = "Run", Kind = NodeKind.Method }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "App.Service", ToId = "App.Service.Run", Type = EdgeType.Contains },
+            new() { FromId = "App.Service", ToId = "App.Service.Missing", Type = EdgeType.Contains }
+        };
+        var explainer = new SymbolExplainer(nodes, edges);
+
+        var result = explainer.Explain("Service");
+
+        var member = Assert.Single(result!.Members);
+        Assert.Equal("Run", member.Name);
+    }
 }

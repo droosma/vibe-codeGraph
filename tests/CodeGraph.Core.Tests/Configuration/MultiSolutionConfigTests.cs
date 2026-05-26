@@ -146,8 +146,12 @@ public class MultiSolutionConfigTests : IDisposable
         File.WriteAllText(configPath, json);
 
         var ex = Assert.Throws<InvalidOperationException>(() => ConfigLoader.Load(configPath));
-        Assert.Contains("both 'solution' (singular) and 'solutions' (array)", ex.Message);
-        Assert.Contains("migrate", ex.Message, StringComparison.OrdinalIgnoreCase);
+        var expected =
+            $"Configuration file '{configPath}' contains both 'solution' (singular) and 'solutions' (array). " +
+            "Please migrate to the new format by moving the single solution into the 'solutions' array. " +
+            "Example: {{ \"solutions\": [{{ \"path\": \"MyApp.sln\" }}] }}";
+
+        Assert.Equal(expected, ex.Message);
     }
 
     [Fact]
@@ -165,10 +169,12 @@ public class MultiSolutionConfigTests : IDisposable
         File.WriteAllText(configPath, json);
 
         var ex = Assert.Throws<InvalidOperationException>(() => ConfigLoader.Load(configPath));
-        Assert.Contains("resolve to the same name", ex.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("MyApp", ex.Message);
-        Assert.Contains("src/a/MyApp.sln", ex.Message);
-        Assert.Contains("src/b/MyApp.sln", ex.Message);
+        var expected =
+            $"Configuration file '{configPath}' contains solutions that resolve to the same name 'MyApp'. " +
+            "Use --solution to specify a single solution, or manually edit codegraph.json to remove duplicates like " +
+            "'src/a/MyApp.sln', 'src/b/MyApp.sln'.";
+
+        Assert.Equal(expected, ex.Message);
     }
 
     [Fact]
@@ -222,12 +228,14 @@ public class MultiSolutionConfigTests : IDisposable
     [Fact]
     public void Load_SingleSolutionInArray_NoDuplicateCheck()
     {
-        // With exactly 1 entry, the duplicate check (Solutions.Length > 1) should NOT trigger
+        // With exactly 1 entry, the duplicate check (Solutions.Length > 1) should NOT trigger.
+        // A null path would throw inside duplicate-name validation, so successful load proves
+        // the boundary condition stays at > 1 rather than >= 1.
         var configPath = Path.Combine(_testDir, "codegraph.json");
         var json = """
         {
             "solutions": [
-                { "path": "only.sln" }
+                { "path": null }
             ]
         }
         """;
@@ -235,7 +243,7 @@ public class MultiSolutionConfigTests : IDisposable
 
         var config = ConfigLoader.Load(configPath);
         Assert.Single(config.Solutions);
-        Assert.Equal("only.sln", config.Solutions[0].Path);
+        Assert.Null(config.Solutions[0].Path);
     }
 
     [Fact]

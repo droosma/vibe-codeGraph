@@ -1,5 +1,6 @@
 using CodeGraph.Core.IO.Sqlite;
 using CodeGraph.Core.Models;
+using Microsoft.Data.Sqlite;
 
 namespace CodeGraph.Core.Tests.IO.Sqlite;
 
@@ -272,6 +273,33 @@ public class SqliteGraphReaderTests : IDisposable
         var (readMeta, _, _) = await SqliteGraphReader.ReadAsync(_dbPath);
 
         Assert.Empty(readMeta.Stats);
+    }
+
+    [Fact]
+    public async Task ReadAsync_ProjectsIndexedLiteralNullJson_ReturnsEmptyArray()
+    {
+        var writer = new SqliteGraphWriter();
+        await writer.WriteAsync(_dbPath,
+            Array.Empty<GraphNode>(), Array.Empty<GraphEdge>(), MakeMetadata());
+
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false
+        }.ToString();
+
+        await using (var connection = new SqliteConnection(connectionString))
+        {
+            await connection.OpenAsync();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE metadata SET value = 'null' WHERE key = 'projects_indexed'";
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var (readMeta, _, _) = await SqliteGraphReader.ReadAsync(_dbPath);
+
+        Assert.Empty(readMeta.ProjectsIndexed);
     }
 
     [Fact]

@@ -20,6 +20,8 @@ public class ReportGeneratorTests
         GeneratedAt = new DateTimeOffset(2025, 1, 1, 12, 0, 0, TimeSpan.Zero)
     };
 
+    private static string NormalizeLineEndings(string value) => value.ReplaceLineEndings("\n");
+
     [Fact]
     public void Generate_ContainsExpectedSections()
     {
@@ -282,5 +284,141 @@ public class ReportGeneratorTests
         var report = ReportGenerator.Generate(nodes, edges, CreateMetadata());
 
         Assert.StartsWith("# CodeGraph Report", report);
+    }
+
+    [Fact]
+    public void Generate_ReportWithCoverageAndDomains_MatchesExactOutput()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["order-service"] = new() { Id = "order-service", Name = "OrderService", Kind = NodeKind.Type, AssemblyName = "Company.Modules.Finance" },
+            ["planning-service"] = new() { Id = "planning-service", Name = "PlanningService", Kind = NodeKind.Type, AssemblyName = "Company.Modules.Planning" },
+            ["smoke-test"] = new() { Id = "smoke-test", Name = "SmokeTests.CoversOrderService", Kind = NodeKind.Method, AssemblyName = "Tests" }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "order-service", ToId = "planning-service", Type = EdgeType.Calls },
+            new() { FromId = "order-service", ToId = "smoke-test", Type = EdgeType.CoveredBy }
+        };
+
+        var report = ReportGenerator.Generate(nodes, edges, CreateMetadata());
+
+        var expected = string.Join("\n", new[]
+        {
+            "# CodeGraph Report",
+            string.Empty,
+            "**Solution:** TestSolution",
+            "**Generated:** 2025-01-01 12:00",
+            "**Commit:** abc123",
+            "**Nodes:** 3 | **Edges:** 2",
+            string.Empty,
+            "## Hub Types (highest connectivity)",
+            string.Empty,
+            "| Type | In | Out | Total |",
+            "|------|---:|----:|------:|",
+            "| OrderService | 0 | 2 | 2 |",
+            "| PlanningService | 1 | 0 | 1 |",
+            string.Empty,
+            "## Assemblies",
+            string.Empty,
+            "| Assembly | Nodes | Internal Edges | Cross-boundary Edges |",
+            "|----------|------:|---------------:|--------------------:|",
+            "| Company.Modules.Finance | 1 | 0 | 2 |",
+            "| Company.Modules.Planning | 1 | 0 | 1 |",
+            "| Tests | 1 | 0 | 1 |",
+            string.Empty,
+            "## Domain Clusters",
+            string.Empty,
+            "| Domain | Assemblies | Key Types | Cross-domain connections |",
+            "|--------|-----------|-----------|------------------------|",
+            "| Finance | Modules.Finance | OrderService | → Planning (1), → Tests (1) |",
+            "| Planning | Modules.Planning | PlanningService | → Finance (1) |",
+            string.Empty,
+            "## Test Coverage (by assembly)",
+            string.Empty,
+            "| Assembly | Types | Covered | Coverage |",
+            "|----------|------:|--------:|---------:|",
+            $"| Company.Modules.Planning | 1 | 0 | {0.0:F1}% |",
+            $"| Company.Modules.Finance | 1 | 1 | {100.0:F1}% |",
+            string.Empty,
+            "## Suggested Queries",
+            string.Empty,
+            "```",
+            "codegraph query OrderService --depth 1 --mode focused",
+            "```",
+            "```",
+            "codegraph query OrderService --depth 2 --kind calls",
+            "```",
+            "```",
+            "codegraph query PlanningService --depth 1 --mode focused",
+            "```",
+            "```",
+            "codegraph query PlanningService --depth 2 --kind calls",
+            "```",
+            "```",
+            "codegraph list types --assembly Company.Modules.Finance",
+            "```",
+            "```",
+            "codegraph list types --assembly Company.Modules.Planning",
+            "```"
+        });
+
+        Assert.Equal(expected, NormalizeLineEndings(report));
+    }
+
+    [Fact]
+    public void Generate_SingleDomain_OmitsDomainClustersSection()
+    {
+        var nodes = CreateNodes(("A", "TypeA", NodeKind.Type, "Company.Modules.Finance"));
+
+        var report = ReportGenerator.Generate(nodes, new List<GraphEdge>(), CreateMetadata());
+
+        Assert.DoesNotContain("## Domain Clusters", report);
+    }
+
+    [Fact]
+    public void Generate_DomainClusterWithoutEdges_UsesEmDashPlaceholders()
+    {
+        var nodes = CreateNodes(
+            ("A", "FinanceType", NodeKind.Type, "Company.Modules.Finance"),
+            ("B", "PlanningType", NodeKind.Type, "Company.Modules.Planning"));
+
+        var report = ReportGenerator.Generate(nodes, new List<GraphEdge>(), CreateMetadata());
+
+        Assert.Contains("| Finance | Modules.Finance | — | — |", report);
+        Assert.Contains("| Planning | Modules.Planning | — | — |", report);
+    }
+
+    [Fact]
+    public void Generate_MethodOnlyGraph_LeavesSuggestedQueriesSectionWithoutCodeBlocks()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["method"] = new() { Id = "method", Name = "Execute", Kind = NodeKind.Method, AssemblyName = string.Empty }
+        };
+
+        var report = ReportGenerator.Generate(nodes, new List<GraphEdge>(), CreateMetadata());
+
+        Assert.Contains("## Suggested Queries", report);
+        Assert.DoesNotContain("```", report);
+        Assert.EndsWith("## Suggested Queries", NormalizeLineEndings(report));
+    }
+
+    [Fact]
+    public void Generate_CoverageSection_IncludesUncoveredAssembliesWhenAnyCoverageExists()
+    {
+        var nodes = CreateNodes(
+            ("A", "CoveredType", NodeKind.Type, "Asm1"),
+            ("B", "UncoveredType", NodeKind.Type, "Asm2"),
+            ("T", "Tests", NodeKind.Type, "Tests"));
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "T", ToId = "A", Type = EdgeType.Covers }
+        };
+
+        var report = ReportGenerator.Generate(nodes, edges, CreateMetadata());
+
+        Assert.Contains($"| Asm2 | 1 | 0 | {0.0:F1}% |", report);
+        Assert.Contains($"| Asm1 | 1 | 1 | {100.0:F1}% |", report);
     }
 }

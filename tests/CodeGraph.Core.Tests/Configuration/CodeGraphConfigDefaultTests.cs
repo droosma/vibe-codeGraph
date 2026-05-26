@@ -248,9 +248,26 @@ public class QueryConfigDefaultTests
     }
 
     [Fact]
+    public void Default_DefaultMode_IsAll()
+    {
+        var config = new QueryConfig();
+        Assert.Equal("all", config.DefaultMode);
+    }
+
+    [Fact]
     public void Default_MaxNodes_IsFifty()
     {
         var config = new QueryConfig();
         Assert.Equal(50, config.MaxNodes);
+    }
+}
+
+public class SolutionEntryDefaultTests
+{
+    [Fact]
+    public void Default_Path_IsEmptyString()
+    {
+        var entry = new SolutionEntry();
+        Assert.Equal(string.Empty, entry.Path);
     }
 }
