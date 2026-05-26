@@ -376,6 +376,26 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task ToolsList_DiffTool_UsesBaseHeadAndFormatArguments()
+    {
+        var server = CreateServer();
+        var request = MakeRequest("tools/list", id: JsonValue.Create(2));
+
+        var response = await server.HandleMessageAsync(request);
+
+        var tools = response!["result"]!["tools"]!.AsArray();
+        var diffTool = tools.First(t => t!["name"]!.GetValue<string>() == "codegraph_diff");
+        var schema = diffTool!["inputSchema"]!;
+        var properties = schema["properties"]!;
+        var required = schema["required"]!.AsArray();
+
+        Assert.NotNull(properties["base"]);
+        Assert.NotNull(properties["head"]);
+        Assert.NotNull(properties["format"]);
+        Assert.Contains(required, r => r!.GetValue<string>() == "base");
+    }
+
+    [Fact]
     public async Task ToolsList_ImpactTool_HasRequiredSymbol()
     {
         var server = CreateServer();
@@ -459,24 +479,6 @@ public class McpServerTests : IDisposable
         Assert.True(props.ContainsKey("mode"));
         Assert.True(props.ContainsKey("confidence"));
         Assert.True(props.ContainsKey("budget"));
-    }
-
-    [Fact]
-    public async Task ToolsList_PackagesTool_HasWhoUsesAndConflictsProperties()
-    {
-        var server = CreateServer();
-        var request = MakeRequest("tools/list", id: JsonValue.Create(2));
-
-        var response = await server.HandleMessageAsync(request);
-
-        var tools = response!["result"]!["tools"]!.AsArray();
-        var packagesTool = tools.First(t => t!["name"]!.GetValue<string>() == "codegraph_packages");
-        var props = packagesTool!["inputSchema"]!["properties"]!.AsObject();
-
-        Assert.True(props.ContainsKey("project"));
-        Assert.True(props.ContainsKey("who_uses"));
-        Assert.True(props.ContainsKey("conflicts"));
-        Assert.True(props.ContainsKey("format"));
     }
 
     [Fact]
@@ -794,98 +796,6 @@ public class McpServerTests : IDisposable
         var response = await server.HandleMessageAsync(request);
 
         Assert.NotNull(response);
-    }
-
-    [Fact]
-    public async Task ToolsCall_Packages_WithWhoUses_ReturnsDependentSymbols()
-    {
-        await WriteGraphDataAsync(edges: new List<GraphEdge>
-        {
-            new()
-            {
-                FromId = "MyApp.OrderService.PlaceOrder()",
-                ToId = "Newtonsoft.Json.JsonConvert",
-                Type = EdgeType.Calls,
-                IsExternal = true,
-                PackageSource = "Newtonsoft.Json/13.0.1",
-                Confidence = EdgeConfidence.Verified
-            },
-            new()
-            {
-                FromId = "MyApp.OrderService",
-                ToId = "Newtonsoft.Json.JsonSerializer",
-                Type = EdgeType.DependsOn,
-                IsExternal = true,
-                PackageSource = "Newtonsoft.Json/13.0.1",
-                Confidence = EdgeConfidence.Verified
-            }
-        }, nodes: new List<GraphNode>
-        {
-            new()
-            {
-                Id = "MyApp.OrderService",
-                Name = "OrderService",
-                Kind = NodeKind.Type,
-                FilePath = "src/OrderService.cs",
-                StartLine = 1,
-                EndLine = 10,
-                Signature = "MyApp.OrderService",
-                Accessibility = Accessibility.Public,
-                AssemblyName = "MyApp",
-                ContainingNamespaceId = "MyApp"
-            },
-            new()
-            {
-                Id = "MyApp.OrderService.PlaceOrder()",
-                Name = "PlaceOrder",
-                Kind = NodeKind.Method,
-                FilePath = "src/OrderService.cs",
-                StartLine = 3,
-                EndLine = 8,
-                Signature = "MyApp.OrderService.PlaceOrder()",
-                Accessibility = Accessibility.Public,
-                AssemblyName = "MyApp",
-                ContainingTypeId = "MyApp.OrderService",
-                ContainingNamespaceId = "MyApp"
-            },
-            new()
-            {
-                Id = "Newtonsoft.Json.JsonConvert",
-                Name = "JsonConvert",
-                Kind = NodeKind.Method,
-                FilePath = string.Empty,
-                Signature = "Newtonsoft.Json.JsonConvert",
-                Accessibility = Accessibility.Public,
-                AssemblyName = "Newtonsoft.Json"
-            },
-            new()
-            {
-                Id = "Newtonsoft.Json.JsonSerializer",
-                Name = "JsonSerializer",
-                Kind = NodeKind.Type,
-                FilePath = string.Empty,
-                Signature = "Newtonsoft.Json.JsonSerializer",
-                Accessibility = Accessibility.Public,
-                AssemblyName = "Newtonsoft.Json"
-            }
-        });
-        var server = CreateServer();
-        var request = MakeRequest("tools/call", id: JsonValue.Create(17),
-            @params: new JsonObject
-            {
-                ["name"] = "codegraph_packages",
-                ["arguments"] = new JsonObject
-                {
-                    ["who_uses"] = "Newtonsoft.Json"
-                }
-            });
-
-        var response = await server.HandleMessageAsync(request);
-
-        var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>();
-        Assert.Contains("PlaceOrder", text);
-        Assert.Contains("OrderService", text);
-        Assert.Contains("Newtonsoft.Json", text);
     }
 
     [Fact]
@@ -1874,6 +1784,135 @@ public class McpServerTests : IDisposable
         Assert.False(result["isError"]!.GetValue<bool>());
         var text = result["content"]![0]!["text"]!.GetValue<string>();
         Assert.Contains("OrderService", text);
+    }
+
+    [Fact]
+    public async Task ToolsCall_Diff_WithBaseArgument_ReturnsFormattedDiff()
+    {
+        await WriteGraphDataAsync();
+
+        var baseDir = Path.Combine(_graphDir, "base");
+        Directory.CreateDirectory(baseDir);
+
+        var baseNodes = new List<GraphNode>
+        {
+            new()
+            {
+                Id = "MyApp.OrderService",
+                Name = "OrderService",
+                Kind = NodeKind.Type,
+                FilePath = "src/OrderService.cs",
+                Signature = "MyApp.OrderService",
+                Accessibility = Accessibility.Public,
+                AssemblyName = "MyApp",
+                ContainingNamespaceId = "MyApp",
+                Metadata = new Dictionary<string, string> { ["typeKind"] = "Class" }
+            },
+            new()
+            {
+                Id = "MyApp.OrderService.PlaceOrder()",
+                Name = "PlaceOrder",
+                Kind = NodeKind.Method,
+                FilePath = "src/OrderService.cs",
+                Signature = "MyApp.OrderService.PlaceOrder()",
+                Accessibility = Accessibility.Public,
+                AssemblyName = "MyApp",
+                ContainingTypeId = "MyApp.OrderService",
+                ContainingNamespaceId = "MyApp",
+                Metadata = new Dictionary<string, string>
+                {
+                    ["returnType"] = "void",
+                    ["parameterCount"] = "0"
+                }
+            },
+            new()
+            {
+                Id = "MyApp.IOrderRepository",
+                Name = "IOrderRepository",
+                Kind = NodeKind.Type,
+                FilePath = "src/IOrderRepository.cs",
+                Signature = "MyApp.IOrderRepository",
+                Accessibility = Accessibility.Public,
+                AssemblyName = "MyApp",
+                ContainingNamespaceId = "MyApp",
+                Metadata = new Dictionary<string, string> { ["typeKind"] = "Interface" }
+            },
+            new()
+            {
+                Id = "MyApp",
+                Name = "MyApp",
+                Kind = NodeKind.Namespace,
+                Signature = "MyApp",
+                Accessibility = Accessibility.Public,
+                AssemblyName = "MyApp"
+            }
+        };
+        var baseEdges = new List<GraphEdge>
+        {
+            new()
+            {
+                FromId = "MyApp.OrderService.PlaceOrder()",
+                ToId = "MyApp.IOrderRepository",
+                Type = EdgeType.DependsOn,
+                Confidence = EdgeConfidence.Verified
+            },
+            new()
+            {
+                FromId = "MyApp.OrderService",
+                ToId = "MyApp.OrderService.PlaceOrder()",
+                Type = EdgeType.Contains,
+                Confidence = EdgeConfidence.Verified
+            },
+            new()
+            {
+                FromId = "MyApp",
+                ToId = "MyApp.OrderService",
+                Type = EdgeType.Contains,
+                Confidence = EdgeConfidence.Verified
+            },
+            new()
+            {
+                FromId = "MyApp",
+                ToId = "MyApp.IOrderRepository",
+                Type = EdgeType.Contains,
+                Confidence = EdgeConfidence.Verified
+            }
+        };
+        var metadata = new GraphMetadata
+        {
+            SchemaVersion = GraphSchema.CurrentVersion,
+            CommitHash = "base123",
+            Branch = "main",
+            GeneratedAt = DateTimeOffset.UtcNow,
+            IndexerVersion = "0.1.0",
+            Solution = "test.sln",
+            SolutionName = "test"
+        };
+
+        var writer = new GraphWriter();
+        await writer.WriteAsync(baseDir, baseNodes, baseEdges, metadata);
+
+        var server = CreateServer();
+        var request = MakeRequest("tools/call", id: JsonValue.Create(10),
+            @params: new JsonObject
+            {
+                ["name"] = "codegraph_diff",
+                ["arguments"] = new JsonObject
+                {
+                    ["base"] = baseDir,
+                    ["format"] = "text"
+                }
+            });
+
+        var response = await server.HandleMessageAsync(request);
+
+        Assert.NotNull(response);
+        var result = response!["result"]!;
+        Assert.False(result["isError"]!.GetValue<bool>());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("Graph Diff base123..abc123", text);
+        Assert.Contains("Added nodes: 1", text);
+        Assert.Contains("Added edges: 1", text);
     }
 
     // ── shared graph cache tests ──

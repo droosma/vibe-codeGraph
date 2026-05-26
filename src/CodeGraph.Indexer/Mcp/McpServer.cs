@@ -586,26 +586,32 @@ internal sealed class McpServer
                 ["type"] = "object",
                 ["properties"] = new JsonObject
                 {
-                    ["base_dir"] = new JsonObject
+                    ["base"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Path to the base graph directory (e.g., '.codegraph-snapshots/main')"
+                        ["description"] = "Path to the base graph directory (e.g., '.codegraph\\snapshots\\main')"
                     },
-                    ["head_dir"] = new JsonObject
+                    ["head"] = new JsonObject
                     {
                         ["type"] = "string",
                         ["description"] = "Path to the head graph directory (default: '.codegraph')",
                         ["default"] = ".codegraph"
+                    },
+                    ["format"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Diff output format: compact, context, text, or json",
+                        ["default"] = "compact"
                     }
                 },
-                ["required"] = new JsonArray("base_dir")
+                ["required"] = new JsonArray("base")
             }
         };
 
         var packagesTool = new JsonObject
         {
             ["name"] = "codegraph_packages",
-            ["description"] = "Analyze NuGet package usage across the solution. List packages per project, find which types or methods depend on a package, or detect cross-project version conflicts.",
+            ["description"] = "Analyze NuGet package usage across the solution. Shows which packages each project uses, how many internal types reference them, and detects version conflicts. BEST FOR: 'What packages does this project use?', 'Are there version conflicts?', 'Why is this package referenced?'",
             ["inputSchema"] = new JsonObject
             {
                 ["type"] = "object",
@@ -614,24 +620,12 @@ internal sealed class McpServer
                     ["project"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Filter to a specific project or assembly name"
+                        ["description"] = "Filter to a specific project name"
                     },
-                    ["who_uses"] = new JsonObject
+                    ["package"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Package name to trace back to dependent types and methods"
-                    },
-                    ["conflicts"] = new JsonObject
-                    {
-                        ["type"] = "boolean",
-                        ["description"] = "When true, return only version conflicts across projects"
-                    },
-                    ["format"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["enum"] = new JsonArray("text", "json"),
-                        ["description"] = "Output format (default: text)",
-                        ["default"] = "text"
+                        ["description"] = "Filter to a specific package name"
                     }
                 }
             }
@@ -1145,11 +1139,12 @@ internal sealed class McpServer
     private async Task<JsonNode> HandleDiffCallAsync(JsonNode? id, JsonNode? parameters)
     {
         var arguments = parameters?["arguments"];
-        var baseDir = arguments?["base_dir"]?.GetValue<string>();
-        var headDir = arguments?["head_dir"]?.GetValue<string>() ?? _graphDir;
+        var baseDir = arguments?["base"]?.GetValue<string>();
+        var headDir = arguments?["head"]?.GetValue<string>() ?? _graphDir;
+        var format = arguments?["format"]?.GetValue<string>() ?? "compact";
 
         if (string.IsNullOrEmpty(baseDir))
-            return CreateToolError(id, "Missing required parameter: base_dir");
+            return CreateToolError(id, "Missing required parameter: base");
 
         try
         {
@@ -1157,7 +1152,13 @@ internal sealed class McpServer
             var (headMeta, headNodes, headEdges) = await GraphReader.ReadAsync(headDir);
 
             var diff = GraphDiffEngine.Compare(baseMeta, baseNodes, baseEdges, headMeta, headNodes, headEdges);
-            var output = GraphDiffGroupFormatter.Format(diff);
+            var output = format.ToLowerInvariant() switch
+            {
+                "json" => GraphDiffJsonFormatter.Format(diff),
+                "text" => GraphDiffTextFormatter.Format(diff),
+                "context" => GraphDiffContextFormatter.Format(diff),
+                _ => GraphDiffGroupFormatter.Format(diff)
+            };
 
             return CreateToolResult(id, output, false);
         }
@@ -1175,34 +1176,27 @@ internal sealed class McpServer
     {
         var arguments = parameters?["arguments"];
         var projectFilter = arguments?["project"]?.GetValue<string>();
-        var whoUsesPackage = arguments?["who_uses"]?.GetValue<string>();
-        var conflictsOnly = arguments?["conflicts"]?.GetValue<bool>() ?? false;
-        var format = arguments?["format"]?.GetValue<string>() ?? "text";
-        var formatJson = format.Equals("json", StringComparison.OrdinalIgnoreCase);
-
-        if (conflictsOnly && !string.IsNullOrWhiteSpace(whoUsesPackage))
-            return CreateToolError(id, "conflicts cannot be combined with who_uses");
+        var packageFilter = arguments?["package"]?.GetValue<string>();
 
         try
         {
             var engine = await GetOrLoadEngineAsync();
-            var packageEngine = new PackageQueryEngine(engine.Nodes, engine.Edges);
+            var analyzer = new PackageAnalyzer(engine.Nodes, engine.Edges);
 
             string output;
-            if (conflictsOnly)
+            if (!string.IsNullOrEmpty(packageFilter))
             {
-                var conflicts = packageEngine.FindConflicts();
-                output = formatJson ? PackageFormatter.FormatConflictsAsJson(conflicts) : PackageFormatter.FormatConflicts(conflicts);
-            }
-            else if (!string.IsNullOrWhiteSpace(whoUsesPackage))
-            {
-                var dependents = packageEngine.FindWhoUses(whoUsesPackage, projectFilter);
-                output = formatJson ? PackageFormatter.FormatDependentsAsJson(dependents) : PackageFormatter.FormatDependents(dependents);
+                var usages = analyzer.AnalyzeByPackage(packageFilter);
+                output = PackageFormatter.FormatUsage(usages);
             }
             else
             {
-                var usages = packageEngine.ListPackages(projectFilter);
-                output = formatJson ? PackageFormatter.FormatUsageAsJson(usages) : PackageFormatter.FormatUsage(usages);
+                var usages = analyzer.AnalyzeByProject(projectFilter);
+                output = PackageFormatter.FormatUsage(usages);
+
+                var conflicts = analyzer.FindConflicts();
+                if (conflicts.Count > 0)
+                    output += "\n" + PackageFormatter.FormatConflicts(conflicts);
             }
 
             return CreateToolResult(id, output, false);
