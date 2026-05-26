@@ -100,4 +100,91 @@ public class QueryEngineRemainingMutationTests
         Assert.Equal(NodeKind.Method, match.Kind);
         Assert.Equal("App.OrderService.Run", match.Id);
     }
+
+    [Fact]
+    public void FindFuzzyMatches_DifferentDistances_AreOrderedNearestFirst()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["book"] = new() { Id = "book", Name = "book", Kind = NodeKind.Type },
+            ["books"] = new() { Id = "books", Name = "books", Kind = NodeKind.Type },
+            ["boon"] = new() { Id = "boon", Name = "boon", Kind = NodeKind.Type },
+            ["cook"] = new() { Id = "cook", Name = "cook", Kind = NodeKind.Type },
+            ["back"] = new() { Id = "back", Name = "back", Kind = NodeKind.Type }
+        };
+        var engine = new QueryEngine(nodes, [], new GraphMetadata());
+
+        var matches = engine.FindFuzzyMatches("book", maxDistance: 2, maxResults: 10);
+
+        Assert.Equal(new[] { "books", "boon", "cook", "back" }, matches);
+    }
+
+    [Fact]
+    public void LevenshteinDistance_MultipleDeletions_UsesFirstColumnInitialization()
+    {
+        Assert.Equal(2, QueryEngine.LevenshteinDistance("aa", "b"));
+    }
+
+    [Fact]
+    public void LevenshteinDistance_MultipleInsertions_UsesFirstRowInitialization()
+    {
+        Assert.Equal(2, QueryEngine.LevenshteinDistance("a", "bb"));
+    }
+
+    [Fact]
+    public void Query_WildcardPattern_RequiresEndAnchor()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["App.PreOrder"] = new() { Id = "App.PreOrder", Name = "PreOrder", Kind = NodeKind.Type },
+            ["App.PreOrderService"] = new() { Id = "App.PreOrderService", Name = "PreOrderService", Kind = NodeKind.Type }
+        };
+        var engine = new QueryEngine(nodes, [], new GraphMetadata());
+
+        var result = engine.Query(new QueryOptions { Pattern = "*Order", Depth = 0 });
+
+        var match = Assert.Single(result.MatchedNodes);
+        Assert.Equal("App.PreOrder", match.Id);
+    }
+
+    [Fact]
+    public void Query_ExactSuffixMatch_ExcludesNonSegmentIdSuffixMatches()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Ns.Exact"] = new() { Id = "Ns.Exact", Name = "Mismatch", Kind = NodeKind.Type },
+            ["FooExact"] = new() { Id = "FooExact", Name = "AlsoMismatch", Kind = NodeKind.Type }
+        };
+        var engine = new QueryEngine(nodes, [], new GraphMetadata());
+
+        var result = engine.Query(new QueryOptions { Pattern = "Exact", Depth = 0 });
+
+        var match = Assert.Single(result.MatchedNodes);
+        Assert.Equal("Ns.Exact", match.Id);
+    }
+
+    [Fact]
+    public void Query_RankFalse_TruncationUsesInsertionOrderInsteadOfRanking()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["Seed"] = new() { Id = "Seed", Name = "Seed", Kind = NodeKind.Method },
+            ["LowPriority.Namespace"] = new() { Id = "LowPriority.Namespace", Name = "Namespace", Kind = NodeKind.Namespace },
+            ["HighPriority.Method"] = new() { Id = "HighPriority.Method", Name = "Method", Kind = NodeKind.Method }
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "Seed", ToId = "LowPriority.Namespace", Type = EdgeType.Calls },
+            new() { FromId = "Seed", ToId = "HighPriority.Method", Type = EdgeType.Calls }
+        };
+        var engine = new QueryEngine(nodes, edges, new GraphMetadata());
+
+        var result = engine.Query(new QueryOptions { Pattern = "Seed", Depth = 1, MaxNodes = 2, Rank = false });
+
+        Assert.True(result.WasTruncated);
+        Assert.Equal(2, result.Nodes.Count);
+        Assert.Contains("Seed", result.Nodes.Keys);
+        Assert.Contains("LowPriority.Namespace", result.Nodes.Keys);
+        Assert.DoesNotContain("HighPriority.Method", result.Nodes.Keys);
+    }
 }

@@ -1,3 +1,4 @@
+using System.Threading.Tasks;
 using CodeGraph.Core.Models;
 
 namespace CodeGraph.Query.Tests;
@@ -129,5 +130,50 @@ public class TestImpactAnalyzerMutationCoverageTests
         var indirect = Assert.Single(result.IndirectTests);
         Assert.Equal("Tests.AlphaTests.Indirect", indirect.TestNode.Id);
         Assert.Equal("dotnet test --filter \"FullyQualifiedName~AlphaTests|FullyQualifiedName~ZuluTests\"", result.SuggestedTestCommand);
+    }
+
+    [Fact]
+    public void Analyze_SharedCallerPath_UsesAlphabeticallyFirstParent()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["App.Target"] = CreateMethodNode("App.Target", "Target", "App.TargetType"),
+            ["Callers.Alpha"] = CreateMethodNode("Callers.Alpha", "Alpha", "Callers.AlphaType"),
+            ["Callers.Zeta"] = CreateMethodNode("Callers.Zeta", "Zeta", "Callers.ZetaType"),
+            ["Callers.Root"] = CreateMethodNode("Callers.Root", "Root", "Callers.RootType"),
+            ["Tests.RootTests.ShouldRun"] = CreateMethodNode("Tests.RootTests.ShouldRun", "ShouldRun", "Tests.RootTests")
+        };
+        var edges = new List<GraphEdge>
+        {
+            new() { FromId = "Callers.Alpha", ToId = "App.Target", Type = EdgeType.Calls },
+            new() { FromId = "Callers.Zeta", ToId = "App.Target", Type = EdgeType.Calls },
+            new() { FromId = "Callers.Root", ToId = "Callers.Alpha", Type = EdgeType.Calls },
+            new() { FromId = "Callers.Root", ToId = "Callers.Zeta", Type = EdgeType.Calls },
+            new() { FromId = "Callers.Root", ToId = "Tests.RootTests.ShouldRun", Type = EdgeType.CoveredBy }
+        };
+        var analyzer = new TestImpactAnalyzer(nodes, edges);
+
+        var result = analyzer.Analyze("Target", maxDepth: 2);
+
+        var coverage = Assert.Single(result.IndirectTests);
+        Assert.Collection(coverage.PathFromTarget,
+            node => Assert.Equal("Callers.Root", node.Id),
+            node => Assert.Equal("Callers.Alpha", node.Id),
+            node => Assert.Equal("App.Target", node.Id));
+    }
+
+    [Fact]
+    public void Analyze_NoAdditionalCallers_CompletesQuicklyEvenWithHugeDepth()
+    {
+        var nodes = new Dictionary<string, GraphNode>
+        {
+            ["App.Target"] = CreateMethodNode("App.Target", "Target", "App.TargetType")
+        };
+        var analyzer = new TestImpactAnalyzer(nodes, new List<GraphEdge>());
+
+        var task = Task.Run(() => analyzer.Analyze("Target", maxDepth: int.MaxValue));
+
+        Assert.True(task.Wait(TimeSpan.FromSeconds(1)), "Analyze should stop once no further callers are found.");
+        Assert.Equal("App.Target", task.Result.Target!.Id);
     }
 }

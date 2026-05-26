@@ -1,5 +1,6 @@
 using CodeGraph.Core;
 using CodeGraph.Core.IO;
+using CodeGraph.Core.IO.Sqlite;
 using CodeGraph.Core.Models;
 using CodeGraph.Query;
 using CodeGraph.Query.Filters;
@@ -236,5 +237,44 @@ public class FederatedQueryEngineTests : IDisposable
         Directory.CreateDirectory(emptyDir);
 
         await Assert.ThrowsAsync<FileNotFoundException>(() => QueryEngine.LoadAsync(emptyDir));
+    }
+
+    [Fact]
+    public async Task LoadAsync_NonExistentDirectory_ThrowsFileNotFound()
+    {
+        var missingDir = Path.Combine(_testDir, "missing");
+
+        await Assert.ThrowsAsync<FileNotFoundException>(() => QueryEngine.LoadAsync(missingDir));
+    }
+
+    [Fact]
+    public async Task LoadAsync_SingleGraphWithSqliteDatabase_PrefersGraphDb()
+    {
+        var jsonNodes = new List<GraphNode>
+        {
+            new() { Id = "Json.Service", Name = "Service", Kind = NodeKind.Type, AssemblyName = "Json" }
+        };
+        var sqliteNodes = new List<GraphNode>
+        {
+            new() { Id = "Sqlite.Service", Name = "Service", Kind = NodeKind.Type, AssemblyName = "Sqlite" }
+        };
+        var metadata = new GraphMetadata
+        {
+            CommitHash = "abc",
+            Branch = "main",
+            GeneratedAt = DateTimeOffset.UtcNow,
+            IndexerVersion = "1.0.0",
+            Solution = "App.sln",
+            SolutionName = "App"
+        };
+
+        await new GraphWriter().WriteAsync(_testDir, jsonNodes, new List<GraphEdge>(), metadata);
+        await new SqliteGraphWriter().WriteAsync(Path.Combine(_testDir, "graph.db"), sqliteNodes, new List<GraphEdge>(), metadata);
+
+        var engine = await QueryEngine.LoadAsync(_testDir);
+        var result = engine.Query(new QueryOptions { Pattern = "Service", Depth = 0 });
+
+        var match = Assert.Single(result.MatchedNodes);
+        Assert.Equal("Sqlite.Service", match.Id);
     }
 }
