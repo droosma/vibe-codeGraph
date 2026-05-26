@@ -39,9 +39,9 @@ codegraph diff [options]
 |------|-------------|---------|
 | `--base <path>` | Directory of the base (before) graph snapshot | `.codegraph-prev` |
 | `--head <path>` | Directory of the head (after) graph snapshot | `.codegraph` |
-| `--ref <git-ref>` | Resolve a git ref and look for `.codegraph-<ref>` or `.codegraph-<short-sha>` as the base | (none) |
+| `--ref <name>` | Look up a named snapshot saved with `codegraph snapshot save`. Resolves to `<head>/.codegraph/snapshots/<name>`, with SHA-based fallbacks. | (none) |
 | `--only <types>` | Comma-separated filter (see table below) | All change types |
-| `--format <fmt>` | `context` \| `text` \| `json` \| `compact` | `context` |
+| `--format <fmt>` | `context` \| `text` \| `json` | `context` |
 
 ### `--only` values
 
@@ -176,32 +176,30 @@ jobs:
 
 set -euo pipefail
 
-# Archive previous night's graph
-if [ -d .codegraph ]; then
-  DATE=$(date -u +%Y%m%d)
-  cp -r .codegraph ".codegraph-${DATE}"
-fi
+DATE=$(date -u +%Y%m%d)
+YESTERDAY=$(date -u -d 'yesterday' +%Y%m%d 2>/dev/null || date -u -v-1d +%Y%m%d)
 
 # Re-index
 codegraph index --solution MyApp.sln
 
-# Report changes since yesterday
-if [ -d ".codegraph-${DATE}" ]; then
-  codegraph diff --base ".codegraph-${DATE}" --format context
-fi
+# Save today's snapshot
+codegraph snapshot save "nightly-${DATE}"
+
+# Report changes since yesterday (if yesterday's snapshot exists)
+codegraph diff --ref "nightly-${YESTERDAY}" --format context || true
 ```
 
 ### Compare against a named branch snapshot
 
 ```bash
-# Store a snapshot when cutting a release branch
-cp -r .codegraph .codegraph-release-1.0
+# Save a snapshot when cutting a release branch
+codegraph snapshot save release-1.0
 
 # Later, compare current HEAD against the release baseline
-codegraph diff --base .codegraph-release-1.0
+codegraph diff --ref release-1.0
 
-# Or use the --ref shorthand (resolves to .codegraph-<short-sha>)
-codegraph diff --ref release/1.0
+# Or pass the full snapshot path explicitly
+codegraph diff --base .codegraph/snapshots/release-1.0
 ```
 
 ---
@@ -221,19 +219,25 @@ Because the diff only includes changed symbols (not the entire graph), it stays 
 
 ---
 
-## Snapshot Naming Conventions
+## Snapshot Storage
 
-| Convention | Example | Use Case |
-|------------|---------|----------|
-| `.codegraph-prev` | `.codegraph-prev/` | Default base; overwritten each run |
-| `.codegraph-<branch>` | `.codegraph-main/` | Stable baseline for a long-lived branch |
-| `.codegraph-<short-sha>` | `.codegraph-abc1234/` | Pinned to a specific commit |
-| `.codegraph-<date>` | `.codegraph-20260101/` | Nightly archiving |
+Named snapshots (created with `codegraph snapshot save`) are stored inside the graph directory:
 
-Add snapshot directories to `.gitignore` unless you intentionally version them:
+```
+.codegraph/
+  graph.db            ← live graph
+  snapshots/
+    release-1.0/      ← codegraph snapshot save release-1.0
+    nightly-20260101/ ← codegraph snapshot save nightly-20260101
+    main/             ← codegraph snapshot save main
+```
+
+Use `--base <path>` when you need ad-hoc copies (e.g., from a manual `cp -r .codegraph .codegraph-prev`) or to point at an arbitrary directory. Use `--ref <name>` to reference snapshots managed by `codegraph snapshot`.
+
+Add `.codegraph-prev` (and any ad-hoc snapshot directories) to `.gitignore` if you don't want them versioned:
 
 ```gitignore
-.codegraph*/
+.codegraph-prev/
 ```
 
 ---
@@ -242,7 +246,7 @@ Add snapshot directories to `.gitignore` unless you intentionally version them:
 
 **`Error: Could not locate a graph snapshot for ref '<ref>'`**
 
-The `--ref` flag looks for `.codegraph-<ref>` and `.codegraph-<short-sha>` in the working directory. If neither exists, pass `--base <path>` explicitly.
+The `--ref` flag looks for a named snapshot under `.codegraph/snapshots/<ref>` (plus SHA-based variants). Save a snapshot first with `codegraph snapshot save <ref>`, or pass `--base <path>` explicitly.
 
 **Diff shows unexpected removals after re-indexing**
 
