@@ -1,58 +1,46 @@
-using System.Text.Json;
-using CodeGraph.Core.IO;
-using CodeGraph.Core.Models;
-
 namespace CodeGraph.Indexer.Snapshots;
 
 /// <summary>
-/// Manages named snapshots of graph directories under <c>.codegraph-snapshots/</c>.
+/// Manages named snapshots of a graph directory under <c>&lt;graph-dir&gt;\snapshots\</c>.
 /// </summary>
 public class SnapshotManager
 {
-    private const string SnapshotRoot = ".codegraph-snapshots";
+    private readonly string _graphDirectory;
 
-    private readonly string _workingDirectory;
-
-    public SnapshotManager(string workingDirectory)
+    public SnapshotManager(string graphDirectory)
     {
-        _workingDirectory = workingDirectory;
+        ArgumentException.ThrowIfNullOrWhiteSpace(graphDirectory);
+        _graphDirectory = Path.GetFullPath(graphDirectory);
     }
 
     /// <summary>
-    /// Copies graph.db, meta.json, and all JSON files from <paramref name="graphDir"/>
-    /// into <c>.codegraph-snapshots/&lt;snapshotName&gt;/</c>.
-    /// If a snapshot with the same name already exists it is overwritten.
+    /// Copies graph.db, meta.json, and top-level JSON files from the configured graph directory
+    /// into <c>&lt;graph-dir&gt;\snapshots\&lt;snapshotName&gt;\</c>. Existing snapshots are overwritten.
     /// </summary>
-    public async Task SaveAsync(string graphDir, string snapshotName)
+    public Task SaveAsync(string snapshotName)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(graphDir);
         ArgumentException.ThrowIfNullOrWhiteSpace(snapshotName);
 
-        var sourceDir = Path.GetFullPath(Path.Combine(_workingDirectory, graphDir));
-        if (!Directory.Exists(sourceDir))
-            throw new DirectoryNotFoundException($"Graph directory not found: {sourceDir}");
+        if (!Directory.Exists(_graphDirectory))
+            throw new DirectoryNotFoundException($"Graph directory not found: {_graphDirectory}");
 
-        var metaPath = Path.Combine(sourceDir, "meta.json");
+        var metaPath = Path.Combine(_graphDirectory, "meta.json");
         if (!File.Exists(metaPath))
             throw new FileNotFoundException("meta.json not found in graph directory.", metaPath);
 
         var snapshotDir = GetSnapshotPath(snapshotName);
-
         if (Directory.Exists(snapshotDir))
             Directory.Delete(snapshotDir, recursive: true);
 
         Directory.CreateDirectory(snapshotDir);
 
-        // Copy meta.json
         File.Copy(metaPath, Path.Combine(snapshotDir, "meta.json"));
 
-        // Copy graph.db if present
-        var dbPath = Path.Combine(sourceDir, "graph.db");
+        var dbPath = Path.Combine(_graphDirectory, "graph.db");
         if (File.Exists(dbPath))
             File.Copy(dbPath, Path.Combine(snapshotDir, "graph.db"));
 
-        // Copy all JSON data files (excluding meta.json)
-        foreach (var jsonFile in Directory.GetFiles(sourceDir, "*.json"))
+        foreach (var jsonFile in Directory.GetFiles(_graphDirectory, "*.json", SearchOption.TopDirectoryOnly))
         {
             var fileName = Path.GetFileName(jsonFile);
             if (fileName.Equals("meta.json", StringComparison.OrdinalIgnoreCase))
@@ -61,11 +49,11 @@ public class SnapshotManager
             File.Copy(jsonFile, Path.Combine(snapshotDir, fileName));
         }
 
-        await Task.CompletedTask;
+        return Task.CompletedTask;
     }
 
     /// <summary>
-    /// Lists all snapshots found under <c>.codegraph-snapshots/</c>.
+    /// Lists all snapshots found under <c>&lt;graph-dir&gt;\snapshots\</c>.
     /// </summary>
     public IReadOnlyList<SnapshotInfo> List()
     {
@@ -74,7 +62,6 @@ public class SnapshotManager
             return Array.Empty<SnapshotInfo>();
 
         var results = new List<SnapshotInfo>();
-
         foreach (var dir in Directory.GetDirectories(root))
         {
             var metaPath = Path.Combine(dir, "meta.json");
@@ -86,9 +73,7 @@ public class SnapshotManager
             results.Add(new SnapshotInfo(name, new DateTimeOffset(createdAt, TimeSpan.Zero), dir));
         }
 
-        return results
-            .OrderBy(s => s.Name, StringComparer.Ordinal)
-            .ToList();
+        return results.OrderBy(s => s.Name, StringComparer.Ordinal).ToList();
     }
 
     /// <summary>
@@ -108,12 +93,13 @@ public class SnapshotManager
 
     internal string GetSnapshotPath(string snapshotName)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(snapshotName);
         return Path.Combine(GetSnapshotRoot(), snapshotName);
     }
 
     private string GetSnapshotRoot()
     {
-        return Path.Combine(_workingDirectory, SnapshotRoot);
+        return Path.Combine(_graphDirectory, "snapshots");
     }
 }
 

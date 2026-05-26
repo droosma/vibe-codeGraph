@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using CodeGraph.Core.Models;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;

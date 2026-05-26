@@ -810,19 +810,20 @@ static async Task<int> RunDiffAsync(string[] args)
 
     if (!string.IsNullOrWhiteSpace(gitRef) && !hasBaseFlag)
     {
+        var snapshotManager = new SnapshotManager(headGraphDir);
         var resolvedRef = RunGit($"rev-parse {gitRef}", Directory.GetCurrentDirectory());
-        var normalizedRef = gitRef.Replace('/', '-').Replace('\\', '-');
         var candidates = new[]
         {
-            Path.Combine(Directory.GetCurrentDirectory(), $".codegraph-{normalizedRef}"),
-            !string.IsNullOrEmpty(resolvedRef) ? Path.Combine(Directory.GetCurrentDirectory(), $".codegraph-{(resolvedRef.Length > 7 ? resolvedRef[..7] : resolvedRef)}") : string.Empty
+            snapshotManager.GetSnapshotPath(gitRef),
+            !string.IsNullOrEmpty(resolvedRef) ? snapshotManager.GetSnapshotPath(resolvedRef) : string.Empty,
+            !string.IsNullOrEmpty(resolvedRef) && resolvedRef.Length > 7 ? snapshotManager.GetSnapshotPath(resolvedRef[..7]) : string.Empty
         };
 
         var foundBase = candidates.FirstOrDefault(path => !string.IsNullOrEmpty(path) && Directory.Exists(path));
         if (string.IsNullOrEmpty(foundBase))
         {
             Console.Error.WriteLine($"Error: Could not locate a graph snapshot for ref '{gitRef}'.");
-            Console.Error.WriteLine("Pass --base <graph-dir> explicitly, or store a snapshot as .codegraph-<ref>.");
+            Console.Error.WriteLine($"Run 'codegraph snapshot save {gitRef}' first, or pass --base <graph-dir> explicitly.");
             return 1;
         }
 
@@ -1672,7 +1673,7 @@ static async Task<int> RunSnapshotAsync(string[] args)
                 Console.Error.WriteLine("Usage: codegraph snapshot save <name> [--graph-dir <dir>]");
                 return 1;
             }
-            await manager.SaveAsync(graphDir, name);
+            await manager.SaveAsync(name);
             Console.WriteLine($"Snapshot '{name}' saved.");
             return 0;
 
@@ -1711,104 +1712,56 @@ static async Task<int> RunSnapshotAsync(string[] args)
 
 static async Task<int> RunPackagesAsync(string[] args)
 {
-    var argList = args.Skip(1).ToList();
-    if (argList.Count > 0 && argList[0] is "-h" or "--help")
-    {
-        PrintPackagesUsage();
-        return 0;
-    }
-
     var graphDir = ".codegraph";
     string? projectFilter = null;
-    string? whoUsesPackage = null;
-    var conflictsOnly = false;
+    string? packageFilter = null;
     var formatJson = false;
-    var positionals = new List<string>();
 
-    for (var i = 0; i < argList.Count; i++)
+    for (var i = 1; i < args.Length; i++)
     {
-        switch (argList[i])
+        switch (args[i])
         {
-            case "--graph-dir" when i + 1 < argList.Count:
-                graphDir = argList[++i];
+            case "--graph-dir" when i + 1 < args.Length:
+                graphDir = args[++i];
                 break;
-            case "--project" when i + 1 < argList.Count:
-                projectFilter = argList[++i];
+            case "--project" when i + 1 < args.Length:
+                projectFilter = args[++i];
                 break;
-            case "--who-uses" when i + 1 < argList.Count:
-            case "--package" when i + 1 < argList.Count:
-                whoUsesPackage = argList[++i];
+            case "--package" when i + 1 < args.Length:
+                packageFilter = args[++i];
                 break;
-            case "--conflicts":
-                conflictsOnly = true;
-                break;
-            case "--json":
-                formatJson = true;
-                break;
-            case "--format" when i + 1 < argList.Count:
-                formatJson = argList[++i].Equals("json", StringComparison.OrdinalIgnoreCase);
+            case "--format" when i + 1 < args.Length:
+                formatJson = args[++i].Equals("json", StringComparison.OrdinalIgnoreCase);
                 break;
             case "-h" or "--help":
-                PrintPackagesUsage();
+                Console.WriteLine("Usage: codegraph packages [--project <name>] [--package <name>] [--format json] [--graph-dir <dir>]");
                 return 0;
-            default:
-                if (argList[i].StartsWith("-", StringComparison.Ordinal))
-                {
-                    Console.Error.WriteLine($"Error: Unknown option '{argList[i]}'.");
-                    PrintPackagesUsage();
-                    return 1;
-                }
-
-                positionals.Add(argList[i]);
-                break;
         }
-    }
-
-    if (positionals.Count > 1)
-    {
-        Console.Error.WriteLine("Error: Too many positional arguments. Expected at most one project name.");
-        PrintPackagesUsage();
-        return 1;
-    }
-
-    if (!string.IsNullOrWhiteSpace(projectFilter) && positionals.Count == 1 &&
-        !projectFilter.Equals(positionals[0], StringComparison.OrdinalIgnoreCase))
-    {
-        Console.Error.WriteLine("Error: Specify the project filter either positionally or with --project, not both.");
-        return 1;
-    }
-
-    projectFilter ??= positionals.FirstOrDefault();
-
-    if (conflictsOnly && !string.IsNullOrWhiteSpace(whoUsesPackage))
-    {
-        Console.Error.WriteLine("Error: --conflicts cannot be combined with --who-uses.");
-        return 1;
     }
 
     try
     {
-        var (_, nodes, edges) = await LoadPackageGraphAsync(graphDir);
-        var engine = new PackageQueryEngine(nodes, edges);
+        var (_, nodes, edges) = await GraphReader.ReadAsync(graphDir);
+        var analyzer = new PackageAnalyzer(nodes, edges);
 
-        string output;
-        if (conflictsOnly)
+        if (!string.IsNullOrEmpty(packageFilter))
         {
-            var conflicts = engine.FindConflicts();
-            output = formatJson ? PackageFormatter.FormatConflictsAsJson(conflicts) : PackageFormatter.FormatConflicts(conflicts);
-        }
-        else if (!string.IsNullOrWhiteSpace(whoUsesPackage))
-        {
-            var dependents = engine.FindWhoUses(whoUsesPackage, projectFilter);
-            output = formatJson ? PackageFormatter.FormatDependentsAsJson(dependents) : PackageFormatter.FormatDependents(dependents);
+            var usages = analyzer.AnalyzeByPackage(packageFilter);
+            Console.Write(formatJson ? PackageFormatter.FormatUsageAsJson(usages) : PackageFormatter.FormatUsage(usages));
         }
         else
         {
-            var usages = engine.ListPackages(projectFilter);
-            output = formatJson ? PackageFormatter.FormatUsageAsJson(usages) : PackageFormatter.FormatUsage(usages);
+            var usages = analyzer.AnalyzeByProject(projectFilter);
+            Console.Write(formatJson ? PackageFormatter.FormatUsageAsJson(usages) : PackageFormatter.FormatUsage(usages));
+
+            var conflicts = analyzer.FindConflicts();
+            if (conflicts.Count > 0)
+            {
+                Console.WriteLine();
+                Console.Write(formatJson ? PackageFormatter.FormatConflictsAsJson(conflicts) : PackageFormatter.FormatConflicts(conflicts));
+            }
         }
 
-        Console.WriteLine(output);
         return 0;
     }
     catch (FileNotFoundException ex)
@@ -1817,15 +1770,6 @@ static async Task<int> RunPackagesAsync(string[] args)
         Console.Error.WriteLine("Run 'codegraph index' to generate the graph first.");
         return 1;
     }
-}
-
-static async Task<(GraphMetadata Metadata, Dictionary<string, GraphNode> Nodes, List<GraphEdge> Edges)> LoadPackageGraphAsync(string graphDir)
-{
-    var dbPath = Path.Combine(graphDir, "graph.db");
-    if (File.Exists(dbPath))
-        return await SqliteGraphReader.ReadAsync(dbPath);
-
-    return await GraphReader.ReadAsync(graphDir);
 }
 
 static async Task<int> RunBenchmarkAsync(string[] args)
@@ -2457,7 +2401,7 @@ static async Task<int> RunInitAsync(string[] args)
     }
     Console.WriteLine();
     Console.WriteLine("  Commit the skill files:");
-    Console.WriteLine("     git add .claude/ .github/ AGENTS.md .cursor/ .codegraph/");
+    Console.WriteLine("     git add .claude/ .github/ .codegraph/INSTRUCTIONS.md");
     Console.WriteLine("     git commit -m 'Add CodeGraph agent skills'");
 
     return 0;
@@ -2556,7 +2500,7 @@ static void PrintUsage()
     Console.WriteLine("  codegraph view [--graph-dir <dir>] [--output <path>] [--max-nodes <n>] [--no-open]");
     Console.WriteLine("  codegraph test-impact <symbol> [--depth N] [--graph-dir <dir>]");
     Console.WriteLine("  codegraph snapshot <save|list|delete> [name] [--graph-dir <dir>]");
-    Console.WriteLine("  codegraph packages [project] [--who-uses <package>] [--conflicts] [--json]");
+    Console.WriteLine("  codegraph packages [--project <name>] [--package <name>] [--format json]");
     Console.WriteLine("  codegraph benchmark [--scenarios <path>] [--iterations N] [--format json]");
     Console.WriteLine("  codegraph daemon <start|stop|status> [--graph-dir <dir>]");
     Console.WriteLine("  codegraph mcp [--graph-dir <dir>]");
@@ -2580,7 +2524,7 @@ static void PrintUsage()
     Console.WriteLine("  view                     Open interactive 3D graph visualization in browser");
     Console.WriteLine("  test-impact              Analyze test coverage for a symbol (direct + indirect)");
     Console.WriteLine("  snapshot                 Save, list, or delete graph snapshots for diff comparison");
-    Console.WriteLine("  packages                 Analyze NuGet package usage, dependents, and version conflicts");
+    Console.WriteLine("  packages                 Analyze NuGet package usage and version conflicts");
     Console.WriteLine("  benchmark                Run performance benchmarks against the graph");
     Console.WriteLine("  daemon                   Start/stop persistent background daemon for fast queries");
     Console.WriteLine("  mcp                      Start MCP (Model Context Protocol) stdio server");
@@ -2747,21 +2691,6 @@ static void PrintViewUsage()
         """);
 }
 
-static void PrintPackagesUsage()
-{
-    Console.WriteLine("""
-        Usage: codegraph packages [project] [options]
-
-        Options:
-          --project <name>     Filter by project/assembly name (or pass as positional argument)
-          --who-uses <package> List the types and methods that depend on a package
-          --conflicts          Show package version conflicts across projects
-          --json               Output as JSON
-          --format json        Legacy alias for --json
-          --graph-dir <path>   Graph directory (default: .codegraph)
-        """);
-}
-
 static void PrintQueryUsage()
 {
     Console.WriteLine("""
@@ -2810,7 +2739,7 @@ static void PrintDiffUsage()
         Options:
           --base <path>         Base graph directory (default: .codegraph-prev)
           --head <path>         Head graph directory (default: .codegraph)
-          --ref <git-ref>       Use snapshot named .codegraph-<ref> as base
+          --ref <git-ref>       Use snapshot named <graph-dir>\\snapshots\\<ref> as base
           --only <types>        Comma-separated: added, removed, signature-changed,
                                 added-nodes, removed-nodes, added-edges, removed-edges
           --format <fmt>        json | text | context (default: context)

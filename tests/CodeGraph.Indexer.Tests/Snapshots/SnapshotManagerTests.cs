@@ -1,4 +1,3 @@
-using System.Text.Json;
 using CodeGraph.Core.IO;
 using CodeGraph.Core.Models;
 using CodeGraph.Indexer.Snapshots;
@@ -19,7 +18,7 @@ public class SnapshotManagerTests : IDisposable
         _graphDir = Path.Combine(_tempDir, ".codegraph");
         Directory.CreateDirectory(_graphDir);
 
-        _sut = new SnapshotManager(_tempDir);
+        _sut = new SnapshotManager(_graphDir);
     }
 
     public void Dispose()
@@ -29,11 +28,19 @@ public class SnapshotManagerTests : IDisposable
     }
 
     [Fact]
+    public void GetSnapshotPath_UsesGraphSnapshotsSubdirectory()
+    {
+        var snapshotPath = _sut.GetSnapshotPath("main");
+
+        Assert.Equal(Path.Combine(_graphDir, "snapshots", "main"), snapshotPath);
+    }
+
+    [Fact]
     public async Task Save_CopiesMetaAndJsonFiles()
     {
         await WriteTestGraph(_graphDir, "abc123");
 
-        await _sut.SaveAsync(".codegraph", "v1");
+        await _sut.SaveAsync("v1");
 
         var snapshotDir = _sut.GetSnapshotPath("v1");
         Assert.True(File.Exists(Path.Combine(snapshotDir, "meta.json")));
@@ -47,7 +54,7 @@ public class SnapshotManagerTests : IDisposable
         var dbPath = Path.Combine(_graphDir, "graph.db");
         await File.WriteAllTextAsync(dbPath, "fake-db-content");
 
-        await _sut.SaveAsync(".codegraph", "with-db");
+        await _sut.SaveAsync("with-db");
 
         var snapshotDir = _sut.GetSnapshotPath("with-db");
         Assert.True(File.Exists(Path.Combine(snapshotDir, "graph.db")));
@@ -57,11 +64,10 @@ public class SnapshotManagerTests : IDisposable
     public async Task Save_OverwritesExistingSnapshot()
     {
         await WriteTestGraph(_graphDir, "first-commit");
-        await _sut.SaveAsync(".codegraph", "snap");
+        await _sut.SaveAsync("snap");
 
-        // Overwrite with different commit
         await WriteTestGraph(_graphDir, "second-commit");
-        await _sut.SaveAsync(".codegraph", "snap");
+        await _sut.SaveAsync("snap");
 
         var snapshotDir = _sut.GetSnapshotPath("snap");
         var metaContent = await File.ReadAllTextAsync(Path.Combine(snapshotDir, "meta.json"));
@@ -72,8 +78,9 @@ public class SnapshotManagerTests : IDisposable
     [Fact]
     public async Task Save_ThrowsWhenGraphDirMissing()
     {
-        await Assert.ThrowsAsync<DirectoryNotFoundException>(
-            () => _sut.SaveAsync("nonexistent", "snap"));
+        var isolated = new SnapshotManager(Path.Combine(_tempDir, "nonexistent"));
+
+        await Assert.ThrowsAsync<DirectoryNotFoundException>(() => isolated.SaveAsync("snap"));
     }
 
     [Fact]
@@ -81,17 +88,17 @@ public class SnapshotManagerTests : IDisposable
     {
         var emptyDir = Path.Combine(_tempDir, "empty-graph");
         Directory.CreateDirectory(emptyDir);
+        var isolated = new SnapshotManager(emptyDir);
 
-        await Assert.ThrowsAsync<FileNotFoundException>(
-            () => _sut.SaveAsync("empty-graph", "snap"));
+        await Assert.ThrowsAsync<FileNotFoundException>(() => isolated.SaveAsync("snap"));
     }
 
     [Fact]
     public async Task List_ReturnsSnapshots_SortedByName()
     {
         await WriteTestGraph(_graphDir, "c1");
-        await _sut.SaveAsync(".codegraph", "beta");
-        await _sut.SaveAsync(".codegraph", "alpha");
+        await _sut.SaveAsync("beta");
+        await _sut.SaveAsync("alpha");
 
         var snapshots = _sut.List();
 
@@ -122,10 +129,9 @@ public class SnapshotManagerTests : IDisposable
     public async Task List_SkipsDirectoriesWithoutMeta()
     {
         await WriteTestGraph(_graphDir, "c1");
-        await _sut.SaveAsync(".codegraph", "valid");
+        await _sut.SaveAsync("valid");
 
-        // Create a snapshot dir without meta.json
-        var bogusDir = Path.Combine(_tempDir, ".codegraph-snapshots", "bogus");
+        var bogusDir = Path.Combine(_graphDir, "snapshots", "bogus");
         Directory.CreateDirectory(bogusDir);
 
         var snapshots = _sut.List();
@@ -138,14 +144,14 @@ public class SnapshotManagerTests : IDisposable
     public async Task List_PopulatesSnapshotInfoFields()
     {
         await WriteTestGraph(_graphDir, "c1");
-        await _sut.SaveAsync(".codegraph", "info-test");
+        await _sut.SaveAsync("info-test");
 
         var snapshots = _sut.List();
         var snapshot = Assert.Single(snapshots);
 
         Assert.Equal("info-test", snapshot.Name);
         Assert.NotEqual(default, snapshot.CreatedAt);
-        Assert.Contains(".codegraph-snapshots", snapshot.Path);
+        Assert.Contains(Path.Combine(".codegraph", "snapshots"), snapshot.Path);
         Assert.Contains("info-test", snapshot.Path);
     }
 
@@ -153,7 +159,7 @@ public class SnapshotManagerTests : IDisposable
     public async Task Delete_RemovesSnapshot_ReturnsTrue()
     {
         await WriteTestGraph(_graphDir, "c1");
-        await _sut.SaveAsync(".codegraph", "doomed");
+        await _sut.SaveAsync("doomed");
 
         var result = _sut.Delete("doomed");
 
@@ -173,8 +179,8 @@ public class SnapshotManagerTests : IDisposable
     public async Task Delete_DoesNotAffectOtherSnapshots()
     {
         await WriteTestGraph(_graphDir, "c1");
-        await _sut.SaveAsync(".codegraph", "keep");
-        await _sut.SaveAsync(".codegraph", "remove");
+        await _sut.SaveAsync("keep");
+        await _sut.SaveAsync("remove");
 
         _sut.Delete("remove");
 
@@ -187,7 +193,7 @@ public class SnapshotManagerTests : IDisposable
     public async Task RoundTrip_SnapshotCanBeReadByGraphReader()
     {
         await WriteTestGraph(_graphDir, "roundtrip-hash");
-        await _sut.SaveAsync(".codegraph", "readable");
+        await _sut.SaveAsync("readable");
 
         var snapshotDir = _sut.GetSnapshotPath("readable");
         var (metadata, nodes, edges) = await GraphReader.ReadAsync(snapshotDir);
