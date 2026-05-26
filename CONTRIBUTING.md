@@ -23,7 +23,7 @@ dotnet build CodeGraph.sln
 dotnet test CodeGraph.sln
 ```
 
-All 461+ tests should pass (922 total runs across net8.0 and net10.0). If they don't, check that you have the correct .NET SDK version.
+All 2,000+ tests should pass (4,000+ total runs across net8.0 and net10.0). If they don't, check that you have the correct .NET SDK version.
 
 ### Mutation Testing
 
@@ -36,7 +36,7 @@ cd tests/CodeGraph.Indexer.Tests && dotnet stryker
 cd tests/CodeGraph.Query.Tests && dotnet stryker
 ```
 
-Each test project has a `stryker-config.json` with thresholds. Stryker generates HTML reports in `StrykerOutput/`. The mutation testing CI workflow runs automatically on PRs.
+Each unit test project (`Core.Tests`, `Indexer.Tests`, `Query.Tests`) has a `stryker-config.json` with thresholds (break at 50%, low at 60%, high at 80%). Stryker generates HTML reports in `StrykerOutput/`. The mutation testing CI workflow runs automatically on PRs. Integration tests are excluded from mutation testing.
 
 ---
 
@@ -57,10 +57,11 @@ CodeGraph.sln
 │       ├── Filters/                 # DepthFilter, RankingStrategy, EdgeTypeFilter
 │       └── OutputFormatters/        # ContextFormatter, JsonFormatter, TextFormatter
 ├── tests/
+│   ├── Directory.Build.props        # Shared test analyzer suppressions (CA1707, CA1816, CA1861)
 │   ├── CodeGraph.Core.Tests/        # Models, config, schema validation
 │   ├── CodeGraph.Indexer.Tests/     # Pass logic, workspace parsing
 │   ├── CodeGraph.Query.Tests/       # Query engine, filters, formatters
-│   └── CodeGraph.Integration.Tests/ # End-to-end scenarios
+│   └── CodeGraph.Integration.Tests/ # End-to-end scenarios (cross-solution, graph diff)
 ├── nupkg/                           # Local NuGet package output
 ├── docs/                            # Documentation
 ├── codegraph.json.example           # Annotated config example
