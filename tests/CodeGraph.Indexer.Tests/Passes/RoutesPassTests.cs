@@ -81,6 +81,10 @@ namespace Microsoft.AspNetCore.Builder
     public static class EndpointRouteBuilderExtensions
     {
         public static object MapGet(this IEndpointRouteBuilder app, string pattern, System.Func<string> handler) => null;
+        public static object MapPost(this IEndpointRouteBuilder app, string pattern, System.Func<string> handler) => null;
+        public static object MapPut(this IEndpointRouteBuilder app, string pattern, System.Func<string> handler) => null;
+        public static object MapDelete(this IEndpointRouteBuilder app, string pattern, System.Func<string> handler) => null;
+        public static object MapPatch(this IEndpointRouteBuilder app, string pattern, System.Func<string> handler) => null;
     }
 }
 ";
@@ -440,5 +444,195 @@ namespace MyApp
         Assert.Equal("GET", edge.Metadata["httpMethod"]);
 
         Assert.Contains(externalNodes, node => node.Id == "GET /orders/{id}");
+    }
+
+    [Theory]
+    [InlineData("MapPost", "POST")]
+    [InlineData("MapPut", "PUT")]
+    [InlineData("MapDelete", "DELETE")]
+    [InlineData("MapPatch", "PATCH")]
+    public void MinimalApi_AllMapMethods_EmitCorrectHttpMethod(string mapMethod, string expectedMethod)
+    {
+        var code = MinimalApiStubs + $@"
+namespace MyApp
+{{
+    using Microsoft.AspNetCore.Builder;
+
+    public static class Program
+    {{
+        public static void Configure(WebApplication app)
+        {{
+            app.{mapMethod}(""/items"", Handler);
+        }}
+
+        public static string Handler() => string.Empty;
+    }}
+}}";
+
+        var compilation = CreateCompilation(code);
+        var pass = new RoutesPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var edge = Assert.Single(edges);
+        Assert.Equal($"{expectedMethod} /items", edge.FromId);
+        Assert.Equal(expectedMethod, edge.Metadata["httpMethod"]);
+    }
+
+    [Fact]
+    public void MinimalApi_WithTooFewArguments_EmitsNoEdges()
+    {
+        var code = @"
+namespace Microsoft.AspNetCore.Builder
+{
+    public interface IEndpointRouteBuilder { }
+    public sealed class WebApplication : IEndpointRouteBuilder { }
+    public static class EndpointRouteBuilderExtensions
+    {
+        public static object MapGet(this IEndpointRouteBuilder app) => null;
+    }
+}
+namespace MyApp
+{
+    using Microsoft.AspNetCore.Builder;
+    public static class Program
+    {
+        public static void Configure(WebApplication app)
+        {
+            app.MapGet();
+        }
+    }
+}";
+
+        var compilation = CreateCompilation(code);
+        var pass = new RoutesPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        Assert.Empty(edges);
+    }
+
+    [Fact]
+    public void RouteWithDoubleSlashes_IsNormalized()
+    {
+        var code = StubAttributes + @"
+namespace MyApp
+{
+    using Microsoft.AspNetCore.Mvc;
+
+    [ApiController]
+    [Route(""api//[controller]"")]
+    public class OrderController : ControllerBase
+    {
+        [HttpGet(""//items"")]
+        public object GetItems() => null;
+    }
+}";
+
+        var compilation = CreateCompilation(code);
+        var pass = new RoutesPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var edge = Assert.Single(edges);
+        Assert.DoesNotContain("//", edge.Metadata["route"]);
+    }
+
+    [Fact]
+    public void RouteWithBackslashes_IsNormalized()
+    {
+        var code = StubAttributes + @"
+namespace MyApp
+{
+    using Microsoft.AspNetCore.Mvc;
+
+    [ApiController]
+    [Route(""api\\[controller]"")]
+    public class OrderController : ControllerBase
+    {
+        [HttpGet]
+        public object GetAll() => null;
+    }
+}";
+
+        var compilation = CreateCompilation(code);
+        var pass = new RoutesPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var edge = Assert.Single(edges);
+        Assert.DoesNotContain("\\", edge.Metadata["route"]);
+        Assert.StartsWith("/", edge.Metadata["route"]);
+    }
+
+    [Fact]
+    public void RouteWithTrailingSlash_IsTrimmed()
+    {
+        var code = StubAttributes + @"
+namespace MyApp
+{
+    using Microsoft.AspNetCore.Mvc;
+
+    [ApiController]
+    [Route(""api/[controller]/"")]
+    public class OrderController : ControllerBase
+    {
+        [HttpGet]
+        public object GetAll() => null;
+    }
+}";
+
+        var compilation = CreateCompilation(code);
+        var pass = new RoutesPass();
+        var (edges, _) = pass.Execute(compilation, "/root", new HashSet<string>());
+
+        var edge = Assert.Single(edges);
+        Assert.False(edge.Metadata["route"].EndsWith('/'));
+    }
+
+    [Fact]
+    public void KnownNodeIds_SkipsExternalNodeCreation()
+    {
+        var code = StubAttributes + @"
+namespace MyApp
+{
+    using Microsoft.AspNetCore.Mvc;
+
+    [ApiController]
+    [Route(""api/[controller]"")]
+    public class OrderController : ControllerBase
+    {
+        [HttpGet]
+        public object GetAll() => null;
+    }
+}";
+
+        var compilation = CreateCompilation(code);
+        var pass = new RoutesPass();
+        var knownIds = new HashSet<string> { "GET /api/Order", "MyApp.OrderController.GetAll()" };
+        var (edges, externalNodes) = pass.Execute(compilation, "/root", knownIds);
+
+        Assert.Single(edges);
+        Assert.Empty(externalNodes);
+    }
+
+    [Fact]
+    public void EmptySolutionRoot_DoesNotThrow()
+    {
+        var code = StubAttributes + @"
+namespace MyApp
+{
+    using Microsoft.AspNetCore.Mvc;
+
+    [ApiController]
+    [Route(""api/[controller]"")]
+    public class OrderController : ControllerBase
+    {
+        [HttpGet]
+        public object GetAll() => null;
+    }
+}";
+
+        var compilation = CreateCompilation(code);
+        var pass = new RoutesPass();
+        var (edges, _) = pass.Execute(compilation, "", new HashSet<string>());
+
+        Assert.Single(edges);
     }
 }
