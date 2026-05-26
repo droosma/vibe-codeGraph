@@ -14,7 +14,20 @@ Any method in a class that either:
 
 …and is decorated with an HTTP verb attribute (`[HttpGet]`, `[HttpPost]`, `[HttpPut]`, `[HttpDelete]`, `[HttpPatch]`).
 
-Class-level `[Route]` templates are combined with action-level templates. The `[controller]` and `[action]` tokens are resolved statically.
+Class-level `[Route]` templates are combined with action-level templates. The `[controller]` and `[action]` tokens are resolved statically. Route templates may be specified as a positional argument or a named `Template` argument — both are resolved identically:
+
+```csharp
+[Route(Template = "api/[controller]")]   // equivalent to [Route("api/[controller]")]
+```
+
+A method decorated with **multiple HTTP verb attributes** emits one `HandlesRoute` edge per verb:
+
+```csharp
+[HttpGet]
+[HttpPost]
+public IActionResult Handle() { ... }
+// → GET /api/orders  and  POST /api/orders
+```
 
 ```csharp
 [ApiController]
@@ -39,6 +52,26 @@ app.MapPost("/api/products", CreateProduct); // → POST /api/products
 ```
 
 > **Note:** Only string literal routes are resolved. Routes stored in variables or constants are not resolved at index time.
+
+## Route Normalization
+
+All routes — from both controller attributes and minimal API calls — are normalized at index time:
+
+| Input | Normalized output |
+|-------|------------------|
+| `api\\orders` | `/api/orders` |
+| `api//orders//` | `/api/orders` |
+| `api/orders/` | `/api/orders` |
+| `orders` | `/orders` |
+
+The rules applied, in order:
+
+1. Backslashes (`\`) are converted to forward slashes.
+2. Leading `/` is always added if missing.
+3. Consecutive slashes (`//`) are collapsed to a single slash.
+4. A trailing slash is trimmed — except the root route `/`, which is preserved.
+
+> **Note:** The route stored in `edge.Metadata["route"]` and the route-node ID always reflect the normalized form.
 
 ## Graph Representation
 
