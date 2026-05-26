@@ -25,6 +25,8 @@ dotnet test CodeGraph.sln
 
 All 2,000+ tests should pass (4,000+ total runs across net8.0 and net10.0). If they don't, check that you have the correct .NET SDK version.
 
+> **CI runs on Linux** (`ubuntu-latest`). Ensure tests are cross-platform — see [Cross-Platform Test Guidelines](#cross-platform-test-guidelines) below.
+
 ### Mutation Testing
 
 We use [Stryker.NET](https://stryker-mutator.io/) for mutation testing to verify test quality:
@@ -104,6 +106,26 @@ public class MyNewFeatureTests
         Assert.Contains(nodes, n => n.Kind == NodeKind.Type && n.Name == "Bar");
     }
 }
+```
+
+### Cross-Platform Test Guidelines
+
+The CI runs on **Linux** (`ubuntu-latest`). Tests must work on all platforms:
+
+- **Avoid hardcoded Windows paths** — never use literals like `@"D:\repo\Service.cs"`. Use `Path.Combine` and `Path.GetTempPath()` for real filesystem paths.
+- **In-memory test data** — when a path is just a string stored in a model property (e.g., `GraphNode.FilePath`) and never passed to the filesystem or `Path.GetRelativePath`, any literal string is safe. But prefer platform-neutral values like `"repo/Service.cs"` to signal intent.
+- **Roslyn syntax tree paths** — when creating a `CSharpSyntaxTree` with a file path, use a relative path (e.g., `"Service.cs"`) or `Path.Combine` so `Path.GetRelativePath` works on Linux.
+- **Temp directories** — use `Path.Combine(Path.GetTempPath(), ...)` for test temp directories, then clean up in `IDisposable.Dispose()`.
+
+```csharp
+// ❌ Fails on Linux — Path.GetRelativePath can't relativize against a Windows root
+var (nodes, _) = pass.Execute(compilation, @"D:\repo", rootPath: @"D:\repo");
+
+// ✅ Use an empty string or a relative root for in-memory tests
+var (nodes, _) = pass.Execute(compilation, solutionRoot: string.Empty);
+
+// ✅ Use Path.Combine for real temp paths
+var dir = Path.Combine(Path.GetTempPath(), $"cg-test-{Guid.NewGuid():N}");
 ```
 
 ---
