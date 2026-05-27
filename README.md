@@ -913,6 +913,7 @@ Stryker generates HTML reports in `StrykerOutput/` with mutation scores per proj
 
 - [Architecture Deep Dive](docs/architecture.md)
 - [Graph Schema Reference](docs/graph-schema.md)
+- [ASP.NET Route-to-Handler Mapping](docs/routes.md)
 - [Configuration Reference](docs/configuration.md)
 - [Vision & Roadmap](docs/VISION.md)
 
