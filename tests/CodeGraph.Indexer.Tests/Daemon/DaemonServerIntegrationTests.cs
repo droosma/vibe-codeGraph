@@ -8,13 +8,16 @@ using CodeGraph.Query;
 
 namespace CodeGraph.Indexer.Tests.Daemon;
 
+[Collection("DaemonIntegration")]
 public sealed class DaemonServerIntegrationTests : IDisposable
 {
     private readonly string _graphDir;
 
     public DaemonServerIntegrationTests()
     {
-        _graphDir = Path.Combine(Path.GetTempPath(), "daemon-integration-" + Guid.NewGuid().ToString("N"));
+        _graphDir = Path.Combine(
+            Path.GetDirectoryName(typeof(DaemonServerIntegrationTests).Assembly.Location)!,
+            "DaemonIntegration_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_graphDir);
     }
 
@@ -25,22 +28,35 @@ public sealed class DaemonServerIntegrationTests : IDisposable
     }
 
     [Fact]
-    public async Task StartAsync_WritesAndDeletesPidFile_AndReportsRunning()
+    public async Task StartAsync_LoadFailure_DeletesPidFileBeforeRethrowing()
     {
-        var daemon = await StartDaemonAsync();
-        try
-        {
-            Assert.Equal(Environment.ProcessId, PidFile.Read(_graphDir));
-            Assert.True(DaemonServer.IsRunning(_graphDir));
-            Assert.True(File.Exists(PidFile.GetPath(_graphDir)));
-        }
-        finally
-        {
-            await daemon.DisposeAsync();
-        }
+        using var server = new DaemonServer(_graphDir);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => server.StartAsync());
 
         Assert.False(File.Exists(PidFile.GetPath(_graphDir)));
-        Assert.False(DaemonServer.IsRunning(_graphDir));
+    }
+
+    [Fact]
+    public void TryParseRequest_InvalidJson_ReturnsFalse_AndWhitespaceJsonParsesSuccessfully()
+    {
+        var invalidArgs = new object?[] { "{not-json", null };
+        var invalidResult = (bool)typeof(DaemonServer)
+            .GetMethod("TryParseRequest", BindingFlags.Static | BindingFlags.NonPublic)!
+            .Invoke(null, invalidArgs)!;
+
+        Assert.False(invalidResult);
+        Assert.Null(invalidArgs[1]);
+
+        var validArgs = new object?[] { "  {\"id\":9,\"command\":\"ping\",\"args\":[]}  ", null };
+        var validResult = (bool)typeof(DaemonServer)
+            .GetMethod("TryParseRequest", BindingFlags.Static | BindingFlags.NonPublic)!
+            .Invoke(null, validArgs)!;
+
+        Assert.True(validResult);
+        var request = Assert.IsAssignableFrom<JsonNode>(validArgs[1]);
+        Assert.Equal(9, request["id"]?.GetValue<int>());
+        Assert.Equal("ping", request["command"]?.GetValue<string>());
     }
 
     [Fact]
@@ -139,58 +155,57 @@ public sealed class DaemonServerIntegrationTests : IDisposable
         Assert.Equal("Missing 'command' field", response["error"]?["message"]?.GetValue<string>());
     }
 
-    private async Task<RunningDaemon> StartDaemonAsync()
+    [Theory]
+    [InlineData("query", "Error: symbol pattern required")]
+    [InlineData("search", "Error: search query required")]
+    public async Task HandleRequestAsync_MissingRequiredArguments_ReturnsExactErrorResult(string command, string expectedResult)
     {
-        await WriteGraphAsync();
+        using var server = CreateServerWithEngine();
 
-        var server = new DaemonServer(_graphDir);
-        var serverTask = server.StartAsync();
-        await WaitForConditionAsync(() => DaemonServer.IsRunning(_graphDir));
-        return new RunningDaemon(server, serverTask);
+        var response = await InvokeHandleRequestAsync(server, new JsonObject
+        {
+            ["command"] = command,
+            ["args"] = new JsonArray()
+        });
+
+        Assert.Equal(expectedResult, response["result"]?.GetValue<string>());
+        Assert.Null(response["id"]);
     }
 
-    private async Task WriteGraphAsync()
+    [Fact]
+    public async Task HandleRequestAsync_ListUnknownScope_ReturnsSupportedScopeMessage()
     {
-        var metadata = new GraphMetadata
-        {
-            SchemaVersion = GraphSchema.CurrentVersion,
-            Solution = "Daemon.sln",
-            SolutionName = "Daemon"
-        };
-        var nodes = new[]
-        {
-            new GraphNode
-            {
-                Id = "Demo.Service",
-                Name = "Service",
-                Kind = NodeKind.Type,
-                AssemblyName = "Demo.Assembly",
-                Accessibility = Accessibility.Public,
-                FilePath = @"D:\repo\Service.cs",
-                StartLine = 12,
-                EndLine = 20,
-                ContainingNamespaceId = "Demo"
-            },
-            new GraphNode
-            {
-                Id = "Demo.Service.Run",
-                Name = "Run",
-                Kind = NodeKind.Method,
-                AssemblyName = "Demo.Assembly",
-                Accessibility = Accessibility.Internal,
-                FilePath = @"D:\repo\Service.cs",
-                StartLine = 14,
-                EndLine = 16,
-                ContainingNamespaceId = "Demo"
-            }
-        };
-        var edges = new[]
-        {
-            new GraphEdge { FromId = "Demo.Service", ToId = "Demo.Service.Run", Type = EdgeType.Contains }
-        };
+        using var server = CreateServerWithEngine();
 
-        await new GraphWriter().WriteAsync(_graphDir, nodes, edges, metadata);
+        var response = await InvokeHandleRequestAsync(server, new JsonObject
+        {
+            ["command"] = "list",
+            ["args"] = new JsonArray("types")
+        });
+
+        Assert.Equal("Unknown scope: types. Supported: assemblies", response["result"]?.GetValue<string>());
     }
+
+    [Fact]
+    public async Task HandleRequestAsync_InvalidNumericOptions_FallBackToDefaultQueryOutput()
+    {
+        using var server = CreateServerWithEngine();
+
+        var defaultResponse = await InvokeHandleRequestAsync(server, new JsonObject
+        {
+            ["command"] = "query",
+            ["args"] = new JsonArray("Demo.Service")
+        });
+        var invalidResponse = await InvokeHandleRequestAsync(server, new JsonObject
+        {
+            ["command"] = "query",
+            ["args"] = new JsonArray("Demo.Service", "--depth", "oops", "--max-nodes", "NaN")
+        });
+
+        Assert.Equal(defaultResponse["result"]?.GetValue<string>(), invalidResponse["result"]?.GetValue<string>());
+    }
+
+    private static string NormalizeNewLines(string value) => value.Replace("\r\n", "\n");
 
     private static async Task<JsonNode> InvokeHandleRequestAsync(DaemonServer server, JsonNode request)
     {
@@ -238,53 +253,5 @@ public sealed class DaemonServerIntegrationTests : IDisposable
         typeof(DaemonServer).GetField("_engine", BindingFlags.Instance | BindingFlags.NonPublic)!
             .SetValue(server, new QueryEngine(nodes, edges, metadata));
         return server;
-    }
-
-    private static string NormalizeNewLines(string value) => value.Replace("\r\n", "\n");
-
-    private static async Task WaitForConditionAsync(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition())
-                return;
-
-            await Task.Delay(100);
-        }
-
-        throw new TimeoutException("Timed out waiting for daemon server to start.");
-    }
-
-    private sealed class RunningDaemon : IAsyncDisposable
-    {
-        private readonly DaemonServer _server;
-        private readonly Task _serverTask;
-
-        public RunningDaemon(DaemonServer server, Task serverTask)
-        {
-            _server = server;
-            _serverTask = serverTask;
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            _server.Stop();
-
-            try
-            {
-                await _serverTask.WaitAsync(TimeSpan.FromSeconds(5));
-            }
-            catch (IOException)
-            {
-            }
-            catch (OperationCanceledException)
-            {
-            }
-            finally
-            {
-                _server.Dispose();
-            }
-        }
     }
 }

@@ -1,3 +1,7 @@
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json.Nodes;
 using CodeGraph.Indexer.Daemon;
 
 namespace CodeGraph.Indexer.Tests.Daemon;
@@ -32,8 +36,8 @@ public class DaemonServerTests : IDisposable
     [Fact]
     public void GetPipeName_DifferentDirs_ProduceDifferentNames()
     {
-        var name1 = DaemonServer.GetPipeName("/some/path");
-        var name2 = DaemonServer.GetPipeName("/other/path");
+        var name1 = DaemonServer.GetPipeName(@"D:\some\path");
+        var name2 = DaemonServer.GetPipeName(@"D:\other\path");
 
         Assert.NotEqual(name1, name2);
     }
@@ -56,9 +60,43 @@ public class DaemonServerTests : IDisposable
     }
 
     [Fact]
+    public void GetPipeName_RelativePath_UsesAbsolutePath()
+    {
+        var relativePath = Path.GetRelativePath(Directory.GetCurrentDirectory(), _graphDir);
+
+        Assert.Equal(DaemonServer.GetPipeName(_graphDir), DaemonServer.GetPipeName(relativePath));
+    }
+
+    [Fact]
+    public void GetPipeName_UsesExpectedLowercaseHash()
+    {
+        var absolutePath = Path.GetFullPath(_graphDir);
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(absolutePath));
+        var expected = $"codegraph-{Convert.ToHexString(hash)[..16].ToLowerInvariant()}";
+
+        Assert.Equal(expected, DaemonServer.GetPipeName(_graphDir));
+        Assert.Matches("^codegraph-[0-9a-f]{16}$", DaemonServer.GetPipeName(_graphDir));
+    }
+
+    [Fact]
     public void IsRunning_NoDaemon_ReturnsFalse()
     {
         Assert.False(DaemonServer.IsRunning(_graphDir));
+    }
+
+    [Fact]
+    public void IsRunning_PidFileForLiveProcessWithoutPipe_ReturnsFalse()
+    {
+        PidFile.Write(_graphDir, Environment.ProcessId);
+
+        try
+        {
+            Assert.False(DaemonServer.IsRunning(_graphDir));
+        }
+        finally
+        {
+            PidFile.Delete(_graphDir);
+        }
     }
 
     [Fact]
@@ -111,5 +149,36 @@ public class DaemonServerTests : IDisposable
     public void PidFile_Delete_WhenNoFile_DoesNotThrow()
     {
         PidFile.Delete(_graphDir);
+    }
+
+    [Fact]
+    public void CreateResponse_WithObjectId_ClonesIdAndIncludesResult()
+    {
+        var id = new JsonObject { ["value"] = 1 };
+
+        var response = InvokeStaticJsonNodeMethod("CreateResponse", id, "pong");
+        id["value"] = 99;
+
+        Assert.Equal("2.0", response["jsonrpc"]?.GetValue<string>());
+        Assert.Equal("pong", response["result"]?.GetValue<string>());
+        Assert.Equal(1, response["id"]?["value"]?.GetValue<int>());
+    }
+
+    [Fact]
+    public void CreateError_WithoutId_OmitsIdAndIncludesErrorDetails()
+    {
+        var response = InvokeStaticJsonNodeMethod("CreateError", null, -32700, "Parse error");
+
+        Assert.Equal("2.0", response["jsonrpc"]?.GetValue<string>());
+        Assert.Null(response["id"]);
+        Assert.Equal(-32700, response["error"]?["code"]?.GetValue<int>());
+        Assert.Equal("Parse error", response["error"]?["message"]?.GetValue<string>());
+    }
+
+    private static JsonNode InvokeStaticJsonNodeMethod(string name, params object?[] args)
+    {
+        return (JsonNode)typeof(DaemonServer)
+            .GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic)!
+            .Invoke(null, args)!;
     }
 }

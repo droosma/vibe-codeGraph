@@ -86,6 +86,67 @@ public sealed class DaemonClientTests : IDisposable
         Assert.Equal("Daemon closed the connection.", exception.Message);
     }
 
+    [Fact]
+    public void TryConnect_LiveProcessWithoutPipe_ReturnsFalse()
+    {
+        PidFile.Write(_graphDir, Environment.ProcessId);
+
+        try
+        {
+            var result = DaemonClient.TryConnect(_graphDir, out var client);
+
+            Assert.False(result);
+            Assert.Null(client);
+        }
+        finally
+        {
+            PidFile.Delete(_graphDir);
+        }
+    }
+
+    [Fact]
+    public async Task QueryAsync_ErrorWithoutMessage_ThrowsDefaultMessage()
+    {
+        using var transport = new ScriptedDuplexStream("{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603}}\n");
+        var client = CreateClient(transport);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => client.QueryAsync("ping", Array.Empty<string>()));
+
+        Assert.Equal("Daemon error", exception.Message);
+    }
+
+    [Fact]
+    public async Task QueryAsync_ResponseWithoutResult_ReturnsEmptyString()
+    {
+        using var transport = new ScriptedDuplexStream("{\"jsonrpc\":\"2.0\",\"id\":1}\n");
+        var client = CreateClient(transport);
+
+        var result = await client.QueryAsync("ping", Array.Empty<string>());
+
+        Assert.Equal(string.Empty, result);
+    }
+
+    [Fact]
+    public async Task QueryAsync_MultipleCalls_IncrementIdsAndSerializeEmptyArgs()
+    {
+        using var transport = new ScriptedDuplexStream("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"pong\"}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":\"done\"}\n");
+        var client = CreateClient(transport);
+
+        Assert.Equal("pong", await client.QueryAsync("ping", Array.Empty<string>()));
+        Assert.Equal("done", await client.QueryAsync("stats", Array.Empty<string>()));
+
+        var requests = transport.GetWrittenText().Split('\n');
+        var first = JsonNode.Parse(requests[0])!;
+        var second = JsonNode.Parse(requests[1])!;
+
+        Assert.Equal(1, first["id"]?.GetValue<int>());
+        Assert.Equal("ping", first["command"]?.GetValue<string>());
+        Assert.Empty(first["args"]!.AsArray());
+        Assert.Equal(2, second["id"]?.GetValue<int>());
+        Assert.Equal("stats", second["command"]?.GetValue<string>());
+        Assert.Empty(second["args"]!.AsArray());
+    }
+
     private static DaemonClient CreateClient(Stream transport)
     {
         var client = (DaemonClient)RuntimeHelpers.GetUninitializedObject(typeof(DaemonClient));
