@@ -38,7 +38,9 @@ cd tests/CodeGraph.Indexer.Tests && dotnet stryker
 cd tests/CodeGraph.Query.Tests && dotnet stryker
 ```
 
-Each unit test project (`Core.Tests`, `Indexer.Tests`, `Query.Tests`) has a `stryker-config.json` with thresholds (break at 50%, low at 60%, high at 80%). Stryker generates HTML reports in `StrykerOutput/`. The mutation testing CI workflow runs automatically on PRs. Integration tests are excluded from mutation testing.
+Each unit test project (`Core.Tests`, `Indexer.Tests`, `Query.Tests`) has a `stryker-config.json` with thresholds (break at 80%, low at 90%, high at 100%). Stryker generates HTML reports in `StrykerOutput/`. The mutation testing CI workflow runs automatically on PRs. Integration tests are excluded from mutation testing.
+
+> **Excluded files (Indexer):** `DaemonServer.cs` and `Program.cs` are excluded from mutation in `CodeGraph.Indexer`. `DaemonServer.cs` starts real named-pipe servers during mutation runs, causing test hangs; its handler logic is verified via `DaemonServerIntegrationTests`.
 
 ---
 
