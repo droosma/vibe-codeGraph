@@ -13,7 +13,8 @@
     "mutate": [
       "!**/obj/**",
       "!**/bin/**",
-      "!**/Program.cs"
+      "!**/Program.cs",
+      "!**/Daemon/DaemonServer.cs"
     ]
   }
 }
