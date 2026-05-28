@@ -61,7 +61,7 @@ public class SearchTokenizerTests
             id: "MyApp.Security.JwtAuth2.ValidateToken",
             name: "JwtAuth2",
             containingNamespaceId: "MyApp.Security.Auth",
-            filePath: @"src\Security\Auth\JwtAuth2.cs",
+            filePath: Path.Combine("src", "Security", "Auth", "JwtAuth2.cs"),
             docComment: "<summary>Validates API tokens in DB.</summary>");
 
         var tokens = SearchTokenizer.TokenizeSymbol(node);

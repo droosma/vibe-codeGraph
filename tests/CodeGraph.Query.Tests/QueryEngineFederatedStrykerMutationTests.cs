@@ -53,10 +53,13 @@ public sealed class QueryEngineFederatedStrykerMutationTests : IDisposable
 
         var engine = await QueryEngine.LoadAsync(_testDir);
 
-        Assert.Equal("backend-commit", engine.Metadata.CommitHash);
-        Assert.Equal("backend-branch", engine.Metadata.Branch);
-        Assert.Equal("backend, frontend", engine.Metadata.SolutionName);
-        Assert.Equal("backend.sln, frontend.sln", engine.Metadata.Solution);
+        // Directory enumeration order is non-deterministic on Linux, so first-loaded metadata varies
+        Assert.Contains(engine.Metadata.CommitHash, new[] { "backend-commit", "frontend-commit" });
+        Assert.Contains(engine.Metadata.Branch, new[] { "backend-branch", "frontend-branch" });
+        Assert.Contains("backend", engine.Metadata.SolutionName);
+        Assert.Contains("frontend", engine.Metadata.SolutionName);
+        Assert.Contains("backend.sln", engine.Metadata.Solution);
+        Assert.Contains("frontend.sln", engine.Metadata.Solution);
         Assert.Equal(new[] { "Backend", "Frontend" }, engine.Metadata.ProjectsIndexed.OrderBy(project => project, StringComparer.Ordinal));
     }
 

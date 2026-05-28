@@ -1113,7 +1113,7 @@ public class McpServerMutationTests : IDisposable
                     ["name"] = "codegraph_query",
                     ["arguments"] = new JsonObject
                     {
-                        ["symbol"] = "Service",
+                        ["symbol"] = "App.Service",
                         ["mode"] = "structural",
                         ["format"] = "garbage-format"
                     }
@@ -1121,7 +1121,7 @@ public class McpServerMutationTests : IDisposable
 
         var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.StartsWith("# Subgraph for App.Service", text);
-        Assert.Contains("## Query: Service --depth 1 --kind all", text);
+        Assert.Contains("## Query: App.Service --depth 1 --kind all", text);
         Assert.Contains("## Commit: def456 (main, ", text);
     }
 

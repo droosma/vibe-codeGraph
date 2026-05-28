@@ -13,7 +13,7 @@ public class SearchTokenizerStrykerMutationTests
             Id = string.Empty,
             Name = string.Empty,
             Kind = NodeKind.Type,
-            FilePath = @"src\Generated\Order.Service.cs",
+            FilePath = Path.Combine("src", "Generated", "Order.Service.cs"),
             AssemblyName = "TestAssembly"
         };
 
