@@ -102,7 +102,7 @@ dotnet tool restore && dotnet stryker
 Every change must include tests. For new features:
 - Unit tests in the matching `tests/CodeGraph.*.Tests/` project
 - Integration tests in `tests/CodeGraph.Integration.Tests/` for end-to-end scenarios
-- Mutation score ≥60% on new code (run `dotnet stryker` in test project dir)
+- Mutation score ≥80% on new code (run `dotnet stryker` in test project dir; CI breaks below 80%)
 
 ### Architecture Rules
 
