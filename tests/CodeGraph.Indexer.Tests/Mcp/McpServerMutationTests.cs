@@ -1234,6 +1234,7 @@ public class McpServerMutationTests : IDisposable
                 }));
 
         var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.False(response["result"]!["isError"]!.GetValue<bool>());
         Assert.Equal("[Method] Handle  ns=App (src/Controller.cs)\n\n1 result(s) for 'Handle'.", text.Replace("\r\n", "\n").TrimEnd());
     }
 
@@ -1273,6 +1274,7 @@ public class McpServerMutationTests : IDisposable
                 }));
 
         var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>().Replace("\r\n", "\n");
+        Assert.False(response["result"]!["isError"]!.GetValue<bool>());
         Assert.Contains("## Compare: SqlRepo vs IRepo", text);
         Assert.Contains("### Shared dependencies (1)\n  App.IRepo", text);
         Assert.Contains("### Unique to SqlRepo (0)", text);
@@ -1311,6 +1313,7 @@ public class McpServerMutationTests : IDisposable
                 }));
 
         var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>().Replace("\r\n", "\n");
+        Assert.False(response["result"]!["isError"]!.GetValue<bool>());
         Assert.Contains("Affected tests for App.Service.Execute():", text);
         Assert.Contains("Direct coverage (tests that call this method):\n  ServiceTests.Execute_is_covered [tests/ServiceTests.cs]", text);
         Assert.Contains("Transitive (tests reaching through call chain):\n  ControllerTests.Handle_is_covered [tests/ControllerTests.cs] via Controller.Handle → Service.Execute", text);
@@ -1331,6 +1334,7 @@ public class McpServerMutationTests : IDisposable
                 }));
 
         var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>().Replace("\r\n", "\n");
+        Assert.False(response["result"]!["isError"]!.GetValue<bool>());
         Assert.Contains("# Package usage (2 entries)", text);
         Assert.Contains("## App\n- Newtonsoft.Json v13.0.1\n  Types: 2, Usages: 2", text);
         Assert.Contains("## OtherApp\n- Newtonsoft.Json v12.0.3\n  Types: 1, Usages: 1", text);
@@ -1489,6 +1493,7 @@ public class McpServerMutationTests : IDisposable
                 }));
 
         var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.False(response["result"]!["isError"]!.GetValue<bool>());
         Assert.Contains("App.Service", text);
         Assert.DoesNotContain("OtherApp.Service", text);
     }
