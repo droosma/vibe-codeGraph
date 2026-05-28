@@ -275,7 +275,7 @@ This pattern is used in `DiPassTests`, `SemanticPassTests`, `SyntaxPassTests`, a
 
 - **ci.yml** — builds + runs all tests on every push/PR. Multi-target: `net8.0` and `net10.0`.
 - **publish.yml** — publishes to NuGet on GitHub release creation. Triggered by `release: published` event.
-- **mutation-testing.yml** — runs Stryker mutation testing on PR. Minimum threshold: 60%.
+- **mutation-testing.yml** — runs Stryker mutation testing on PR. Minimum threshold: 80%.
 - **update-docs.md** — GitHub Copilot workflow that regenerates docs when code changes.
 - **auto-merge-docs.yml** — auto-merges doc PRs created by the update-docs bot. Processes ALL open doc PRs in a loop with rebase + admin merge.
 - **agentics-maintenance.yml** — periodic maintenance tasks.

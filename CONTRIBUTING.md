@@ -38,7 +38,7 @@ cd tests/CodeGraph.Indexer.Tests && dotnet stryker
 cd tests/CodeGraph.Query.Tests && dotnet stryker
 ```
 
-Each unit test project (`Core.Tests`, `Indexer.Tests`, `Query.Tests`) has a `stryker-config.json` with thresholds (break at 50%, low at 60%, high at 80%). Stryker generates HTML reports in `StrykerOutput/`. The mutation testing CI workflow runs automatically on PRs. Integration tests are excluded from mutation testing.
+Each unit test project (`Core.Tests`, `Indexer.Tests`, `Query.Tests`) has a `stryker-config.json` with thresholds (break at 80%, low at 90%, high at 100%). Stryker generates HTML reports in `StrykerOutput/`. The mutation testing CI workflow runs automatically on PRs. Integration tests are excluded from mutation testing.
 
 ---
 
@@ -152,7 +152,7 @@ Assert.Single(result.MatchedNodes);
 
 1. **Build succeeds**: `dotnet build CodeGraph.sln`
 2. **All tests pass**: `dotnet test CodeGraph.sln`
-3. **Mutation score acceptable**: Run `dotnet stryker` in affected test projects — aim for ≥60% mutation score on new code
+3. **Mutation score acceptable**: Run `dotnet stryker` in affected test projects — aim for ≥80% mutation score on new code
 4. **No unrelated changes**: Keep PRs focused on a single concern
 
 ### Commit Messages
