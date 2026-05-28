@@ -116,6 +116,8 @@ The CI runs on **Linux** (`ubuntu-latest`). Tests must work on all platforms:
 - **In-memory test data** — when a path is just a string stored in a model property (e.g., `GraphNode.FilePath`) and never passed to the filesystem or `Path.GetRelativePath`, any literal string is safe. But prefer platform-neutral values like `"repo/Service.cs"` to signal intent.
 - **Roslyn syntax tree paths** — when creating a `CSharpSyntaxTree` with a file path, use a relative path (e.g., `"Service.cs"`) or `Path.Combine` so `Path.GetRelativePath` works on Linux.
 - **Temp directories** — use `Path.Combine(Path.GetTempPath(), ...)` for test temp directories, then clean up in `IDisposable.Dispose()`.
+- **Order-independent assertions** — directory enumeration order differs between Linux and Windows. When testing that a collection contains results from multiple sub-directories (e.g., federated graph loading), use `Assert.True(result.Count >= N)` or `Assert.Contains` rather than asserting on exact positions. Never rely on `result[0]` being a specific item when results come from directory scans.
+- **Unique symbol queries** — when testing query results, use a symbol name that matches only one node in the test graph. Ambiguous patterns (e.g., a generic name that matches multiple nodes) can return results in different orders on different platforms, causing `result.MatchedNodes[0].Id` assertions to fail non-deterministically.
 
 ```csharp
 // ❌ Fails on Linux — Path.GetRelativePath can't relativize against a Windows root
@@ -126,6 +128,20 @@ var (nodes, _) = pass.Execute(compilation, solutionRoot: string.Empty);
 
 // ✅ Use Path.Combine for real temp paths
 var dir = Path.Combine(Path.GetTempPath(), $"cg-test-{Guid.NewGuid():N}");
+
+// ❌ Brittle — directory scan order varies; result[0] may differ on Linux
+Assert.Equal("Backend.OrderService", result.MatchedNodes[0].Id);
+
+// ✅ Order-independent: assert membership, not position
+Assert.Contains(result.MatchedNodes, n => n.Id == "Backend.OrderService");
+
+// ❌ Brittle — "Service" matches both "Backend.Service" and "Frontend.Service"
+var result = engine.Query(new QueryOptions { Pattern = "Service", Depth = 0 });
+Assert.Equal("Backend.Service", result.MatchedNodes[0].Id);
+
+// ✅ Use a pattern that uniquely identifies one node
+var result = engine.Query(new QueryOptions { Pattern = "Backend.OrderService", Depth = 0 });
+Assert.Single(result.MatchedNodes);
 ```
 
 ---
