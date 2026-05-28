@@ -134,6 +134,15 @@ public class GraphWriterReaderRoundTripTests : IDisposable
     [Fact]
     public async Task ReadAsync_UppercaseMetaJson_IsNotTreatedAsProjectGraph()
     {
+        // Write valid lowercase meta.json first (required by GraphReader on case-sensitive file systems)
+        var validMeta = JsonSerializer.Serialize(
+            new { schemaVersion = GraphSchema.CurrentVersion, commitHash = "abc" },
+            GraphSerializationOptions.Default);
+        await File.WriteAllTextAsync(Path.Combine(_outputDir, "meta.json"), validMeta);
+
+        // Write META.JSON with nodes that should NOT be loaded as a project graph.
+        // On Windows (case-insensitive FS) this overwrites meta.json.
+        // On Linux (case-sensitive FS) this is a separate file excluded by the case-insensitive filter.
         var metaJson = JsonSerializer.Serialize(
             new
             {

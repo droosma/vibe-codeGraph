@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using CodeGraph.Indexer.Workspace;
 using Microsoft.CodeAnalysis;
@@ -37,6 +38,11 @@ public sealed class FrameworkRefResolverAdditionalMutationTests : IDisposable
     [Fact]
     public void Resolve_NoReferenceAssembliesFound_ReturnsEmptyAndWritesWarning()
     {
+        // On Unix, hardcoded paths (/usr/share/dotnet) cannot be overridden via environment variables,
+        // so this test can only fully isolate roots on Windows.
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return;
+
         UseSyntheticRootsOnly();
 
         var originalError = Console.Error;
