@@ -228,6 +228,18 @@ Query multiple symbols in one call and receive combined, deduplicated results. M
 
 Results from all symbols are merged: nodes and edges are deduplicated so shared types appear only once.
 
+#### `codegraph_compare`
+
+Compare two symbols structurally — useful for spotting design divergence between similar services or implementations.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `symbolA` | `string` | ✅ | — | First symbol name or pattern. |
+| `symbolB` | `string` | ✅ | — | Second symbol name or pattern. |
+| `depth` | `integer` | | `1` | BFS traversal depth applied to each symbol before comparing. |
+
+Output highlights shared interfaces and base types, unique dependencies, and structural differences between the two symbols.
+
 ---
 
 ## Query Suggestions

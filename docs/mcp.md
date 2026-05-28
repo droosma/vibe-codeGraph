@@ -47,7 +47,7 @@ The server exposes thirteen tools. Agents call them like any other tool:
 | MCP Tool | Description |
 |----------|-------------|
 | `codegraph_summary` | Architectural overview: hub types, assembly boundaries, suggested queries |
-| `codegraph_query` | Query the graph by symbol pattern with depth, edge-type, and format options; add `include_source` and `source_max_lines` for capped inline snippets |
+| `codegraph_query` | Query the graph by symbol pattern with depth, edge-type, and format options; add `include_source` for capped inline snippets (20-line cap) |
 | `codegraph_search` | Search for symbols by name, namespace, or file path. Best for discovery when you don't know exact names |
 | `codegraph_list` | Browse the graph hierarchy — assemblies, types, interfaces, namespaces |
 | `codegraph_path` | Find the shortest dependency path between two symbols |
