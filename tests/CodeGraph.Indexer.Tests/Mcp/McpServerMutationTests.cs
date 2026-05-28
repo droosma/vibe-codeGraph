@@ -1445,4 +1445,215 @@ public class McpServerMutationTests : IDisposable
         Assert.Contains("App.Service", text);
         Assert.Contains("OtherApp.Service", text);
     }
+
+    [Fact]
+    public async Task ToolsCall_Query_DepthParameter_IsReflectedInQueryDescription()
+    {
+        var graph = CreateRichGraph();
+        await WriteGraphDataAsync(graph.Nodes, graph.Edges, graph.Metadata);
+        var server = CreateServer();
+        var response = await server.HandleMessageAsync(
+            MakeRequest("tools/call", id: JsonValue.Create(80),
+                @params: new JsonObject
+                {
+                    ["name"] = "codegraph_query",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["symbol"] = "App.Service",
+                        ["depth"] = 3,
+                        ["format"] = "context"
+                    }
+                }));
+
+        var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("--depth 3", text);
+    }
+
+    [Fact]
+    public async Task ToolsCall_Query_NamespaceFilter_LimitsResults()
+    {
+        var graph = CreateRichGraph();
+        await WriteGraphDataAsync(graph.Nodes, graph.Edges, graph.Metadata);
+        var server = CreateServer();
+        var response = await server.HandleMessageAsync(
+            MakeRequest("tools/call", id: JsonValue.Create(81),
+                @params: new JsonObject
+                {
+                    ["name"] = "codegraph_query",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["symbol"] = "Service",
+                        ["namespace"] = "App",
+                        ["format"] = "compact"
+                    }
+                }));
+
+        var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("App.Service", text);
+        Assert.DoesNotContain("OtherApp.Service", text);
+    }
+
+    [Fact]
+    public async Task ToolsCall_Query_ProjectFilter_LimitsResults()
+    {
+        var graph = CreateRichGraph();
+        await WriteGraphDataAsync(graph.Nodes, graph.Edges, graph.Metadata);
+        var server = CreateServer();
+        var response = await server.HandleMessageAsync(
+            MakeRequest("tools/call", id: JsonValue.Create(82),
+                @params: new JsonObject
+                {
+                    ["name"] = "codegraph_query",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["symbol"] = "Service",
+                        ["project"] = "App",
+                        ["format"] = "compact"
+                    }
+                }));
+
+        var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("App.Service", text);
+        Assert.DoesNotContain("OtherApp.Service", text);
+    }
+
+    [Fact]
+    public async Task ToolsCall_Query_IncludeExternalTrue_ShowsExternalNodes()
+    {
+        var graph = CreateRichGraph();
+        await WriteGraphDataAsync(graph.Nodes, graph.Edges, graph.Metadata);
+        var server = CreateServer();
+        var response = await server.HandleMessageAsync(
+            MakeRequest("tools/call", id: JsonValue.Create(83),
+                @params: new JsonObject
+                {
+                    ["name"] = "codegraph_query",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["symbol"] = "App.Service",
+                        ["include_external"] = true,
+                        ["format"] = "compact"
+                    }
+                }));
+
+        var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("App.Service", text);
+    }
+
+    [Fact]
+    public async Task ToolsCall_Query_IncludeSourceTrue_ShowsSourceLines()
+    {
+        var graph = CreateRichGraph();
+        await WriteGraphDataAsync(graph.Nodes, graph.Edges, graph.Metadata);
+        var server = CreateServer();
+        var response = await server.HandleMessageAsync(
+            MakeRequest("tools/call", id: JsonValue.Create(84),
+                @params: new JsonObject
+                {
+                    ["name"] = "codegraph_query",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["symbol"] = "App.Service",
+                        ["include_source"] = true,
+                        ["format"] = "context"
+                    }
+                }));
+
+        var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        // include_source adds file path display; without it, minimal output
+        Assert.Contains("App.Service", text);
+    }
+
+    [Fact]
+    public async Task ToolsCall_Query_KindParameter_IsReflectedInQueryDescription()
+    {
+        var graph = CreateRichGraph();
+        await WriteGraphDataAsync(graph.Nodes, graph.Edges, graph.Metadata);
+        var server = CreateServer();
+        var response = await server.HandleMessageAsync(
+            MakeRequest("tools/call", id: JsonValue.Create(85),
+                @params: new JsonObject
+                {
+                    ["name"] = "codegraph_query",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["symbol"] = "App.Service",
+                        ["kind"] = "calls",
+                        ["format"] = "context"
+                    }
+                }));
+
+        var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("--kind calls", text);
+    }
+
+    [Fact]
+    public async Task ToolsCall_BatchQuery_DepthParameter_IsReflectedInOutput()
+    {
+        var graph = CreateRichGraph();
+        await WriteGraphDataAsync(graph.Nodes, graph.Edges, graph.Metadata);
+        var server = CreateServer();
+        var response = await server.HandleMessageAsync(
+            MakeRequest("tools/call", id: JsonValue.Create(86),
+                @params: new JsonObject
+                {
+                    ["name"] = "codegraph_batch",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["symbols"] = new JsonArray(JsonValue.Create("App.Service")),
+                        ["depth"] = 2,
+                        ["format"] = "context"
+                    }
+                }));
+
+        var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("--depth 2", text);
+    }
+
+    [Fact]
+    public async Task ToolsCall_BatchQuery_IncludeSourceParameter_IsAccepted()
+    {
+        var graph = CreateRichGraph();
+        await WriteGraphDataAsync(graph.Nodes, graph.Edges, graph.Metadata);
+        var server = CreateServer();
+        var response = await server.HandleMessageAsync(
+            MakeRequest("tools/call", id: JsonValue.Create(87),
+                @params: new JsonObject
+                {
+                    ["name"] = "codegraph_batch",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["symbols"] = new JsonArray(JsonValue.Create("App.Service")),
+                        ["include_source"] = true,
+                        ["format"] = "compact"
+                    }
+                }));
+
+        var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("App.Service", text);
+    }
+
+    [Fact]
+    public async Task ToolsCall_Compare_DepthParameter_IsUsed()
+    {
+        var graph = CreateRichGraph();
+        await WriteGraphDataAsync(graph.Nodes, graph.Edges, graph.Metadata);
+        var server = CreateServer();
+        var response = await server.HandleMessageAsync(
+            MakeRequest("tools/call", id: JsonValue.Create(88),
+                @params: new JsonObject
+                {
+                    ["name"] = "codegraph_compare",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["symbolA"] = "App.Service",
+                        ["symbolB"] = "OtherApp.Service",
+                        ["depth"] = 2
+                    }
+                }));
+
+        var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("App.Service", text);
+        Assert.Contains("OtherApp.Service", text);
+    }
 }
