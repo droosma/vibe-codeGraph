@@ -116,6 +116,8 @@ The CI runs on **Linux** (`ubuntu-latest`). Tests must work on all platforms:
 - **In-memory test data** — when a path is just a string stored in a model property (e.g., `GraphNode.FilePath`) and never passed to the filesystem or `Path.GetRelativePath`, any literal string is safe. But prefer platform-neutral values like `"repo/Service.cs"` to signal intent.
 - **Roslyn syntax tree paths** — when creating a `CSharpSyntaxTree` with a file path, use a relative path (e.g., `"Service.cs"`) or `Path.Combine` so `Path.GetRelativePath` works on Linux.
 - **Temp directories** — use `Path.Combine(Path.GetTempPath(), ...)` for test temp directories, then clean up in `IDisposable.Dispose()`.
+- **Case-sensitive file names** — Linux file systems are case-sensitive; Windows is not. When a test writes files that differ only by case (e.g., `meta.json` and `META.JSON`), write the canonical lowercase file *first* so the reader finds it reliably on both platforms.
+- **Platform-specific test skipping** — if a test depends on system-level paths that cannot be overridden via environment variables on Linux (e.g., hardcoded `/usr/share/dotnet` discovery roots), guard it with `RuntimeInformation.IsOSPlatform` rather than breaking CI:
 
 ```csharp
 // ❌ Fails on Linux — Path.GetRelativePath can't relativize against a Windows root
@@ -126,6 +128,14 @@ var (nodes, _) = pass.Execute(compilation, solutionRoot: string.Empty);
 
 // ✅ Use Path.Combine for real temp paths
 var dir = Path.Combine(Path.GetTempPath(), $"cg-test-{Guid.NewGuid():N}");
+
+// ✅ Write lowercase file first when both cases must coexist in the same directory
+await File.WriteAllTextAsync(Path.Combine(dir, "meta.json"), canonicalContent);
+await File.WriteAllTextAsync(Path.Combine(dir, "META.JSON"), upperCaseContent); // no-op on Windows (same file)
+
+// ✅ Skip tests that require full system-path isolation unavailable on Linux
+if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+    return; // can't override /usr/share/dotnet roots on Unix
 ```
 
 ---
