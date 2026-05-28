@@ -54,6 +54,8 @@ jobs:
       - name: Upload mutation report (${{ matrix.name }})
         uses: actions/upload-artifact@v4
         if: always()
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
           name: stryker-report-${{ matrix.name }}
           path: ${{ matrix.test-project }}/StrykerOutput/**/reports/
